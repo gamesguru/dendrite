@@ -24,7 +24,7 @@ import (
 )
 
 type threadRoomserver struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	room       string
 	membership string
 	hidden     map[string]bool

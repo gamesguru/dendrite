@@ -14,6 +14,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/test"
 )
 
@@ -54,8 +55,7 @@ func TestSetHistoricalPrevStateFromStateBeforeEvent(t *testing.T) {
 	require.NoError(t, current.SetUnsignedField("age", 42))
 
 	fake := &fakeStateAfterEvents{prev: prev}
-	s := &OutputRoomEventConsumer{rsAPI: fake}
-	s.setHistoricalPrevState(context.Background(), current)
+	internal.SetHistoricalPrevState(context.Background(), fake, current)
 
 	unsigned := current.Unsigned()
 	require.Equal(t, "old name", gjson.GetBytes(unsigned, "prev_content.displayname").String())
@@ -69,7 +69,7 @@ func TestSetHistoricalPrevStateFromStateBeforeEvent(t *testing.T) {
 
 	// Idempotent: an event that already carries prev_content is not looked up
 	// or rewritten again.
-	s.setHistoricalPrevState(context.Background(), current)
+	internal.SetHistoricalPrevState(context.Background(), fake, current)
 	require.Equal(t, 1, fake.calls)
 }
 
@@ -81,7 +81,6 @@ func TestSetHistoricalPrevStateSkipsRedactedEvents(t *testing.T) {
 	require.NoError(t, ev.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
 
 	fake := &fakeStateAfterEvents{prev: ev}
-	s := &OutputRoomEventConsumer{rsAPI: fake}
-	s.setHistoricalPrevState(context.Background(), ev)
+	internal.SetHistoricalPrevState(context.Background(), fake, ev)
 	require.Zero(t, fake.calls)
 }

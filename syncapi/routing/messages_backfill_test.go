@@ -14,6 +14,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -26,9 +27,34 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-type backfillOnlyAPI struct {
+// noPrevStateRoomserver is embedded by routing test roomserver fakes that do
+// not model the historical state query. It reports no predecessor, so the
+// backfill annotation leaves events as they are.
+type noPrevStateRoomserver struct {
 	api.SyncRoomserverAPI
+}
+
+func (noPrevStateRoomserver) QueryStateAfterEvents(context.Context, *api.QueryStateAfterEventsRequest, *api.QueryStateAfterEventsResponse) error {
+	return nil
+}
+
+type backfillOnlyAPI struct {
+	noPrevStateRoomserver
 	events []*rstypes.HeaderedEvent
+}
+
+type backfillWithPrevStateAPI struct {
+	backfillOnlyAPI
+	previous *rstypes.HeaderedEvent
+}
+
+func (f *backfillWithPrevStateAPI) QueryStateAfterEvents(
+	_ context.Context, _ *api.QueryStateAfterEventsRequest, res *api.QueryStateAfterEventsResponse,
+) error {
+	res.RoomExists = true
+	res.PrevEventsExist = true
+	res.StateEvents = []*rstypes.HeaderedEvent{f.previous}
+	return nil
 }
 
 func (f *backfillOnlyAPI) PerformBackfill(_ context.Context, _ *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
@@ -38,7 +64,7 @@ func (f *backfillOnlyAPI) PerformBackfill(_ context.Context, _ *api.PerformBackf
 }
 
 type sequencedBackfillAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	batches [][]*rstypes.HeaderedEvent
 	calls   int
 }
@@ -105,6 +131,47 @@ func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, extremities, newer.EventID(), "filled extremity must be cleared")
 		assert.Contains(t, extremities, older.EventID(), "the new boundary extremity must remain")
+	})
+}
+
+func TestBackfillEventsAddsHistoricalPrevState(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		var previous *rstypes.HeaderedEvent
+		for _, ev := range room.Events() {
+			if ev.Type() == "m.room.member" && ev.StateKey() != nil && *ev.StateKey() == alice.ID {
+				previous = ev
+				break
+			}
+		}
+		require.NotNil(t, previous)
+		backfilled := room.CreateEvent(t, alice, "m.room.member", map[string]any{
+			"membership":  "join",
+			"displayname": "backfilled name",
+		}, test.WithStateKey(alice.ID), test.WithPrevEvents(previous.EventID()))
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		api := &backfillWithPrevStateAPI{
+			backfillOnlyAPI: backfillOnlyAPI{events: []*rstypes.HeaderedEvent{backfilled}},
+			previous:        previous,
+		}
+		_, err = backfillEvents(context.Background(), api, db, "hs2", "hs2", room.ID, nil, 10, nil)
+		require.NoError(t, err)
+
+		stored, err := db.Events(context.Background(), []string{backfilled.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		assert.Equal(t, "join", gjson.GetBytes(stored[0].Unsigned(), "prev_content.membership").String())
+		assert.Equal(t, previous.EventID(), gjson.GetBytes(stored[0].Unsigned(), "replaces_state").String())
+		assert.Equal(t, alice.ID, gjson.GetBytes(stored[0].Unsigned(), "prev_sender").String())
 	})
 }
 
@@ -470,7 +537,7 @@ func (s *extremitySnapshot) BackwardExtremitiesForRoom(context.Context, string) 
 
 // backfillProbe records whether a backfill was attempted at all.
 type backfillProbe struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	calls int
 }
 

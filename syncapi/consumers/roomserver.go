@@ -541,7 +541,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// the live path sets it from the state it replaces. This runs once, ahead of
 	// the retried write, and is best effort: failing to find the predecessor
 	// must not stop the event being stored.
-	s.setHistoricalPrevState(ctx, ev)
+	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
 	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
@@ -610,33 +610,6 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos, StickyPosition: stickyPos}) //nolint:contextcheck
 
 	return nil
-}
-
-// setHistoricalPrevState sets unsigned.prev_content, prev_sender and
-// replaces_state on a backfilled state event from the state before it. It does
-// nothing for other events, for events that already have prev_content, and
-// when the predecessor cannot be found; a lookup error is logged and ignored.
-func (s *OutputRoomEventConsumer) setHistoricalPrevState(ctx context.Context, ev *rstypes.HeaderedEvent) {
-	if ev.StateKey() == nil || internal.HasPrevContent(ev) || internal.IsRedacted(ev) {
-		return
-	}
-	prev, outcome, err := internal.LookupPrevState(ctx, s.rsAPI, ev)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"room_id":  ev.RoomID().String(),
-			"event_id": ev.EventID(),
-		}).WithError(err).Warn("Failed to look up the state before a backfilled event; storing it without prev_content")
-		return
-	}
-	if outcome != internal.PrevStateFound {
-		return
-	}
-	if err = internal.ApplyPrevState(ev, prev); err != nil {
-		log.WithFields(log.Fields{
-			"room_id":  ev.RoomID().String(),
-			"event_id": ev.EventID(),
-		}).WithError(err).Warn("Failed to set prev_content on a backfilled event")
-	}
 }
 
 // writeStickyEvent adds an event that is an unexpired MSC4354 sticky event to

@@ -158,7 +158,7 @@ func (d forwardGapDB) PurgeBackwardExtremitiesForEvents(context.Context, string,
 }
 
 type forwardGapAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	state *forwardGapState
 }
 
@@ -470,7 +470,7 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 // not they contain the missing parent. It stands in for a remote server that
 // has the events around a hole but not the dangling prev_event itself.
 type replayForwardGapAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	events []*rstypes.HeaderedEvent
 	calls  int
 }

@@ -215,10 +215,12 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	}
 
 	var prev PrevEventRef
+	mappedPrevSender := ""
 	if err := json.Unmarshal(se.Unsigned(), &prev); err == nil && prev.PrevSenderID != "" {
 		prevUserID, err := userIDForSender(se.RoomID(), spec.SenderID(prev.PrevSenderID))
 		if err == nil && prevUserID != nil {
 			prev.PrevSenderID = prevUserID.String()
+			mappedPrevSender = prev.PrevSenderID
 		} else {
 			errString := "userID unknown"
 			if err != nil {
@@ -260,6 +262,15 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 		if updatedEvent != nil {
 			ce.Content = updatedEvent.Content()
 			ce.Unsigned = updatedEvent.Unsigned()
+		}
+	}
+
+	// The cases above can replace ce.Unsigned with the original event's, which
+	// carries the raw prev_sender; keep the mapped user ID.
+	if mappedPrevSender != "" {
+		ce.Unsigned, err = sjson.SetBytes(ce.Unsigned, "prev_sender", mappedPrevSender)
+		if err != nil {
+			return fmt.Errorf("failed to preserve mapped prev_sender in ClientEvent: %w", err)
 		}
 	}
 

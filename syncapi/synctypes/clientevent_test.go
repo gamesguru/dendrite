@@ -16,6 +16,7 @@ import (
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/tidwall/gjson"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {
@@ -463,6 +464,41 @@ func TestToClientEventsFormatSync(t *testing.T) { //nolint:gocyclo
 			Unsigned:       expectedUnsigned,
 			Sender:         testUserID,
 		})
+}
+
+func TestUpdatePseudoIDsPreservesMappedPrevSenderForTransformedStateEvents(t *testing.T) {
+	eventJSON := map[string]string{
+		"m.room.member":       `{"type":"m.room.member","state_key":"stateSenderKey","event_id":"$member:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"membership":"join"},"origin_server_ts":1,"unsigned":{"invite_room_state":[],"prev_content":{"membership":"leave"},"prev_sender":"oldSenderKey","replaces_state":"$prev:localhost"}}`,
+		"m.room.power_levels": `{"type":"m.room.power_levels","state_key":"","event_id":"$power:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"users":{"oldSenderKey":50}},"origin_server_ts":1,"unsigned":{"prev_content":{"users":{}},"prev_sender":"oldSenderKey","replaces_state":"$prev:localhost"}}`,
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		users := map[spec.SenderID]string{
+			"eventSenderKey": "@event:localhost",
+			"stateSenderKey": "@state:localhost",
+			"oldSenderKey":   "@previous:localhost",
+		}
+		userID, ok := users[senderID]
+		if !ok {
+			return nil, fmt.Errorf("unknown sender %q", senderID)
+		}
+		return spec.NewUserID(userID, true)
+	}
+
+	for eventType, raw := range eventJSON {
+		t.Run(eventType, func(t *testing.T) {
+			ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(raw), false)
+			if err != nil {
+				t.Fatalf("failed to create event: %s", err)
+			}
+			ce, err := ToClientEvent(ev, FormatSync, userIDForSender)
+			if err != nil {
+				t.Fatalf("failed to create ClientEvent: %s", err)
+			}
+			if got := gjson.GetBytes(ce.Unsigned, "prev_sender").String(); got != "@previous:localhost" {
+				t.Errorf("prev_sender: wanted mapped user ID, got %q", got)
+			}
+		})
+	}
 }
 
 func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { //nolint:gocyclo

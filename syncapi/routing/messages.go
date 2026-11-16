@@ -2190,6 +2190,8 @@ func backfillEvents(
 		if events[i].Visibility == "" {
 			events[i].Visibility = res.HistoryVisibility
 		}
+		// Best effort, as for events from the roomserver output stream.
+		internal.SetHistoricalPrevState(ctx, rsAPI, events[i])
 		_, err = db.WriteEvent(
 			ctx,
 			events[i],

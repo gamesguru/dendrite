@@ -29,7 +29,7 @@ import (
 )
 
 type timestampRoomserver struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	userID         string
 	memberships    map[string]*rstypes.HeaderedEvent
 	banned         map[spec.ServerName]bool

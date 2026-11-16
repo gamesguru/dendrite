@@ -28,7 +28,7 @@ import (
 // terminalAfterBatchesAPI answers the first batches with events, then reports
 // that every server lacks the remaining history.
 type terminalAfterBatchesAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	batches [][]*rstypes.HeaderedEvent
 	calls   int
 }

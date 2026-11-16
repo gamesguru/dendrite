@@ -21,6 +21,11 @@
 -- rows. Split-database deployments are not supported by this script.
 -- The redaction's event_id is taken from unsigned.redacted_by (the wrapper's
 -- EventNID is the redaction's NID, not the redacted event's, so it is not used).
+-- For a large PostgreSQL room, optionally create this index before starting
+-- the repair to speed up paging, then drop it after the repair if it is only
+-- temporary. Run these outside a transaction:
+--     CREATE INDEX CONCURRENTLY syncapi_output_room_events_room_id_id_idx ON syncapi_output_room_events (room_id, id);
+--     DROP INDEX CONCURRENTLY syncapi_output_room_events_room_id_id_idx;
 --
 -- Usage: connect interactively to the dendrite database, then run:
 --     \set ON_ERROR_STOP on
@@ -42,8 +47,10 @@
 
 -- REPEATABLE READ: every backup and UPDATE sees the same snapshot, and a row the
 -- live server changes meanwhile makes the UPDATE fail ("could not serialize")
--- instead of being overwritten; ROLLBACK and re-run in that case. Unlike a table
--- lock it does not stall Dendrite's writes while this session stays open.
+-- instead of being overwritten; ROLLBACK and re-run in that case. It takes no
+-- table lock, but each UPDATE holds a row lock until COMMIT or ROLLBACK, so a
+-- live redaction or event rewrite of a repaired row waits while this session
+-- stays open. Stop Dendrite for the run, or keep the inspection window short.
 BEGIN ISOLATION LEVEL REPEATABLE READ;
 
 CREATE TEMP TABLE zz_pseudo_rooms ON COMMIT DROP AS

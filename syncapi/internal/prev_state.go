@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	rsapi "codefloe.com/pat-s/zendrite/roomserver/api"
@@ -110,6 +111,29 @@ func ApplyPrevState(ev *rstypes.HeaderedEvent, prev synctypes.PrevEventRef) erro
 		}
 	}
 	return nil
+}
+
+// SetHistoricalPrevState sets unsigned.prev_content, prev_sender and
+// replaces_state on a backfilled state event from the state before it. It does
+// nothing for other events, for events that already have prev_content, for
+// redacted events, and when the predecessor cannot be found; a lookup error is
+// logged and ignored, so the event is stored without prev_content.
+func SetHistoricalPrevState(ctx context.Context, q StateAfterQuerier, ev *rstypes.HeaderedEvent) {
+	if ev.StateKey() == nil || HasPrevContent(ev) || IsRedacted(ev) {
+		return
+	}
+	fields := logrus.Fields{"room_id": ev.RoomID().String(), "event_id": ev.EventID()}
+	prev, outcome, err := LookupPrevState(ctx, q, ev)
+	if err != nil {
+		logrus.WithFields(fields).WithError(err).Warn("Failed to look up the state before a backfilled event; storing it without prev_content")
+		return
+	}
+	if outcome != PrevStateFound {
+		return
+	}
+	if err = ApplyPrevState(ev, prev); err != nil {
+		logrus.WithFields(fields).WithError(err).Warn("Failed to set prev_content on a backfilled event")
+	}
 }
 
 // PrevStateRepairDatabase is the part of the sync API database the repair

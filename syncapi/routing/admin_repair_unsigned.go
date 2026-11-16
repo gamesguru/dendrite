@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -9,6 +10,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/httputil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
+	rsTypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
@@ -37,6 +39,17 @@ func AdminRepairUnsigned(req *http.Request, syncDB storage.Database, rsAPI api.S
 		}
 	}
 	apply := req.URL.Query().Get("apply") == "true"
+
+	// Reject unknown rooms instead of returning an all-zero report that looks
+	// like a room with nothing to repair. The roomserver is the authority here:
+	// the repair itself cannot read its state querier for a room it lacks.
+	if _, err = rsAPI.QueryRoomVersionForRoom(req.Context(), roomID.String()); err != nil {
+		if errors.Is(err, rsTypes.ErrRoomNotFound) {
+			return util.JSONResponse{Code: http.StatusNotFound, JSON: spec.NotFound("Room not found")}
+		}
+		logrus.WithError(err).WithField("room_id", roomID.String()).Error("failed to query room version for repairUnsigned")
+		return util.JSONResponse{Code: http.StatusInternalServerError, JSON: spec.InternalServerError{}}
+	}
 
 	report, err := internal.RepairRoomPrevState(req.Context(), syncDB, rsAPI, roomID.String(), apply)
 	logger := logrus.WithField("room_id", roomID.String()).WithField("apply", apply).WithField("user_id", device.UserID)
