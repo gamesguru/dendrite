@@ -173,9 +173,13 @@ func TestClearPartialStateMarksStoredSnapshotsIncomplete(t *testing.T) {
 		assert.NoError(t, db.RoomsTable.UpdateLatestEventNIDs(ctx, nil, roomNID, []types.EventNID{1}, 1, 7))
 		assert.NoError(t, db.PartialStateTable.InsertPartialStateRoom(ctx, nil, roomNID, 1, "remote", nil, 12))
 
+		incomplete, err := db.StateSnapshotsIncomplete(ctx, roomNID)
+		assert.NoError(t, err)
+		assert.False(t, incomplete, "the marker must not be set before partial state is cleared")
+
 		_, err = db.ClearRoomPartialState(ctx, roomNID)
 		assert.NoError(t, err)
-		incomplete, err := db.StateSnapshotsIncomplete(ctx, roomNID)
+		incomplete, err = db.StateSnapshotsIncomplete(ctx, roomNID)
 		assert.NoError(t, err)
 		assert.True(t, incomplete, "clearing partial state must retain a durable marker for old event snapshots")
 		resyncStateNID, err := db.ResyncStateNID(ctx, roomNID)

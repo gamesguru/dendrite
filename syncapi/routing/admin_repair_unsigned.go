@@ -29,7 +29,9 @@ import (
 //
 // Writes are conditional on the stored JSON still matching what was read and on
 // the event not being redacted, so a concurrent redaction or event rewrite is
-// skipped rather than overwritten (reported as write_skipped). The repair keeps
+// skipped rather than overwritten. A write that loses a race is reported as
+// write_skipped; an event found redacted or already annotated on the re-read
+// before the write is dropped without being counted. The repair keeps
 // no backup, so take a database backup before applying it to a large room.
 func AdminRepairUnsigned(req *http.Request, syncDB storage.Database, rsAPI api.SyncRoomserverAPI, device *userapi.Device) util.JSONResponse {
 	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))

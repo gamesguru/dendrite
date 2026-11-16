@@ -83,12 +83,17 @@ var release = Contract{
 // adds the roomserver state HAMT node and snapshot tables, and level 25 stores
 // new state snapshots as their full state keyed by the HAMT root instead of
 // state-block deltas. A build of level 24 or older cannot read a level-25
-// snapshot, so level 25 only rolls back to itself.
+// snapshot, so level 25 only rolls back to itself. Level 26 adds the
+// roomserver_rooms.state_snapshots_incomplete column, which records rooms
+// that left partial state with stored snapshots that may be incomplete. A
+// level-25 build ignores this marker and could trust incomplete snapshots, so
+// level 26 only rolls back to itself.
 //
 // Every build links the native state HAMT reader, so every build writes level
-// 25 and only rolls back to itself.
+// 25 snapshots, and a level-25 build ignores the incomplete-snapshot marker and
+// could trust incomplete snapshots, so level 26 only rolls back to itself.
 const (
-	releaseLevel           = 25
+	releaseLevel           = 26
 	rollbackToLevel        = releaseLevel
 	membershipHistoryLevel = 19
 	topologyLiftLevel      = 22

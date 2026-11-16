@@ -116,8 +116,13 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.NoError(t, redacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
 		require.NoError(t, db.UpdateEventJSON(ctx, redacted.EventID(), redacted))
 		require.NoError(t, stale.SetUnsignedField("age", 1))
+		// Expect the JSON that is stored now, so only the redaction guard can
+		// block the write.
+		redactedJSON, err := redacted.MarshalJSON()
+		require.NoError(t, err)
+		require.NotEqual(t, originalJSON, redactedJSON)
 
-		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), originalJSON, &stale)
+		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), redactedJSON, &stale)
 		require.NoError(t, err)
 		require.False(t, written, "a redacted row must not be rewritten")
 

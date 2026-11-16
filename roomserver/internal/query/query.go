@@ -110,10 +110,19 @@ func (r *Queryer) QueryStateAfterEvents(
 	// so callers do not persist state derived from a snapshot that is not
 	// provably complete.
 	partial, partialErr := r.DB.IsRoomPartialState(ctx, info.RoomNID)
+	if partialErr != nil {
+		util.GetLogger(ctx).WithError(partialErr).Error("IsRoomPartialState failed; treating state as incomplete")
+	}
 	if partialErr != nil || partial {
 		response.StateIncomplete = true
-	} else if incomplete, incompleteErr := r.DB.StateSnapshotsIncomplete(ctx, info.RoomNID); incompleteErr != nil || incomplete {
-		response.StateIncomplete = true
+	} else {
+		incomplete, incompleteErr := r.DB.StateSnapshotsIncomplete(ctx, info.RoomNID)
+		if incompleteErr != nil {
+			util.GetLogger(ctx).WithError(incompleteErr).Error("StateSnapshotsIncomplete failed; treating state as incomplete")
+		}
+		if incompleteErr != nil || incomplete {
+			response.StateIncomplete = true
+		}
 	}
 
 	prevStates, err := r.DB.StateAtEventIDs(ctx, request.PrevEventIDs)
