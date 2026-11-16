@@ -108,20 +108,29 @@ SET headered_event_json = jsonb_set(
 FROM src
 WHERE s.id = src.id;
 
-\echo '--- verify: expect no wrapped rows and no id mismatches ---'
+\echo '--- verify: expect all three counts to be 0 ---'
+-- still_wrapped: the PDU wrapper is still there.
+-- id_mismatch:   redacted_because.event_id is not unsigned.redacted_by.
+-- bad_shape:     content is not an object, or type/sender/origin_server_ts/event_id is missing.
 SELECT 'roomserver' AS src,
        count(*) FILTER (WHERE (event_json::jsonb #> '{unsigned,redacted_because}') ? 'PDU') AS still_wrapped,
        count(*) FILTER (WHERE event_json::jsonb #>> '{unsigned,redacted_because,event_id}'
-                              IS DISTINCT FROM event_json::jsonb #>> '{unsigned,redacted_by}') AS id_mismatch
+                              IS DISTINCT FROM event_json::jsonb #>> '{unsigned,redacted_by}') AS id_mismatch,
+       count(*) FILTER (WHERE jsonb_typeof(event_json::jsonb #> '{unsigned,redacted_because,content}') IS DISTINCT FROM 'object'
+                              OR COALESCE(NOT ((event_json::jsonb #> '{unsigned,redacted_because}')
+                                               ?& ARRAY['type','sender','origin_server_ts','event_id']), true)) AS bad_shape
 FROM roomserver_event_json
 WHERE event_nid IN (SELECT event_nid FROM zz_bak_rs_redacted_because)
 UNION ALL
 SELECT 'syncapi',
        count(*) FILTER (WHERE (headered_event_json::jsonb #> '{unsigned,redacted_because}') ? 'PDU'),
        count(*) FILTER (WHERE headered_event_json::jsonb #>> '{unsigned,redacted_because,event_id}'
-                              IS DISTINCT FROM headered_event_json::jsonb #>> '{unsigned,redacted_by}')
+                              IS DISTINCT FROM headered_event_json::jsonb #>> '{unsigned,redacted_by}'),
+       count(*) FILTER (WHERE jsonb_typeof(headered_event_json::jsonb #> '{unsigned,redacted_because,content}') IS DISTINCT FROM 'object'
+                              OR COALESCE(NOT ((headered_event_json::jsonb #> '{unsigned,redacted_because}')
+                                               ?& ARRAY['type','sender','origin_server_ts','event_id']), true))
 FROM syncapi_output_room_events
 WHERE id IN (SELECT id FROM zz_bak_sync_redacted_because);
 
-\echo 'If both rows show still_wrapped = 0 and id_mismatch = 0: COMMIT;  otherwise: ROLLBACK;'
+\echo 'If every count is 0: COMMIT;  otherwise: ROLLBACK;'
 -- The transaction is intentionally left open here.
