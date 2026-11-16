@@ -1186,6 +1186,9 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("d.loadRedactionPair: %w", err)
 		case validated || redactedEvent == nil || redactionEvent == nil:
 			// we've seen this redaction before or there is nothing to redact
+			// In particular, already-validated redactions are not rewritten here;
+			// databases containing the old internal-wrapper shape in
+			// unsigned.redacted_because need a separate data repair.
 			return nil
 		case redactedEvent.RoomID().String() != redactionEvent.RoomID().String():
 			// redactions across rooms aren't allowed
