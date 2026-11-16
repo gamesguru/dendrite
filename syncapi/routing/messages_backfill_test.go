@@ -338,11 +338,13 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 	})
 }
 
-// A join can be stored before its parents, which then arrive as backfill with
-// stream positions above the join's prev_batch. The /messages stream-token path
-// must keep them end to end: storage returns them and the routing filter must not
-// drop them with a narrower depth bound of its own.
-func TestBackwardStreamTokenKeepsParentsStoredAfterJoin(t *testing.T) {
+// The first event of a timeline can be stored before its parents (in practice a
+// join), which then arrive as backfill with stream positions above that
+// timeline's prev_batch. The event type does not matter to the code under test.
+// The /messages stream-token path must keep the parents end to end: storage
+// returns them and the routing filter must not drop them with a narrower depth
+// bound of its own.
+func TestBackwardStreamTokenKeepsParentsStoredAfterTimelineStart(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
@@ -351,7 +353,7 @@ func TestBackwardStreamTokenKeepsParentsStoredAfterJoin(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			parents = append(parents, room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("parent %d", i)}))
 		}
-		join := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "join"})
+		first := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "timeline start"})
 
 		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
 		defer closeDB()
@@ -366,7 +368,7 @@ func TestBackwardStreamTokenKeepsParentsStoredAfterJoin(t *testing.T) {
 			_, err = db.WriteEvent(ctx, ev, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 			require.NoError(t, err)
 		}
-		joinPos, err := db.WriteEvent(ctx, join, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		firstPos, err := db.WriteEvent(ctx, first, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 		for _, ev := range parents {
 			_, err = db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
@@ -377,8 +379,8 @@ func TestBackwardStreamTokenKeepsParentsStoredAfterJoin(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = snapshot.Rollback() }()
 
-		// The prev_batch of the join's timeline sits just before the join.
-		token := joinPos - 1
+		// The prev_batch of the timeline sits just before its first event.
+		token := firstPos - 1
 		from, err := snapshot.StreamToTopologicalPosition(ctx, room.ID, token, true)
 		require.NoError(t, err)
 		events, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, token, &types.TopologyToken{}, room.ID,
@@ -398,9 +400,9 @@ func TestBackwardStreamTokenKeepsParentsStoredAfterJoin(t *testing.T) {
 			got = append(got, ev.EventID())
 		}
 		for _, ev := range parents {
-			assert.Contains(t, got, ev.EventID(), "a parent stored after the join must survive the /messages stream-token filter")
+			assert.Contains(t, got, ev.EventID(), "a parent stored after the timeline start must survive the /messages stream-token filter")
 		}
-		assert.NotContains(t, got, join.EventID())
+		assert.NotContains(t, got, first.EventID())
 	})
 }
 
