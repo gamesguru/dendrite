@@ -140,6 +140,23 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, stored, 1)
 		require.Equal(t, int64(2), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// A redacted_because key in the content is not a redaction and must not
+		// block the write.
+		contentKey := room.CreateEvent(t, alice, "com.example.custom", map[string]any{
+			"redacted_because": "a value in the content",
+		})
+		_, err = db.WriteEvent(ctx, contentKey, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		require.NoError(t, contentKey.SetUnsignedField("age", 3))
+		written, err = db.UpdateUnredactedEventJSON(ctx, contentKey.EventID(), contentKey)
+		require.NoError(t, err)
+		require.True(t, written)
+
+		stored, err = db.Events(ctx, []string{contentKey.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(3), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
 	})
 }
 

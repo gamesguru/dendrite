@@ -199,8 +199,8 @@ type Database interface {
 	// UpdateEventJSON replaces the serialized event for an event already in the
 	// sync timeline, for example when backfill discovers its redaction later.
 	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
-	// UpdateUnredactedEventJSON is UpdateEventJSON that writes nothing if the stored event was
-	// redacted since it was read. It reports whether a row was written.
+	// UpdateUnredactedEventJSON is UpdateEventJSON that writes nothing if the stored event is
+	// redacted. It reports whether a row was written.
 	UpdateUnredactedEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) (bool, error)
 	// SelectRoomEventsAfterID returns up to limit stored events of a room with a row id greater than
 	// afterID, in row id order, including events excluded from sync. limit must be positive.

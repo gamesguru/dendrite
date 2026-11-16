@@ -91,11 +91,13 @@ const selectMaxEventIDSQL = "" +
 const updateEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2"
 
-// The redacted_because guard makes the write conditional on the row not having
-// been redacted since the caller read it; the check and the write are one statement.
+// The redacted_because guard makes the write conditional on the stored event
+// not being redacted; the check and the write are one statement. Read the same
+// JSON path as IsRedacted so that a redacted_because key in the event content
+// does not count as a redaction.
 const updateUnredactedEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2" +
-	" AND headered_event_json NOT LIKE '%\"redacted_because\"%'"
+	" AND json_type(headered_event_json, '$.unsigned.redacted_because') IS NULL"
 
 const selectStateInRangeSQL = "" +
 	"SELECT event_id, id, headered_event_json, exclude_from_sync, add_state_ids, remove_state_ids, history_visibility" +

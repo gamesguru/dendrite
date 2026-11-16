@@ -498,7 +498,12 @@ func (d *Database) UpdateUnredactedEventJSON(ctx context.Context, eventID string
 		written, err = d.OutputEvents.UpdateUnredactedEventJSON(ctx, txn, eventID, event)
 		return err
 	})
-	return written, err
+	if err != nil {
+		// The row is only written if the transaction commits, so a failed
+		// commit must not report the write as having happened.
+		return false, err
+	}
+	return written, nil
 }
 
 func (d *Database) UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error {
