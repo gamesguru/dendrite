@@ -328,6 +328,20 @@ func (d *storedEventsDB) Events(_ context.Context, _ gomatrixserverlib.RoomVersi
 	return out, nil
 }
 
+// countingFedClient records /state_ids lookups. It always fails, so a test
+// that reaches federation sees an error as well as a counted request.
+type countingFedClient struct {
+	federationAPI.RoomserverFederationAPI
+	stateIDLookups int
+}
+
+func (c *countingFedClient) LookupStateIDs(
+	context.Context, spec.ServerName, spec.ServerName, string, string,
+) (gomatrixserverlib.StateIDResponse, error) {
+	c.stateIDLookups++
+	return nil, errors.New("fake federation: no /state_ids available")
+}
+
 // Rolling a state event forward needs the type and state key of every event in
 // the previous before-state. Those events are usually older than the batch but
 // already stored, so they must come from the database, not from /state_ids.
@@ -345,8 +359,11 @@ func TestStateIDsBeforeEventRollsForwardFromStoredState(t *testing.T) {
 	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
 		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["` + prevEvent.EventID() + `"],"auth_events":[]}`)
 
+	fed := &countingFedClient{}
 	build := func(db storage.Database) *backfillRequester {
 		return &backfillRequester{
+			fsAPI:                   fed,
+			servers:                 []spec.ServerName{"remote.test"},
 			db:                      db,
 			roomVersion:             gomatrixserverlib.RoomVersionV10,
 			eventIDToBeforeStateIDs: map[string][]string{prevEvent.EventID(): {oldMember.EventID()}},
@@ -358,12 +375,14 @@ func TestStateIDsBeforeEventRollsForwardFromStoredState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{prevEvent.EventID()}, got,
 		"the member event the previous event replaces is stored, so no federation request is needed")
+	require.Zero(t, fed.stateIDLookups, "local state must not trigger /state_ids")
 
 	// With the old member not stored locally the state cannot be rolled forward,
-	// and no server is configured to answer the state lookup.
+	// so the requester must attempt federation.
 	got, err = build(newStoredEventsDB()).StateIDsBeforeEvent(context.Background(), target)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Nil(t, got)
+	require.Equal(t, 1, fed.stateIDLookups)
 }
 
 // A later backfill page gets a new requester. An event stored by an earlier page
@@ -387,7 +406,10 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	db.beforeState = map[string]types.StateSnapshotNID{target.EventID(): 7}
 	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
 
+	fed := &countingFedClient{}
 	requester := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
 		db:                      db,
 		roomVersion:             gomatrixserverlib.RoomVersionV10,
 		eventIDToBeforeStateIDs: map[string][]string{},
@@ -396,13 +418,15 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, []string{member.EventID()}, got)
+	require.Zero(t, fed.stateIDLookups, "a stored snapshot must not trigger /state_ids")
 
 	// An event with no stored snapshot falls through to federation.
 	db.beforeState = nil
 	requester.eventIDToBeforeStateIDs = map[string][]string{}
 	got, err = requester.StateIDsBeforeEvent(context.Background(), target)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Nil(t, got)
+	require.Equal(t, 1, fed.stateIDLookups)
 }
 
 // A room with partial state (MSC3706) can hold incomplete before-state
@@ -424,7 +448,10 @@ func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {
 	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
 	db.partial = true
 
+	fed := &countingFedClient{}
 	requester := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
 		db:                      db,
 		roomNID:                 1,
 		roomVersion:             gomatrixserverlib.RoomVersionV10,
@@ -432,8 +459,9 @@ func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {
 		eventIDMap:              map[string]gomatrixserverlib.PDU{},
 	}
 	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Nil(t, got, "a partially-stated room must not reuse its stored snapshot")
+	require.Equal(t, 1, fed.stateIDLookups, "a partial room must ask federation")
 
 	// The same snapshot is reused once the room is no longer partial.
 	db.partial = false
@@ -441,6 +469,7 @@ func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {
 	got, err = requester.StateIDsBeforeEvent(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, []string{member.EventID()}, got)
+	require.Equal(t, 1, fed.stateIDLookups, "no further /state_ids once the room is not partial")
 }
 
 // A resync only recomputes the state of events whose ancestors it can obtain.
@@ -464,7 +493,10 @@ func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialResync(t *testing.T) {
 	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
 	db.resyncStateNID = 9
 
+	fed := &countingFedClient{}
 	requester := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
 		db:                      db,
 		roomNID:                 1,
 		roomVersion:             gomatrixserverlib.RoomVersionV10,
@@ -472,6 +504,7 @@ func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialResync(t *testing.T) {
 		eventIDMap:              map[string]gomatrixserverlib.PDU{},
 	}
 	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Nil(t, got, "a resynced room must not reuse snapshots the resync may not have repaired")
+	require.Equal(t, 1, fed.stateIDLookups, "a resynced room must ask federation")
 }
