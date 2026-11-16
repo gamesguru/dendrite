@@ -359,6 +359,20 @@ func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 		}
 		if pos.Depth > 0 {
 			maxBackfillDepth = pos.Depth
+			// A token is the position just before the first synced event of its
+			// timeline, so history must stay reachable up to that event's depth.
+			// The parents of a join stored before them (a late-arriving
+			// backfill) sit deeper than any event persisted at or below the
+			// token, so the depth found above alone would cut them off.
+			first, ferr := d.Topology.SelectFirstSyncedDepthAfterStreamPosition(ctx, d.txn, roomID, maxStreamPos)
+			switch {
+			case ferr == nil:
+				if first > maxBackfillDepth {
+					maxBackfillDepth = first
+				}
+			case !errors.Is(ferr, sql.ErrNoRows):
+				return nil, types.TopologyToken{}, types.TopologyToken{}, fmt.Errorf("d.Topology.SelectFirstSyncedDepthAfterStreamPosition: %w", ferr)
+			}
 		}
 	}
 	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(

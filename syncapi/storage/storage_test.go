@@ -1548,6 +1548,48 @@ func TestGetEventsBeforeStreamPositionExcludesDeeperBackfilled(t *testing.T) {
 	})
 }
 
+// A join can be stored before its parents: the history between the last event
+// stored before the join and the join itself arrives later as backfill. The
+// prev_batch token of the join's timeline sits just before the join, so paging
+// back from it must reach that history, which is deeper than every event
+// persisted at or below the token.
+func TestGetEventsBeforeStreamPositionReachesParentsStoredAfterJoin(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+		var mid []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			mid = append(mid, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("mid %d", i)}))
+		}
+		join := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "join"})
+
+		_ = MustWriteEvents(t, db, base)
+		joinPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{join})[0]
+		// The parents arrive afterwards as backfill (excluded from sync).
+		for _, ev := range mid {
+			_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, joinPos-1, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 20}, true)
+			require.NoError(t, err)
+			var got []string
+			for _, ev := range events {
+				got = append(got, ev.EventID())
+			}
+			for _, ev := range mid {
+				assert.Contains(t, got, ev.EventID(), "a parent stored after the join must be reachable from the join's prev_batch")
+			}
+			assert.NotContains(t, got, join.EventID(), "the join itself starts the timeline the token precedes")
+		})
+	})
+}
+
 // A sender or type filter that removes every event of a non-empty range must
 // still leave the range's cursor, so /messages can tell a filtered-empty page
 // from the end of history.
