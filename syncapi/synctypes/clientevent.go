@@ -219,8 +219,7 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	if err := json.Unmarshal(se.Unsigned(), &prev); err == nil && prev.PrevSenderID != "" {
 		prevUserID, err := userIDForSender(se.RoomID(), spec.SenderID(prev.PrevSenderID))
 		if err == nil && prevUserID != nil {
-			prev.PrevSenderID = prevUserID.String()
-			mappedPrevSender = prev.PrevSenderID
+			mappedPrevSender = prevUserID.String()
 		} else {
 			errString := "userID unknown"
 			if err != nil {
@@ -229,10 +228,13 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 			logrus.Warnf("Failed to find userID for prev_sender in ClientEvent: %s", errString)
 			// NOTE: Not much can be done here, so leave the previous value in place.
 		}
-		ce.Unsigned, err = json.Marshal(prev)
-		if err != nil {
-			err = fmt.Errorf("failed to marshal unsigned content for ClientEvent: %w", err)
-			return err
+		if mappedPrevSender != "" {
+			// Change only prev_sender: the rest of unsigned (age, membership,
+			// redaction data) must survive.
+			ce.Unsigned, err = sjson.SetBytes(ce.Unsigned, "prev_sender", mappedPrevSender)
+			if err != nil {
+				return fmt.Errorf("failed to set mapped prev_sender in ClientEvent: %w", err)
+			}
 		}
 	}
 

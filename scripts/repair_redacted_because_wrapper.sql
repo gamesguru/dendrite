@@ -25,8 +25,10 @@
 -- Usage: connect interactively to the dendrite database, then run:
 --     \set ON_ERROR_STOP on
 --     \i scripts/repair_redacted_because_wrapper.sql
--- Run as a psql script (with \i or -f), not by pasting statements. The
--- ON_ERROR_STOP setting below is required for the DO-block checks to stop execution.
+-- Run it with \i from that interactive session, not with psql -f (which exits and
+-- rolls back at the end instead of leaving the transaction open for inspection),
+-- and not by pasting statements. The ON_ERROR_STOP setting below is required for
+-- the DO-block checks to stop execution.
 -- The script leaves the transaction OPEN. Keep this psql session open, inspect
 -- the counts and verify rows, then type COMMIT; or ROLLBACK;. Restart Dendrite
 -- afterwards so caches are dropped. Drop the zz_bak_* tables once satisfied;
@@ -39,6 +41,10 @@
 -- Drop or rename zz_bak_* tables from a previous run first.
 
 \set ON_ERROR_STOP on
+-- An interactive session with ON_ERROR_ROLLBACK on would wrap each statement in
+-- an implicit savepoint, so a failed check would undo only that statement and
+-- leave the transaction open to COMMIT. Keep it off so a failure aborts it all.
+\set ON_ERROR_ROLLBACK off
 
 -- REPEATABLE READ: every backup and UPDATE sees the same snapshot, and a row the
 -- live server changes meanwhile makes the UPDATE fail ("could not serialize")
@@ -50,6 +56,12 @@ BEGIN ISOLATION LEVEL REPEATABLE READ;
 
 CREATE TEMP TABLE zz_pseudo_rooms ON COMMIT DROP AS
 SELECT room_id FROM roomserver_rooms WHERE room_version = 'org.matrix.msc4014';
+
+-- Room versions 11 and later carry the redacted event ID in content.redacts;
+-- earlier versions carry it at the top level of the redaction.
+CREATE TEMP TABLE zz_v11_rooms ON COMMIT DROP AS
+SELECT room_id FROM roomserver_rooms
+WHERE CASE WHEN room_version ~ '^[0-9]+$' THEN room_version::int >= 11 ELSE false END;
 
 -- The rooms whose rows this script may rewrite: known to the roomserver and
 -- not pseudo-ID. Split-database deployments are not supported.
@@ -270,7 +282,10 @@ $$;
 WITH src AS (
   SELECT j.event_nid,
          j.event_json::jsonb AS doc,
-         j.event_json::jsonb #> '{unsigned,redacted_because,PDU}' AS rb
+         j.event_json::jsonb #> '{unsigned,redacted_because,PDU}' AS rb,
+         CASE WHEN r.room_id IN (SELECT room_id FROM zz_v11_rooms)
+              THEN j.event_json::jsonb #> '{unsigned,redacted_because,PDU,content,redacts}'
+              ELSE j.event_json::jsonb #> '{unsigned,redacted_because,PDU,redacts}' END AS target
   FROM roomserver_event_json j
   JOIN roomserver_events e ON e.event_nid = j.event_nid
   JOIN roomserver_rooms r ON r.room_nid = e.room_nid
@@ -283,20 +298,24 @@ UPDATE roomserver_event_json j
 SET event_json = jsonb_set(
       src.doc,
       '{unsigned,redacted_because}',
-      jsonb_strip_nulls(jsonb_build_object(
+      -- Drop only absent outer fields. jsonb_strip_nulls would also strip null
+      -- members nested inside content and unsigned.
+      (SELECT jsonb_object_agg(f.key, f.value)
+       FROM jsonb_each(jsonb_build_object(
         'type',             src.rb -> 'type',
         'sender',           src.rb -> 'sender',
         -- MSC2174: also serve the redacted ID in content, as the client format does.
         'content',          CASE WHEN jsonb_typeof(src.rb -> 'content') = 'object'
                                   AND NOT (src.rb -> 'content') ? 'redacts'
-                                  AND src.rb -> 'redacts' IS NOT NULL
-                             THEN jsonb_set(src.rb -> 'content', '{redacts}', src.rb -> 'redacts')
+                                  AND src.target IS NOT NULL
+                             THEN jsonb_set(src.rb -> 'content', '{redacts}', src.target)
                              ELSE src.rb -> 'content' END,
         'origin_server_ts', src.rb -> 'origin_server_ts',
-        'redacts',          src.rb -> 'redacts',
+        'redacts',          src.target,
         'unsigned',         src.rb -> 'unsigned',
         'event_id',         src.doc #>> '{unsigned,redacted_by}'
-      ))
+       )) AS f
+       WHERE jsonb_typeof(f.value) <> 'null')
     )::text
 FROM src
 WHERE j.event_nid = src.event_nid;
@@ -305,7 +324,10 @@ WHERE j.event_nid = src.event_nid;
 WITH src AS (
   SELECT s.id,
          s.headered_event_json::jsonb AS doc,
-         s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU}' AS rb
+         s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU}' AS rb,
+         CASE WHEN s.room_id IN (SELECT room_id FROM zz_v11_rooms)
+              THEN s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU,content,redacts}'
+              ELSE s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU,redacts}' END AS target
   FROM syncapi_output_room_events s
   WHERE s.headered_event_json LIKE '%redacted_because%'
     AND (s.headered_event_json::jsonb #> '{unsigned,redacted_because}') ? 'PDU'
@@ -316,20 +338,24 @@ UPDATE syncapi_output_room_events s
 SET headered_event_json = jsonb_set(
       src.doc,
       '{unsigned,redacted_because}',
-      jsonb_strip_nulls(jsonb_build_object(
+      -- Drop only absent outer fields. jsonb_strip_nulls would also strip null
+      -- members nested inside content and unsigned.
+      (SELECT jsonb_object_agg(f.key, f.value)
+       FROM jsonb_each(jsonb_build_object(
         'type',             src.rb -> 'type',
         'sender',           src.rb -> 'sender',
         -- MSC2174: also serve the redacted ID in content, as the client format does.
         'content',          CASE WHEN jsonb_typeof(src.rb -> 'content') = 'object'
                                   AND NOT (src.rb -> 'content') ? 'redacts'
-                                  AND src.rb -> 'redacts' IS NOT NULL
-                             THEN jsonb_set(src.rb -> 'content', '{redacts}', src.rb -> 'redacts')
+                                  AND src.target IS NOT NULL
+                             THEN jsonb_set(src.rb -> 'content', '{redacts}', src.target)
                              ELSE src.rb -> 'content' END,
         'origin_server_ts', src.rb -> 'origin_server_ts',
-        'redacts',          src.rb -> 'redacts',
+        'redacts',          src.target,
         'unsigned',         src.rb -> 'unsigned',
         'event_id',         src.doc #>> '{unsigned,redacted_by}'
-      ))
+       )) AS f
+       WHERE jsonb_typeof(f.value) <> 'null')
     )::text
 FROM src
 WHERE s.id = src.id;
@@ -338,7 +364,10 @@ WHERE s.id = src.id;
 WITH src AS (
   SELECT s.room_id, s.event_id,
          s.headered_event_json::jsonb AS doc,
-         s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU}' AS rb
+         s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU}' AS rb,
+         CASE WHEN s.room_id IN (SELECT room_id FROM zz_v11_rooms)
+              THEN s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU,content,redacts}'
+              ELSE s.headered_event_json::jsonb #> '{unsigned,redacted_because,PDU,redacts}' END AS target
   FROM syncapi_current_room_state s
   WHERE s.headered_event_json LIKE '%redacted_because%'
     AND (s.headered_event_json::jsonb #> '{unsigned,redacted_because}') ? 'PDU'
@@ -349,20 +378,24 @@ UPDATE syncapi_current_room_state s
 SET headered_event_json = jsonb_set(
       src.doc,
       '{unsigned,redacted_because}',
-      jsonb_strip_nulls(jsonb_build_object(
+      -- Drop only absent outer fields. jsonb_strip_nulls would also strip null
+      -- members nested inside content and unsigned.
+      (SELECT jsonb_object_agg(f.key, f.value)
+       FROM jsonb_each(jsonb_build_object(
         'type',             src.rb -> 'type',
         'sender',           src.rb -> 'sender',
         -- MSC2174: also serve the redacted ID in content, as the client format does.
         'content',          CASE WHEN jsonb_typeof(src.rb -> 'content') = 'object'
                                   AND NOT (src.rb -> 'content') ? 'redacts'
-                                  AND src.rb -> 'redacts' IS NOT NULL
-                             THEN jsonb_set(src.rb -> 'content', '{redacts}', src.rb -> 'redacts')
+                                  AND src.target IS NOT NULL
+                             THEN jsonb_set(src.rb -> 'content', '{redacts}', src.target)
                              ELSE src.rb -> 'content' END,
         'origin_server_ts', src.rb -> 'origin_server_ts',
-        'redacts',          src.rb -> 'redacts',
+        'redacts',          src.target,
         'unsigned',         src.rb -> 'unsigned',
         'event_id',         src.doc #>> '{unsigned,redacted_by}'
-      ))
+       )) AS f
+       WHERE jsonb_typeof(f.value) <> 'null')
     )::text
 FROM src
 WHERE s.room_id = src.room_id AND s.event_id = src.event_id;

@@ -17,6 +17,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {
@@ -436,12 +437,10 @@ func TestToClientEventsFormatSync(t *testing.T) { //nolint:gocyclo
 			Sender:         testUserID,
 		})
 
-	var prev PrevEventRef
-	prev.PrevContent = []byte(`{"name": "Goodbye World 2"}`)
-	prev.PrevSenderID = testUserID
-	expectedUnsigned, err := json.Marshal(prev)
+	// Only prev_sender changes; the rest of unsigned is kept as it was.
+	expectedUnsigned, err := sjson.SetBytes(ev2.Unsigned(), "prev_sender", testUserID)
 	if err != nil {
-		t.Fatalf("failed to marshal prev: %s", err)
+		t.Fatalf("failed to set prev_sender: %s", err)
 	}
 
 	ce2 := clientEvents[1]
@@ -498,6 +497,29 @@ func TestUpdatePseudoIDsPreservesMappedPrevSenderForTransformedStateEvents(t *te
 				t.Errorf("prev_sender: wanted mapped user ID, got %q", got)
 			}
 		})
+	}
+}
+
+// Mapping prev_sender must not drop the other unsigned fields.
+func TestToClientEventPreservesOtherUnsignedWhenMappingPrevSender(t *testing.T) {
+	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(`{"type":"m.room.name","state_key":"","event_id":"$n:localhost","room_id":"!test:localhost","sender":"senderKey","content":{"name":"new"},"origin_server_ts":1,"unsigned":{"age":42,"redacted_by":"$r:localhost","prev_content":{"name":"old"},"prev_sender":"oldKey","replaces_state":"$prev:localhost"}}`), false)
+	if err != nil {
+		t.Fatalf("failed to create event: %s", err)
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return spec.NewUserID("@"+string(senderID)+":localhost", true)
+	}
+	ce, err := ToClientEvent(ev, FormatSync, userIDForSender)
+	if err != nil {
+		t.Fatalf("failed to create ClientEvent: %s", err)
+	}
+	unsigned := gjson.ParseBytes(ce.Unsigned)
+	if got := unsigned.Get("prev_sender").String(); got != "@oldKey:localhost" {
+		t.Errorf("prev_sender: wanted mapped user ID, got %q", got)
+	}
+	if unsigned.Get("age").Int() != 42 || unsigned.Get("redacted_by").String() != "$r:localhost" ||
+		unsigned.Get("replaces_state").String() != "$prev:localhost" || !unsigned.Get("prev_content").Exists() {
+		t.Errorf("other unsigned fields were dropped: %s", ce.Unsigned)
 	}
 }
 
@@ -566,13 +588,8 @@ func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { //nolint:gocy
 			Sender:         testUserID,
 		})
 
-	var prev PrevEventRef
-	prev.PrevContent = []byte(`{"name": "Goodbye World 2"}`)
-	prev.PrevSenderID = "unknownSenderID"
-	expectedUnsigned, err := json.Marshal(prev)
-	if err != nil {
-		t.Fatalf("failed to marshal prev: %s", err)
-	}
+	// An unmapped prev_sender leaves unsigned exactly as stored.
+	expectedUnsigned := ev2.Unsigned()
 
 	ce2 := clientEvents[1]
 	verifyEventFields(t,

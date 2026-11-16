@@ -50,35 +50,51 @@ func (d *repairDB) SelectRoomEventsAfterID(
 	return out, nil
 }
 
+// Events returns a detached copy of the stored event, so a repair only changes
+// what it persists through UpdateUnredactedEventJSON.
 func (d *repairDB) Events(_ context.Context, ids []string) ([]*rstypes.HeaderedEvent, error) {
 	var out []*rstypes.HeaderedEvent
 	for _, row := range d.rows {
 		if row.HeaderedEvent != nil && row.EventID() == ids[0] {
-			if d.refuseUpdate {
-				// Return a copy, so the refused write leaves the stored event
-				// untouched, as the real conditional UPDATE would.
-				eventJSON, err := row.MarshalJSON()
-				if err != nil {
-					return nil, err
-				}
-				var event rstypes.HeaderedEvent
-				if err = event.UnmarshalJSON(eventJSON); err != nil {
-					return nil, err
-				}
-				out = append(out, &event)
-				continue
+			eventJSON, err := row.MarshalJSON()
+			if err != nil {
+				return nil, err
 			}
-			out = append(out, row.HeaderedEvent)
+			var event rstypes.HeaderedEvent
+			if err = event.UnmarshalJSON(eventJSON); err != nil {
+				return nil, err
+			}
+			out = append(out, &event)
 		}
 	}
 	return out, nil
 }
 
-func (d *repairDB) UpdateUnredactedEventJSON(_ context.Context, _ string, _ []byte, _ *rstypes.HeaderedEvent) (bool, error) {
-	// The rows hold the event pointers the repair mutates, so the write is the
-	// mutation; counting calls is enough here.
+// UpdateUnredactedEventJSON persists the event it is given, unless refuseUpdate
+// simulates a row that changed since the read.
+func (d *repairDB) UpdateUnredactedEventJSON(_ context.Context, eventID string, _ []byte, event *rstypes.HeaderedEvent) (bool, error) {
 	d.updates++
-	return !d.refuseUpdate, nil
+	if d.refuseUpdate {
+		return false, nil
+	}
+	for i := range d.rows {
+		if d.rows[i].HeaderedEvent != nil && d.rows[i].EventID() == eventID {
+			d.rows[i].HeaderedEvent = event
+		}
+	}
+	return true, nil
+}
+
+// stored returns the persisted copy of an event.
+func (d *repairDB) stored(t *testing.T, eventID string) *rstypes.HeaderedEvent {
+	t.Helper()
+	for _, row := range d.rows {
+		if row.HeaderedEvent != nil && row.EventID() == eventID {
+			return row.HeaderedEvent
+		}
+	}
+	t.Fatalf("event %s not stored", eventID)
+	return nil
 }
 
 func found(prev ...*rstypes.HeaderedEvent) rsapi.QueryStateAfterEventsResponse {
@@ -125,7 +141,7 @@ func TestRepairRoomPrevStateFillsProfileChange(t *testing.T) {
 	assert.Equal(t, 1, report.Repaired)
 	assert.Equal(t, 0, report.Errors)
 
-	unsigned := gjson.ParseBytes(newJoin.Unsigned())
+	unsigned := gjson.ParseBytes(db.stored(t, newJoin.EventID()).Unsigned())
 	assert.Equal(t, "join", unsigned.Get("prev_content.membership").Str)
 	assert.Equal(t, oldJoin.EventID(), unsigned.Get("replaces_state").Str)
 	assert.Equal(t, string(oldJoin.SenderID()), unsigned.Get("prev_sender").Str)
@@ -154,7 +170,7 @@ func TestRepairRoomPrevStateKeepsOtherUnsignedKeys(t *testing.T) {
 	_, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 	require.NoError(t, err)
 
-	unsigned := gjson.ParseBytes(newJoin.Unsigned())
+	unsigned := gjson.ParseBytes(db.stored(t, newJoin.EventID()).Unsigned())
 	assert.Equal(t, int64(42), unsigned.Get("age").Int())
 	assert.Equal(t, "$other", unsigned.Get("redacted_by").Str)
 	assert.True(t, unsigned.Get("prev_content").Exists())
@@ -193,14 +209,14 @@ func TestRepairRoomPrevStateIsIdempotentAndNeverOverwrites(t *testing.T) {
 
 	_, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 	require.NoError(t, err)
-	before := string(newJoin.Unsigned())
+	before := string(db.stored(t, newJoin.EventID()).Unsigned())
 
 	second, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, second.AlreadyHad)
 	assert.Equal(t, 0, second.Repaired)
-	assert.Equal(t, before, string(newJoin.Unsigned()))
+	assert.Equal(t, before, string(db.stored(t, newJoin.EventID()).Unsigned()))
 	assert.Equal(t, 1, db.updates)
 }
 

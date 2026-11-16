@@ -88,10 +88,11 @@ func HasPrevContent(ev *rstypes.HeaderedEvent) bool {
 	return gjson.GetBytes(ev.Unsigned(), "prev_content").Exists()
 }
 
-// IsRedacted reports whether ev has been redacted. A redacted state event has
-// nothing left to describe, so it is not annotated.
+// IsRedacted reports whether ev has been redacted, either by the redacted flag
+// on the event or by an unsigned.redacted_because marker. A redacted state event
+// has nothing left to describe, so it is not annotated.
 func IsRedacted(ev *rstypes.HeaderedEvent) bool {
-	return gjson.GetBytes(ev.Unsigned(), "redacted_because").Exists()
+	return ev.Redacted() || gjson.GetBytes(ev.Unsigned(), "redacted_because").Exists()
 }
 
 // ApplyPrevState sets unsigned.prev_content, prev_sender and replaces_state

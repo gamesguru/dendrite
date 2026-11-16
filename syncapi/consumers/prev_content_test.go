@@ -84,3 +84,20 @@ func TestSetHistoricalPrevStateSkipsRedactedEvents(t *testing.T) {
 	internal.SetHistoricalPrevState(context.Background(), fake, ev)
 	require.Zero(t, fake.calls)
 }
+
+// A PDU with the redacted flag set but no unsigned.redacted_because marker is
+// still redacted, so it is left alone.
+func TestSetHistoricalPrevStateSkipsRedactedFlagWithoutMarker(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	ev := room.CreateEvent(t, alice, "m.room.member", map[string]any{"membership": "join"}, test.WithStateKey(alice.ID))
+	redacted, err := rstypes.RedactedCopy(ev)
+	require.NoError(t, err)
+	require.True(t, redacted.Redacted())
+	require.False(t, gjson.GetBytes(redacted.Unsigned(), "redacted_because").Exists())
+	headered := &rstypes.HeaderedEvent{PDU: redacted}
+
+	fake := &fakeStateAfterEvents{prev: ev}
+	internal.SetHistoricalPrevState(context.Background(), fake, headered)
+	require.Zero(t, fake.calls)
+}
