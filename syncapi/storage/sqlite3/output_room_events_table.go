@@ -124,6 +124,9 @@ const purgeEventsSQL = "" +
 const deleteEventSQL = "" +
 	"DELETE FROM syncapi_output_room_events WHERE event_id = $1"
 
+const selectRoomEventsAfterIDSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
+FROM syncapi_output_room_events WHERE room_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3`
+
 const selectTimestampForwardSQL = `SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility
 FROM syncapi_output_room_events
 WHERE room_id = $1 AND CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT) >= $2
@@ -140,6 +143,7 @@ ORDER BY CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT)
 
 type outputRoomEventsStatements struct {
 	selectTimestampForwardStmt   *sql.Stmt
+	selectRoomEventsAfterIDStmt  *sql.Stmt
 	selectTimestampBackwardStmt  *sql.Stmt
 	db                           *sql.DB
 	streamIDStatements           *StreamIDStatements
@@ -183,6 +187,7 @@ func NewSqliteEventsTable(ctx context.Context, db *sql.DB, streamID *StreamIDSta
 
 	return s, sqlutil.StatementList{
 		{&s.selectTimestampForwardStmt, selectTimestampForwardSQL},
+		{&s.selectRoomEventsAfterIDStmt, selectRoomEventsAfterIDSQL},
 		{&s.selectTimestampBackwardStmt, selectTimestampBackwardSQL},
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectMaxEventIDStmt, selectMaxEventIDSQL},
@@ -846,6 +851,17 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 // SelectEventsByTimestamp returns a bounded batch ordered by timestamp and stream ID.
 // A zero afterID includes exact timestamp matches; otherwise the cursor is exclusive.
 // Backfilled events are eligible even when excluded from incremental sync.
+func (s *outputRoomEventsStatements) SelectRoomEventsAfterID(
+	ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int,
+) ([]types.StreamEvent, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventsAfterIDStmt).QueryContext(ctx, roomID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomEventsAfterID: rows.close() failed")
+	return rowsToStreamEvents(rows)
+}
+
 func (s *outputRoomEventsStatements) SelectEventsByTimestamp(ctx context.Context, txn *sql.Tx, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
 	stmt := s.selectTimestampForwardStmt
 	if backwards {

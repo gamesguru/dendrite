@@ -92,6 +92,10 @@ const insertEventSQL = "" +
 	"ON CONFLICT ON CONSTRAINT syncapi_output_room_event_id_idx DO UPDATE SET exclude_from_sync = syncapi_output_room_events.exclude_from_sync " +
 	"RETURNING id"
 
+const selectRoomEventsAfterIDSQL = "" +
+	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events" +
+	" WHERE room_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3"
+
 const selectEventsSQL = "" +
 	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events WHERE event_id = ANY($1)"
 
@@ -225,6 +229,7 @@ type outputRoomEventsStatements struct {
 	selectTimestampBackwardStmt          *sql.Stmt
 	insertEventStmt                      *sql.Stmt
 	selectEventsStmt                     *sql.Stmt
+	selectRoomEventsAfterIDStmt          *sql.Stmt
 	selectEventsWitFilterStmt            *sql.Stmt
 	selectMaxEventIDStmt                 *sql.Stmt
 	selectRecentEventsStmt               *sql.Stmt
@@ -294,6 +299,7 @@ func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, err
 		{&s.selectTimestampBackwardStmt, selectTimestampBackwardSQL},
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectEventsStmt, selectEventsSQL},
+		{&s.selectRoomEventsAfterIDStmt, selectRoomEventsAfterIDSQL},
 		{&s.selectEventsWitFilterStmt, selectEventsWithFilterSQL},
 		{&s.selectMaxEventIDStmt, selectMaxEventIDSQL},
 		{&s.selectRecentEventsStmt, selectRecentEventsSQL},
@@ -657,6 +663,17 @@ func (s *outputRoomEventsStatements) SelectEvents(
 		return returnEvents, nil
 	}
 	return streamEvents, nil
+}
+
+func (s *outputRoomEventsStatements) SelectRoomEventsAfterID(
+	ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int,
+) ([]types.StreamEvent, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventsAfterIDStmt).QueryContext(ctx, roomID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomEventsAfterID: rows.close() failed")
+	return rowsToStreamEvents(rows)
 }
 
 func (s *outputRoomEventsStatements) DeleteEventsForRoom(

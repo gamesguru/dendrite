@@ -199,6 +199,9 @@ type Database interface {
 	// UpdateEventJSON replaces the serialized event for an event already in the
 	// sync timeline, for example when backfill discovers its redaction later.
 	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
+	// SelectRoomEventsAfterID returns up to limit stored events of a room with a row id greater than
+	// afterID, in row id order, including events excluded from sync. It pages through a room's events.
+	SelectRoomEventsAfterID(ctx context.Context, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)
 	// PurgeBackwardExtremitiesForEvent deletes any backward extremities in the room that cite prevEventID as the missing event.
 	PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error
 	// PurgeBackwardExtremitiesForEvents is PurgeBackwardExtremitiesForEvent for many events in one transaction.

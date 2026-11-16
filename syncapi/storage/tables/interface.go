@@ -71,6 +71,8 @@ type Events interface {
 	SelectRoomsWithEventsSince(ctx context.Context, txn *sql.Tx, roomIDs []string, since types.StreamPosition) ([]string, error)
 	SelectEvents(ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool) ([]types.StreamEvent, error)
 	UpdateEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) error
+	// SelectRoomEventsAfterID returns up to limit events of a room with an id greater than afterID, in id order.
+	SelectRoomEventsAfterID(ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)
 	// DeleteEventsForRoom removes all event information for a room. This should only be done when removing the room entirely.
 	DeleteEventsForRoom(ctx context.Context, txn *sql.Tx, roomID string) (err error)
 
