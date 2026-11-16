@@ -32,8 +32,9 @@ func (s *stateBefore) QueryStateAfterEvents(
 
 // repairDB is an in-memory room, in row id order.
 type repairDB struct {
-	rows    []types.StreamEvent
-	updates int
+	rows         []types.StreamEvent
+	updates      int
+	refuseUpdate bool
 }
 
 func (d *repairDB) SelectRoomEventsAfterID(
@@ -49,11 +50,35 @@ func (d *repairDB) SelectRoomEventsAfterID(
 	return out, nil
 }
 
-func (d *repairDB) UpdateEventJSON(_ context.Context, _ string, _ *rstypes.HeaderedEvent) error {
+func (d *repairDB) Events(_ context.Context, ids []string) ([]*rstypes.HeaderedEvent, error) {
+	var out []*rstypes.HeaderedEvent
+	for _, row := range d.rows {
+		if row.HeaderedEvent != nil && row.EventID() == ids[0] {
+			if d.refuseUpdate {
+				// Return a copy, so the refused write leaves the stored event
+				// untouched, as the real conditional UPDATE would.
+				eventJSON, err := row.MarshalJSON()
+				if err != nil {
+					return nil, err
+				}
+				var event rstypes.HeaderedEvent
+				if err = event.UnmarshalJSON(eventJSON); err != nil {
+					return nil, err
+				}
+				out = append(out, &event)
+				continue
+			}
+			out = append(out, row.HeaderedEvent)
+		}
+	}
+	return out, nil
+}
+
+func (d *repairDB) UpdateUnredactedEventJSON(_ context.Context, _ string, _ *rstypes.HeaderedEvent) (bool, error) {
 	// The rows hold the event pointers the repair mutates, so the write is the
 	// mutation; counting calls is enough here.
 	d.updates++
-	return nil
+	return !d.refuseUpdate, nil
 }
 
 func found(prev ...*rstypes.HeaderedEvent) rsapi.QueryStateAfterEventsResponse {
@@ -145,6 +170,22 @@ func TestRepairRoomPrevStateSkipsRedactedEvents(t *testing.T) {
 	assert.Equal(t, 1, report.Redacted)
 	assert.Equal(t, 0, report.Repaired)
 	assert.False(t, HasPrevContent(newJoin))
+}
+
+// A redaction that lands after the repair re-reads the event but before the
+// conditional write must win: the update is refused and the event is skipped.
+func TestRepairRoomPrevStateSkipsWriteWhenRedactedMeanwhile(t *testing.T) {
+	_, newJoin, roomID, q, db := profileChange(t)
+	db.refuseUpdate = true
+
+	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.Redacted)
+	assert.Equal(t, 0, report.Repaired)
+	assert.Equal(t, 0, report.Repairable)
+	assert.Equal(t, 1, db.updates)
+	assert.False(t, HasPrevContent(newJoin), "a refused write must leave the stored event unchanged")
 }
 
 func TestRepairRoomPrevStateIsIdempotentAndNeverOverwrites(t *testing.T) {

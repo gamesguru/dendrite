@@ -217,7 +217,7 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	var prev PrevEventRef
 	if err := json.Unmarshal(se.Unsigned(), &prev); err == nil && prev.PrevSenderID != "" {
 		prevUserID, err := userIDForSender(se.RoomID(), spec.SenderID(prev.PrevSenderID))
-		if err == nil && userID != nil {
+		if err == nil && prevUserID != nil {
 			prev.PrevSenderID = prevUserID.String()
 		} else {
 			errString := "userID unknown"

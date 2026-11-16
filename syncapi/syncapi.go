@@ -202,7 +202,7 @@ func AddPublicRoutes(
 
 	routers.ZendriteAdmin.Handle("/admin/repairUnsigned/{roomID}",
 		httputil.MakeAdminAPI("admin_repair_unsigned", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
-			return routing.AdminRepairUnsigned(req, syncDB, rsAPI)
+			return routing.AdminRepairUnsigned(req, syncDB, rsAPI, device)
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 }

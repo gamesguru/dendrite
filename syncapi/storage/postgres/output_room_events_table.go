@@ -147,6 +147,12 @@ const selectMaxEventIDSQL = "" +
 const updateEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2"
 
+// The redacted_because guard makes the write conditional on the row not having
+// been redacted since the caller read it; the check and the write are one statement.
+const updateUnredactedEventJSONSQL = "" +
+	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2" +
+	" AND headered_event_json NOT LIKE '%\"redacted_because\"%'"
+
 // In order for us to apply the state updates correctly, rows need to be ordered in the order they were received (id).
 const selectStateInRangeFilteredSQL = "" +
 	"SELECT event_id, id, headered_event_json, exclude_from_sync, add_state_ids, remove_state_ids, history_visibility" +
@@ -237,6 +243,7 @@ type outputRoomEventsStatements struct {
 	selectStateInRangeFilteredStmt       *sql.Stmt
 	selectStateInRangeStmt               *sql.Stmt
 	updateEventJSONStmt                  *sql.Stmt
+	updateUnredactedEventJSONStmt        *sql.Stmt
 	deleteEventsForRoomStmt              *sql.Stmt
 	selectContextEventStmt               *sql.Stmt
 	selectContextBeforeEventStmt         *sql.Stmt
@@ -307,6 +314,7 @@ func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, err
 		{&s.selectStateInRangeFilteredStmt, selectStateInRangeFilteredSQL},
 		{&s.selectStateInRangeStmt, selectStateInRangeSQL},
 		{&s.updateEventJSONStmt, updateEventJSONSQL},
+		{&s.updateUnredactedEventJSONStmt, updateUnredactedEventJSONSQL},
 		{&s.deleteEventsForRoomStmt, deleteEventsForRoomSQL},
 		{&s.selectContextEventStmt, selectContextEventSQL},
 		{&s.selectContextBeforeEventStmt, selectContextBeforeEventSQL},
@@ -333,6 +341,25 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
 	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, eventID, event.OriginServerTS())
 	return err
+}
+
+// UpdateUnredactedEventJSON is UpdateEventJSON, but writes nothing if the stored
+// event is redacted. It reports whether a row was written.
+func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) (bool, error) {
+	headeredJSON, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	headeredJSON, err = restoreEventID(headeredJSON, eventID)
+	if err != nil {
+		return false, err
+	}
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, eventID, event.OriginServerTS())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func restoreEventID(eventJSON []byte, eventID string) ([]byte, error) {

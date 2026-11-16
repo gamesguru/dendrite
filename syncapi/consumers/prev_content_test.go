@@ -8,6 +8,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
@@ -20,12 +21,14 @@ type fakeStateAfterEvents struct {
 	api.SyncRoomserverAPI
 	prev  *rstypes.HeaderedEvent
 	calls int
+	last  *api.QueryStateAfterEventsRequest
 }
 
 func (f *fakeStateAfterEvents) QueryStateAfterEvents(
-	_ context.Context, _ *api.QueryStateAfterEventsRequest, res *api.QueryStateAfterEventsResponse,
+	_ context.Context, req *api.QueryStateAfterEventsRequest, res *api.QueryStateAfterEventsResponse,
 ) error {
 	f.calls++
+	f.last = req
 	res.RoomExists = true
 	res.PrevEventsExist = true
 	res.StateEvents = []*rstypes.HeaderedEvent{f.prev}
@@ -60,6 +63,9 @@ func TestSetHistoricalPrevStateFromStateBeforeEvent(t *testing.T) {
 	require.Equal(t, prev.EventID(), gjson.GetBytes(unsigned, "replaces_state").String())
 	require.Equal(t, int64(42), gjson.GetBytes(unsigned, "age").Int(),
 		"other unsigned fields must be left alone")
+
+	require.Equal(t, current.PrevEventIDs(), fake.last.PrevEventIDs)
+	require.Equal(t, []gomatrixserverlib.StateKeyTuple{{EventType: "m.room.member", StateKey: bob.ID}}, fake.last.StateToFetch)
 
 	// Idempotent: an event that already carries prev_content is not looked up
 	// or rewritten again.

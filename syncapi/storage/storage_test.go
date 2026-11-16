@@ -73,6 +73,76 @@ func TestWriteEvents(t *testing.T) {
 	})
 }
 
+func TestSelectRoomEventsAfterIDIncludesBackfilledEvents(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		var positions []types.StreamPosition
+		for i, ev := range room.Events()[:3] {
+			pos, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, i == 1, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+			positions = append(positions, pos)
+		}
+		first, err := db.SelectRoomEventsAfterID(ctx, room.ID, 0, 2)
+		require.NoError(t, err)
+		require.Len(t, first, 2)
+		require.Equal(t, positions[0], first[0].StreamPosition)
+		require.Equal(t, positions[1], first[1].StreamPosition)
+		require.True(t, first[1].ExcludeFromSync)
+		second, err := db.SelectRoomEventsAfterID(ctx, room.ID, first[1].StreamPosition, 2)
+		require.NoError(t, err)
+		require.Len(t, second, 1)
+		require.Equal(t, positions[2], second[0].StreamPosition)
+	})
+}
+
+func TestUpdateUnredactedEventJSON(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+
+		// A row that becomes redacted after it was read must not be rewritten.
+		redacted := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "redacted"})
+		_, err := db.WriteEvent(ctx, redacted, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		originalJSON, err := redacted.MarshalJSON()
+		require.NoError(t, err)
+		var stale rstypes.HeaderedEvent
+		require.NoError(t, stale.UnmarshalJSON(originalJSON))
+		require.NoError(t, redacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, db.UpdateEventJSON(ctx, redacted.EventID(), redacted))
+		require.NoError(t, stale.SetUnsignedField("age", 1))
+
+		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), &stale)
+		require.NoError(t, err)
+		require.False(t, written, "a redacted row must not be rewritten")
+
+		stored, err := db.Events(ctx, []string{redacted.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.True(t, gjson.GetBytes(stored[0].Unsigned(), "redacted_because").Exists())
+		require.False(t, gjson.GetBytes(stored[0].Unsigned(), "age").Exists())
+
+		// An unredacted row is written normally.
+		live := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "live"})
+		_, err = db.WriteEvent(ctx, live, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		require.NoError(t, live.SetUnsignedField("age", 2))
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), live)
+		require.NoError(t, err)
+		require.True(t, written)
+
+		stored, err = db.Events(ctx, []string{live.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(2), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+	})
+}
+
 func TestGetOrCreateConnectionConcurrent(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, closeDB := MustCreateDatabase(t, dbType)

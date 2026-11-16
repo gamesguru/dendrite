@@ -116,7 +116,9 @@ func ApplyPrevState(ev *rstypes.HeaderedEvent, prev synctypes.PrevEventRef) erro
 // reads and writes.
 type PrevStateRepairDatabase interface {
 	SelectRoomEventsAfterID(ctx context.Context, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)
-	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
+	Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error)
+	// UpdateUnredactedEventJSON writes nothing if the stored event is redacted.
+	UpdateUnredactedEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) (bool, error)
 }
 
 // PrevStateRepairSample is one event the repair would change, or changed.
@@ -209,24 +211,44 @@ func RepairRoomPrevState(
 				report.LookupUnavailable++
 				continue
 			}
+			sample := PrevStateRepairSample{
+				EventID: ev.EventID(), Type: ev.Type(), StateKey: *ev.StateKey(), ReplacesState: prev.ReplacesState,
+			}
+			if apply {
+				// The scan may be stale. Re-read the event before applying the
+				// fields, then have the write reject a row redacted since this
+				// read. Other concurrent JSON changes after this read are not
+				// compared and could still be overwritten.
+				latest, lerr := db.Events(ctx, []string{ev.EventID()})
+				if lerr != nil || len(latest) != 1 || latest[0] == nil {
+					report.Errors++
+					continue
+				}
+				ev = latest[0]
+				if IsRedacted(ev) || HasPrevContent(ev) {
+					continue
+				}
+				if err = ApplyPrevState(ev, prev); err != nil {
+					report.Errors++
+					continue
+				}
+				// The write itself refuses a row that was redacted after the
+				// re-read above, so a redaction can never be overwritten.
+				written, werr := db.UpdateUnredactedEventJSON(ctx, ev.EventID(), ev)
+				if werr != nil {
+					report.Errors++
+					continue
+				}
+				if !written {
+					report.Redacted++
+					continue
+				}
+				report.Repaired++
+			}
 			report.Repairable++
 			if len(report.Samples) < prevStateRepairSamples {
-				report.Samples = append(report.Samples, PrevStateRepairSample{
-					EventID: ev.EventID(), Type: ev.Type(), StateKey: *ev.StateKey(), ReplacesState: prev.ReplacesState,
-				})
+				report.Samples = append(report.Samples, sample)
 			}
-			if !apply {
-				continue
-			}
-			if err = ApplyPrevState(ev, prev); err != nil {
-				report.Errors++
-				continue
-			}
-			if err = db.UpdateEventJSON(ctx, ev.EventID(), ev); err != nil {
-				report.Errors++
-				continue
-			}
-			report.Repaired++
 		}
 	}
 }

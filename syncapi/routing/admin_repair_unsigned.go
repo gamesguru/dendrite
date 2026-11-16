@@ -11,6 +11,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
 // AdminRepairUnsigned handles POST /_zendrite/admin/repairUnsigned/{roomID}.
@@ -23,7 +24,7 @@ import (
 //
 // It only reports what it would change unless apply=true is given. It never
 // overwrites an existing prev_content and never touches any other unsigned key.
-func AdminRepairUnsigned(req *http.Request, syncDB storage.Database, rsAPI api.SyncRoomserverAPI) util.JSONResponse {
+func AdminRepairUnsigned(req *http.Request, syncDB storage.Database, rsAPI api.SyncRoomserverAPI, device *userapi.Device) util.JSONResponse {
 	vars, err := httputil.URLDecodeMapValues(httputil.Vars(req))
 	if err != nil {
 		return util.ErrorResponse(err)
@@ -38,9 +39,9 @@ func AdminRepairUnsigned(req *http.Request, syncDB storage.Database, rsAPI api.S
 	apply := req.URL.Query().Get("apply") == "true"
 
 	report, err := internal.RepairRoomPrevState(req.Context(), syncDB, rsAPI, roomID.String(), apply)
-	logger := logrus.WithField("room_id", roomID.String()).WithField("apply", apply)
+	logger := logrus.WithField("room_id", roomID.String()).WithField("apply", apply).WithField("user_id", device.UserID)
 	if err != nil {
-		logger.WithError(err).Error("repairUnsigned failed")
+		logger.WithError(err).WithField("report", report).Error("repairUnsigned failed")
 		return util.JSONResponse{
 			Code: http.StatusInternalServerError,
 			JSON: spec.InternalServerError{},

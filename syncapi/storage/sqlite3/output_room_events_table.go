@@ -91,6 +91,12 @@ const selectMaxEventIDSQL = "" +
 const updateEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2"
 
+// The redacted_because guard makes the write conditional on the row not having
+// been redacted since the caller read it; the check and the write are one statement.
+const updateUnredactedEventJSONSQL = "" +
+	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2" +
+	" AND headered_event_json NOT LIKE '%\"redacted_because\"%'"
+
 const selectStateInRangeSQL = "" +
 	"SELECT event_id, id, headered_event_json, exclude_from_sync, add_state_ids, remove_state_ids, history_visibility" +
 	" FROM syncapi_output_room_events" +
@@ -142,20 +148,21 @@ ORDER BY CAST(json_extract(headered_event_json, '$.origin_server_ts') AS BIGINT)
          CAST(json_extract(headered_event_json, '$.depth') AS BIGINT) DESC, id DESC LIMIT $4`
 
 type outputRoomEventsStatements struct {
-	selectTimestampForwardStmt   *sql.Stmt
-	selectRoomEventsAfterIDStmt  *sql.Stmt
-	selectTimestampBackwardStmt  *sql.Stmt
-	db                           *sql.DB
-	streamIDStatements           *StreamIDStatements
-	insertEventStmt              *sql.Stmt
-	selectMaxEventIDStmt         *sql.Stmt
-	updateEventJSONStmt          *sql.Stmt
-	deleteEventsForRoomStmt      *sql.Stmt
-	selectContextEventStmt       *sql.Stmt
-	selectContextBeforeEventStmt *sql.Stmt
-	selectContextAfterEventStmt  *sql.Stmt
-	purgeEventsStmt              *sql.Stmt
-	deleteEventStmt              *sql.Stmt
+	selectTimestampForwardStmt    *sql.Stmt
+	selectRoomEventsAfterIDStmt   *sql.Stmt
+	selectTimestampBackwardStmt   *sql.Stmt
+	db                            *sql.DB
+	streamIDStatements            *StreamIDStatements
+	insertEventStmt               *sql.Stmt
+	selectMaxEventIDStmt          *sql.Stmt
+	updateEventJSONStmt           *sql.Stmt
+	updateUnredactedEventJSONStmt *sql.Stmt
+	deleteEventsForRoomStmt       *sql.Stmt
+	selectContextEventStmt        *sql.Stmt
+	selectContextBeforeEventStmt  *sql.Stmt
+	selectContextAfterEventStmt   *sql.Stmt
+	purgeEventsStmt               *sql.Stmt
+	deleteEventStmt               *sql.Stmt
 	// selectSearchStmt             *sql.Stmt - prepared at runtime
 }
 
@@ -192,6 +199,7 @@ func NewSqliteEventsTable(ctx context.Context, db *sql.DB, streamID *StreamIDSta
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectMaxEventIDStmt, selectMaxEventIDSQL},
 		{&s.updateEventJSONStmt, updateEventJSONSQL},
+		{&s.updateUnredactedEventJSONStmt, updateUnredactedEventJSONSQL},
 		{&s.deleteEventsForRoomStmt, deleteEventsForRoomSQL},
 		{&s.selectContextEventStmt, selectContextEventSQL},
 		{&s.selectContextBeforeEventStmt, selectContextBeforeEventSQL},
@@ -214,6 +222,25 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
 	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, eventID)
 	return err
+}
+
+// UpdateUnredactedEventJSON is UpdateEventJSON, but writes nothing if the stored
+// event is redacted. It reports whether a row was written.
+func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) (bool, error) {
+	headeredJSON, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	headeredJSON, err = restoreEventID(headeredJSON, eventID)
+	if err != nil {
+		return false, err
+	}
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, eventID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func restoreEventID(eventJSON []byte, eventID string) ([]byte, error) {
@@ -848,9 +875,7 @@ func (s *outputRoomEventsStatements) SelectMaxStreamPositionsForRooms(
 	return result, rows.Err()
 }
 
-// SelectEventsByTimestamp returns a bounded batch ordered by timestamp and stream ID.
-// A zero afterID includes exact timestamp matches; otherwise the cursor is exclusive.
-// Backfilled events are eligible even when excluded from incremental sync.
+// SelectRoomEventsAfterID returns up to limit events of a room with an id greater than afterID, in id order.
 func (s *outputRoomEventsStatements) SelectRoomEventsAfterID(
 	ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int,
 ) ([]types.StreamEvent, error) {
@@ -862,6 +887,9 @@ func (s *outputRoomEventsStatements) SelectRoomEventsAfterID(
 	return rowsToStreamEvents(rows)
 }
 
+// SelectEventsByTimestamp returns a bounded batch ordered by timestamp and stream ID.
+// A zero afterID includes exact timestamp matches; otherwise the cursor is exclusive.
+// Backfilled events are eligible even when excluded from incremental sync.
 func (s *outputRoomEventsStatements) SelectEventsByTimestamp(ctx context.Context, txn *sql.Tx, roomID string, timestamp int64, afterID types.StreamPosition, backwards bool, limit int) ([]types.StreamEvent, error) {
 	stmt := s.selectTimestampForwardStmt
 	if backwards {

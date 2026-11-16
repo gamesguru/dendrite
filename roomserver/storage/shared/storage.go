@@ -2221,7 +2221,7 @@ func (d *Database) ForgetRoom(ctx context.Context, senderID, roomID string, forg
 // PurgeRoom removes all information about a given room from the roomserver.
 // For large rooms this operation may take a considerable amount of time.
 // The room's state HAMT roots are deleted, but shared content-addressed HAMT
-// nodes are only reclaimed by CollectStateHAMTGarbage (backfill-state-hamt).
+// nodes are only reclaimed by CollectStateHAMTGarbage (dendrite-backfill-state-hamt).
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		roomNID, err := d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomID)
