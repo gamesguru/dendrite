@@ -115,9 +115,13 @@ type Global struct {
 	Cache Cache `yaml:"cache"`
 }
 
+// DefaultPresenceFederationInterval is the outbound presence flush interval
+// used when the configuration leaves it unset.
+const defaultPresenceFederationInterval = 5 * time.Second
+
 func (c *Global) Defaults(opts DefaultOpts) {
 	if c.Presence.FederationInterval == 0 {
-		c.Presence.FederationInterval = 5 * time.Second
+		c.Presence.FederationInterval = defaultPresenceFederationInterval
 	}
 	if opts.Generate {
 		c.ServerName = "localhost"

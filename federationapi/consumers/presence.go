@@ -42,6 +42,10 @@ type OutputPresenceConsumer struct {
 	durable                 string
 	db                      storage.Database
 	queues                  presenceEDUSender
+	findDestinations        func(context.Context, spec.UserID) ([]spec.ServerName, error)
+	ackPresence             func(*nats.Msg) error
+	extendPresence          func(*nats.Msg) error
+	streamSequence          func(*nats.Msg) uint64
 	isLocalServerName       func(spec.ServerName) bool
 	rsAPI                   roomserverAPI.FederationRoomserverAPI
 	topic                   string
@@ -50,6 +54,7 @@ type OutputPresenceConsumer struct {
 	pendingMu               sync.Mutex
 	pending                 map[string]pendingPresence
 	nextGeneration          uint64
+	nextOrder               uint64
 }
 
 type pendingPresence struct {
@@ -57,10 +62,26 @@ type pendingPresence struct {
 	status     *string
 	lastSeen   spec.Timestamp
 	generation uint64
+	order      uint64
+	// streamSeq is the JetStream stream sequence of the newest message folded
+	// in, or zero when unknown. A redelivered older message must not replace it.
+	streamSeq uint64
 	// origin is the server name the user belongs to. It differs from the
 	// primary server name for virtual-host users and determines the EDU
 	// origin and signing identity.
 	origin spec.ServerName
+	// nil means destinations have not been resolved. An empty set means all
+	// destinations have accepted the EDU and only message acknowledgements remain.
+	retryDestinations map[spec.ServerName]struct{}
+	sentDestinations  map[spec.ServerName]struct{}
+	acks              []*pendingPresenceAck
+}
+
+type pendingPresenceAck struct {
+	msg        *nats.Msg
+	generation uint64
+	mu         sync.Mutex
+	acked      bool
 }
 
 // presenceBatchKey groups presence updates that can share one EDU.
@@ -69,7 +90,15 @@ type presenceBatchKey struct {
 	destination spec.ServerName
 }
 
-const presenceFlushBatchSize = 500
+const (
+	presenceFlushBatchSize = 500
+	// The default flush interval applies when the configuration leaves the
+	// federation presence interval unset.
+	defaultPresenceFlushInterval = 5 * time.Second
+	// The keep-alive interval extends deferred JetStream deliveries until their
+	// presence EDU is queued. It must stay well inside the ack wait.
+	pendingPresenceKeepAliveInterval = jetstream.DeferredProgressInterval
+)
 
 // NewOutputPresenceConsumer creates a new OutputPresenceConsumer. Call Start() to begin consuming events.
 func NewOutputPresenceConsumer(
@@ -82,9 +111,9 @@ func NewOutputPresenceConsumer(
 ) *OutputPresenceConsumer {
 	flushInterval := cfg.Matrix.Presence.FederationInterval
 	if flushInterval <= 0 {
-		flushInterval = 5 * time.Second
+		flushInterval = defaultPresenceFlushInterval
 	}
-	return &OutputPresenceConsumer{
+	consumer := &OutputPresenceConsumer{
 		ctx:                     process.Context(),
 		jetstream:               js,
 		queues:                  queues,
@@ -97,6 +126,27 @@ func NewOutputPresenceConsumer(
 		pending:                 make(map[string]pendingPresence),
 		rsAPI:                   rsAPI,
 	}
+	consumer.findDestinations = func(ctx context.Context, userID spec.UserID) ([]spec.ServerName, error) {
+		roomIDs, err := rsAPI.QueryRoomsForUser(ctx, userID, "join")
+		if err != nil {
+			return nil, err
+		}
+		roomIDStrs := make([]string, len(roomIDs))
+		for i, roomID := range roomIDs {
+			roomIDStrs[i] = roomID.String()
+		}
+		return store.GetJoinedHostsForRooms(ctx, roomIDStrs, true, true)
+	}
+	owner := jetstream.OwnershipOf(js)
+	consumer.ackPresence = func(msg *nats.Msg) error { return jetstream.AckOwned(consumer.ctx, owner, msg) }
+	consumer.streamSequence = func(msg *nats.Msg) uint64 {
+		if meta, err := msg.Metadata(); err == nil {
+			return meta.Sequence.Stream
+		}
+		return 0
+	}
+	consumer.extendPresence = func(msg *nats.Msg) error { return jetstream.ProgressOwned(owner, msg) }
+	return consumer
 }
 
 // Start consuming from the clientapi.
@@ -105,10 +155,44 @@ func (t *OutputPresenceConsumer) Start() error {
 		return nil
 	}
 	process.Go(t.ctx, t.flushLoop)
-	return jetstream.JetStreamConsumer(
+	process.Go(t.ctx, t.keepPendingAliveLoop)
+	return jetstream.JetStreamConsumerWithAckAction(
 		t.ctx, t.jetstream, t.topic, t.durable, 1, t.onMessage,
 		nats.DeliverAll(), nats.ManualAck(), nats.HeadersOnly(),
 	)
+}
+
+// Keep deferred deliveries alive until the corresponding latest presence state
+// has been durably placed in the federation queue.
+func (t *OutputPresenceConsumer) keepPendingAliveLoop() {
+	ticker := time.NewTicker(pendingPresenceKeepAliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-ticker.C:
+			t.extendPending()
+		}
+	}
+}
+
+// extendPending extends every deferred delivery. Ownership is checked per
+// message, so a former owner stops extending and JetStream redelivers.
+func (t *OutputPresenceConsumer) extendPending() {
+	t.pendingMu.Lock()
+	var messages []*nats.Msg
+	for _, update := range t.pending {
+		for _, pendingAck := range update.acks {
+			messages = append(messages, pendingAck.msg)
+		}
+	}
+	t.pendingMu.Unlock()
+	for _, msg := range messages {
+		if err := t.extendPresence(msg); err != nil {
+			log.WithError(err).Warn("failed to extend pending presence message acknowledgement")
+		}
+	}
 }
 
 func (t *OutputPresenceConsumer) flushLoop() {
@@ -130,10 +214,14 @@ func (t *OutputPresenceConsumer) flushPending() {
 	for userID := range t.pending {
 		users = append(users, userID)
 	}
-	// Flush the oldest updates first. Sorting by user ID would let churn from
-	// early-alphabet users starve the rest of the map under the batch cap.
+	// Flush the oldest updates first. Failed updates are moved to the tail below
+	// so a persistent destination failure cannot starve other users.
 	sort.Slice(users, func(i, j int) bool {
-		return t.pending[users[i]].generation < t.pending[users[j]].generation
+		left, right := t.pending[users[i]], t.pending[users[j]]
+		if left.order == right.order {
+			return users[i] < users[j]
+		}
+		return left.order < right.order
 	})
 	if len(users) > presenceFlushBatchSize {
 		users = users[:presenceFlushBatchSize]
@@ -149,32 +237,35 @@ func (t *OutputPresenceConsumer) flushPending() {
 
 	byDestination := make(map[presenceBatchKey][]fedTypes.PresenceContent)
 	destinationUsers := make(map[presenceBatchKey][]string)
-	failed := make(map[string]bool)
+	lookupFailed := make(map[string]bool)
+	failedDestinations := make(map[string]map[spec.ServerName]struct{})
 	for userID, update := range snapshot {
 		parsedUserID, err := spec.NewUserID(userID, true)
 		if err != nil {
-			failed[userID] = true
-			continue
-		}
-		roomIDs, err := t.rsAPI.QueryRoomsForUser(t.ctx, *parsedUserID, "join") //nolint:contextcheck
-		if err != nil {
-			log.WithError(err).WithField("user_id", userID).Warn("failed to find rooms for pending presence")
-			failed[userID] = true
-			continue
-		}
-		roomIDStrs := make([]string, len(roomIDs))
-		for i, roomID := range roomIDs {
-			roomIDStrs[i] = roomID.String()
-		}
-		joined, err := t.db.GetJoinedHostsForRooms(t.ctx, roomIDStrs, true, true) //nolint:contextcheck
-		if err != nil {
-			log.WithError(err).WithField("user_id", userID).Warn("failed to find destinations for pending presence")
-			failed[userID] = true
+			lookupFailed[userID] = true
 			continue
 		}
 		if _, ok := types.PresenceFromString(update.presence); !ok {
+			lookupFailed[userID] = true
 			continue
 		}
+		joined, err := t.findDestinations(t.ctx, *parsedUserID)
+		if err != nil {
+			log.WithError(err).WithField("user_id", userID).Warn("failed to find destinations for pending presence")
+			lookupFailed[userID] = true
+			continue
+		}
+		// Re-resolve membership on every attempt. Retry failures and include
+		// newly joined destinations, while skipping destinations that already
+		// durably accepted this update.
+		unsent := joined[:0]
+		for _, destination := range joined {
+			if _, sent := update.sentDestinations[destination]; !sent {
+				unsent = append(unsent, destination)
+			}
+		}
+		joined = unsent
+		sort.Slice(joined, func(i, j int) bool { return joined[i] < joined[j] })
 		age := time.Since(update.lastSeen.Time()).Milliseconds()
 		if age < 0 {
 			age = 0
@@ -214,7 +305,7 @@ func (t *OutputPresenceConsumer) flushPending() {
 		if err != nil {
 			log.WithError(err).Error("failed to marshal presence EDU batch")
 			for _, userID := range destinationUsers[key] {
-				failed[userID] = true
+				markPresenceDestinationFailed(failedDestinations, userID, key.destination)
 			}
 			continue
 		}
@@ -225,48 +316,142 @@ func (t *OutputPresenceConsumer) flushPending() {
 				"destination": string(key.destination),
 			}).Warn("failed to queue presence EDU batch")
 			for _, userID := range destinationUsers[key] {
-				failed[userID] = true
+				markPresenceDestinationFailed(failedDestinations, userID, key.destination)
 			}
 		}
 	}
 
-	// A failed send keeps the user pending, so the next flush sends it to every
-	// destination again, including ones that already accepted this update.
-	// Presence is latest-state and idempotent, so a duplicate EDU is harmless;
-	// tracking success per destination would complicate the pending map for no
-	// semantic gain.
+	acked := make(map[*nats.Msg]struct{})
+	sentDestinations := make(map[string]map[spec.ServerName]struct{})
+	for userID, sent := range snapshot {
+		if lookupFailed[userID] || len(failedDestinations[userID]) > 0 {
+			continue
+		}
+		for _, pendingAck := range sent.acks {
+			if pendingAck.generation > sent.generation {
+				continue
+			}
+			if err := t.ackPendingPresence(pendingAck); err != nil {
+				log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge queued presence update")
+				continue
+			}
+			acked[pendingAck.msg] = struct{}{}
+		}
+	}
+	for key, userIDs := range destinationUsers {
+		if len(failedDestinationsForKey(failedDestinations, userIDs, key.destination)) > 0 {
+			continue
+		}
+		for _, userID := range userIDs {
+			markPresenceDestinationFailed(sentDestinations, userID, key.destination)
+		}
+	}
+
 	t.pendingMu.Lock()
 	for userID, sent := range snapshot {
-		if !failed[userID] && t.pending[userID].generation == sent.generation {
-			delete(t.pending, userID)
+		current, exists := t.pending[userID]
+		if !exists {
+			continue
 		}
+		current.acks = removeAckedPresenceMessages(current.acks, acked)
+		if current.generation == sent.generation {
+			if lookupFailed[userID] {
+				t.nextOrder++
+				current.order = t.nextOrder
+			} else {
+				remaining := failedDestinations[userID]
+				if remaining == nil {
+					remaining = make(map[spec.ServerName]struct{})
+				}
+				current.retryDestinations = remaining
+				for destination := range sentDestinations[userID] {
+					if current.sentDestinations == nil {
+						current.sentDestinations = make(map[spec.ServerName]struct{})
+					}
+					current.sentDestinations[destination] = struct{}{}
+				}
+				if len(remaining) > 0 {
+					t.nextOrder++
+					current.order = t.nextOrder
+				}
+			}
+			if len(current.acks) == 0 && !lookupFailed[userID] && len(failedDestinations[userID]) == 0 {
+				delete(t.pending, userID)
+				continue
+			}
+		}
+		t.pending[userID] = current
 	}
 	t.pendingMu.Unlock()
 }
 
+func (t *OutputPresenceConsumer) ackPendingPresence(pendingAck *pendingPresenceAck) error {
+	pendingAck.mu.Lock()
+	defer pendingAck.mu.Unlock()
+	if pendingAck.acked {
+		return nil
+	}
+	if err := t.ackPresence(pendingAck.msg); err != nil {
+		return err
+	}
+	pendingAck.acked = true
+	return nil
+}
+
+func failedDestinationsForKey(failed map[string]map[spec.ServerName]struct{}, userIDs []string, destination spec.ServerName) []string {
+	var failedUsers []string
+	for _, userID := range userIDs {
+		if _, ok := failed[userID][destination]; ok {
+			failedUsers = append(failedUsers, userID)
+		}
+	}
+	return failedUsers
+}
+
+func markPresenceDestinationFailed(failed map[string]map[spec.ServerName]struct{}, userID string, destination spec.ServerName) {
+	if failed[userID] == nil {
+		failed[userID] = make(map[spec.ServerName]struct{})
+	}
+	failed[userID][destination] = struct{}{}
+}
+
+func removeAckedPresenceMessages(acks []*pendingPresenceAck, acked map[*nats.Msg]struct{}) []*pendingPresenceAck {
+	remaining := make([]*pendingPresenceAck, 0, len(acks))
+	for _, pendingAck := range acks {
+		if _, ok := acked[pendingAck.msg]; !ok {
+			remaining = append(remaining, pendingAck)
+		}
+	}
+	return remaining
+}
+
 // onMessage is called in response to a message received on the presence
 // events topic from the client api.
-func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) bool {
+func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg) jetstream.AckAction {
 	msg := msgs[0] // Guaranteed to exist if onMessage is called
 	// only send presence events which originated from us
 	userID := msg.Header.Get(jetstream.UserID)
 	_, serverName, err := gomatrixserverlib.SplitID('@', userID)
 	if err != nil {
 		log.WithError(err).WithField("user_id", userID).Error("failed to extract domain from receipt sender")
-		return true
+		return jetstream.AckActionAck
 	}
 	if !t.isLocalServerName(serverName) {
-		return true
+		return jetstream.AckActionAck
 	}
 	if _, err = spec.NewUserID(userID, true); err != nil {
 		log.WithError(err).WithField("user_id", userID).Warn("ignoring invalid user ID in presence event")
-		return true
+		return jetstream.AckActionAck
 	}
 
 	presence := msg.Header.Get("presence")
+	if _, ok := types.PresenceFromString(presence); !ok {
+		log.WithField("user_id", userID).Warn("ignoring invalid presence value in presence event")
+		return jetstream.AckActionAck
+	}
 	ts, err := strconv.Atoi(msg.Header.Get("last_active_ts"))
 	if err != nil || ts < 0 {
-		return true
+		return jetstream.AckActionAck
 	}
 
 	var statusMsg *string = nil
@@ -275,21 +460,54 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		statusMsg = &status
 	}
 
+	streamSeq := t.streamSequence(msg)
+
 	t.pendingMu.Lock()
+	previous := t.pending[userID]
+	if streamSeq != 0 && previous.streamSeq > streamSeq {
+		// A redelivered older message must not replace newer state. Its
+		// content is superseded, so it is safe to acknowledge.
+		t.pendingMu.Unlock()
+		return jetstream.AckActionAck
+	}
 	t.nextGeneration++
+	t.nextOrder++
+	// Only the newest message stays outstanding: presence is latest state, and
+	// the newest message still carries it, so a crash redelivers that one. This
+	// bounds outstanding messages to one per user.
+	superseded := previous.acks
+	acks := []*pendingPresenceAck{{msg: msg, generation: t.nextGeneration}}
 	t.pending[userID] = pendingPresence{
 		presence:   presence,
 		status:     statusMsg,
 		lastSeen:   spec.Timestamp(ts),
 		generation: t.nextGeneration,
+		order:      t.nextOrder,
+		streamSeq:  streamSeq,
 		origin:     serverName,
+		acks:       acks,
 	}
 	t.pendingMu.Unlock()
 
-	// Acknowledge once the update is coalesced in memory. That is deliberate:
-	// presence is ephemeral and the design accepts losing at most one flush
-	// interval on a crash or shutdown. Deferring the acknowledgement would
-	// redeliver the batch and duplicate sends for a state that a newer update
-	// supersedes anyway.
-	return true
+	var unacked []*pendingPresenceAck
+	for _, old := range superseded {
+		if err := t.ackPresence(old.msg); err != nil {
+			log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge superseded presence update")
+			unacked = append(unacked, old)
+		}
+	}
+	if len(unacked) > 0 {
+		// Keep them so a later flush retries the acknowledgement.
+		t.pendingMu.Lock()
+		if cur, ok := t.pending[userID]; ok {
+			cur.acks = append(unacked, cur.acks...)
+			t.pending[userID] = cur
+		}
+		t.pendingMu.Unlock()
+	}
+
+	// Keep the durable input message outstanding until the resulting EDU is
+	// safely in the federation queue. A process crash before then lets JetStream
+	// redeliver it instead of silently losing the coalesced presence update.
+	return jetstream.AckActionDefer
 }
