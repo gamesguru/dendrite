@@ -9,11 +9,13 @@ package consumers
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
-	"github.com/matrix-org/util"
 	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 
@@ -38,7 +40,21 @@ type OutputPresenceConsumer struct {
 	rsAPI                   roomserverAPI.FederationRoomserverAPI
 	topic                   string
 	outboundPresenceEnabled bool
+	flushInterval           time.Duration
+	origin                  spec.ServerName
+	pendingMu               sync.Mutex
+	pending                 map[string]pendingPresence
+	nextGeneration          uint64
 }
+
+type pendingPresence struct {
+	presence   string
+	status     *string
+	lastSeen   spec.Timestamp
+	generation uint64
+}
+
+const presenceFlushBatchSize = 500
 
 // NewOutputPresenceConsumer creates a new OutputPresenceConsumer. Call Start() to begin consuming events.
 func NewOutputPresenceConsumer(
@@ -49,6 +65,10 @@ func NewOutputPresenceConsumer(
 	store storage.Database,
 	rsAPI roomserverAPI.FederationRoomserverAPI,
 ) *OutputPresenceConsumer {
+	flushInterval := cfg.Matrix.Presence.FederationInterval
+	if flushInterval <= 0 {
+		flushInterval = 5 * time.Second
+	}
 	return &OutputPresenceConsumer{
 		ctx:                     process.Context(),
 		jetstream:               js,
@@ -58,6 +78,9 @@ func NewOutputPresenceConsumer(
 		durable:                 cfg.Matrix.JetStream.Durable("FederationAPIPresenceConsumer"),
 		topic:                   cfg.Matrix.JetStream.Prefixed(jetstream.OutputPresenceEvent),
 		outboundPresenceEnabled: cfg.Matrix.Presence.EnableOutbound,
+		flushInterval:           flushInterval,
+		origin:                  cfg.Matrix.ServerName,
+		pending:                 make(map[string]pendingPresence),
 		rsAPI:                   rsAPI,
 	}
 }
@@ -67,10 +90,117 @@ func (t *OutputPresenceConsumer) Start() error {
 	if !t.outboundPresenceEnabled {
 		return nil
 	}
+	process.Go(t.ctx, t.flushLoop)
 	return jetstream.JetStreamConsumer(
 		t.ctx, t.jetstream, t.topic, t.durable, 1, t.onMessage,
 		nats.DeliverAll(), nats.ManualAck(), nats.HeadersOnly(),
 	)
+}
+
+func (t *OutputPresenceConsumer) flushLoop() {
+	ticker := time.NewTicker(t.flushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-ticker.C:
+			t.flushPending()
+		}
+	}
+}
+
+func (t *OutputPresenceConsumer) flushPending() {
+	t.pendingMu.Lock()
+	users := make([]string, 0, len(t.pending))
+	for userID := range t.pending {
+		users = append(users, userID)
+	}
+	sort.Strings(users)
+	if len(users) > presenceFlushBatchSize {
+		users = users[:presenceFlushBatchSize]
+	}
+	snapshot := make(map[string]pendingPresence, len(users))
+	for _, userID := range users {
+		snapshot[userID] = t.pending[userID]
+	}
+	t.pendingMu.Unlock()
+	if len(snapshot) == 0 {
+		return
+	}
+
+	byDestination := make(map[spec.ServerName][]fedTypes.PresenceContent)
+	destinationUsers := make(map[spec.ServerName][]string)
+	failed := make(map[string]bool)
+	for userID, update := range snapshot {
+		parsedUserID, err := spec.NewUserID(userID, true)
+		if err != nil {
+			failed[userID] = true
+			continue
+		}
+		roomIDs, err := t.rsAPI.QueryRoomsForUser(t.ctx, *parsedUserID, "join") //nolint:contextcheck
+		if err != nil {
+			log.WithError(err).WithField("user_id", userID).Warn("failed to find rooms for pending presence")
+			failed[userID] = true
+			continue
+		}
+		roomIDStrs := make([]string, len(roomIDs))
+		for i, roomID := range roomIDs {
+			roomIDStrs[i] = roomID.String()
+		}
+		joined, err := t.db.GetJoinedHostsForRooms(t.ctx, roomIDStrs, true, true) //nolint:contextcheck
+		if err != nil {
+			log.WithError(err).WithField("user_id", userID).Warn("failed to find destinations for pending presence")
+			failed[userID] = true
+			continue
+		}
+		if _, ok := types.PresenceFromString(update.presence); !ok {
+			continue
+		}
+		age := time.Since(update.lastSeen.Time()).Milliseconds()
+		if age < 0 {
+			age = 0
+		}
+		presenceData := types.PresenceInternal{LastActiveTS: update.lastSeen}
+		content := fedTypes.PresenceContent{
+			CurrentlyActive: presenceData.CurrentlyActive(),
+			LastActiveAgo:   age,
+			Presence:        update.presence,
+			StatusMsg:       update.status,
+			UserID:          userID,
+		}
+		for _, host := range joined {
+			byDestination[host] = append(byDestination[host], content)
+			destinationUsers[host] = append(destinationUsers[host], userID)
+		}
+	}
+
+	for destination, updates := range byDestination {
+		edu := &gomatrixserverlib.EDU{Type: spec.MPresence, Origin: string(t.origin)}
+		content, err := json.Marshal(fedTypes.Presence{Push: updates})
+		if err != nil {
+			log.WithError(err).Error("failed to marshal presence EDU batch")
+			for _, userID := range destinationUsers[destination] {
+				failed[userID] = true
+			}
+			continue
+		}
+		edu.Content = content
+		if err = t.queues.SendEDU(edu, t.origin, []spec.ServerName{destination}); err != nil {
+			log.WithError(err).WithField("destination", destination).Warn("failed to queue presence EDU batch")
+			for _, userID := range destinationUsers[destination] {
+				failed[userID] = true
+			}
+		}
+	}
+
+	t.pendingMu.Lock()
+	for userID, sent := range snapshot {
+		if !failed[userID] && t.pending[userID].generation == sent.generation {
+			delete(t.pending, userID)
+		}
+	}
+	t.pendingMu.Unlock()
 }
 
 // onMessage is called in response to a message received on the presence
@@ -87,42 +217,14 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	if !t.isLocalServerName(serverName) {
 		return true
 	}
-
-	parsedUserID, err := spec.NewUserID(userID, true)
-	if err != nil {
-		util.GetLogger(ctx).WithError(err).WithField("user_id", userID).Error("invalid user ID")
+	if _, err = spec.NewUserID(userID, true); err != nil {
+		log.WithError(err).WithField("user_id", userID).Warn("ignoring invalid user ID in presence event")
 		return true
-	}
-
-	roomIDs, err := t.rsAPI.QueryRoomsForUser(t.ctx, *parsedUserID, "join") //nolint:contextcheck
-	if err != nil {
-		log.WithError(err).Error("failed to calculate joined rooms for user")
-		// Dropped on purpose. Presence is ephemeral and the next update supersedes
-		// this one, so redelivering a stale presence state has no value.
-		return true
-	}
-
-	roomIDStrs := make([]string, len(roomIDs))
-	for i, roomID := range roomIDs {
-		roomIDStrs[i] = roomID.String()
 	}
 
 	presence := msg.Header.Get("presence")
-
 	ts, err := strconv.Atoi(msg.Header.Get("last_active_ts"))
-	if err != nil {
-		return true
-	}
-
-	// send this presence to all servers who share rooms with this user.
-	joined, err := t.db.GetJoinedHostsForRooms(t.ctx, roomIDStrs, true, true) //nolint:contextcheck
-	if err != nil {
-		log.WithError(err).Error("failed to get joined hosts")
-		// Dropped on purpose, as above.
-		return true
-	}
-
-	if len(joined) == 0 {
+	if err != nil || ts < 0 {
 		return true
 	}
 
@@ -132,35 +234,15 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		statusMsg = &status
 	}
 
-	p := types.PresenceInternal{LastActiveTS: spec.Timestamp(ts)}
-
-	content := fedTypes.Presence{
-		Push: []fedTypes.PresenceContent{
-			{
-				CurrentlyActive: p.CurrentlyActive(),
-				LastActiveAgo:   p.LastActiveAgo(),
-				Presence:        presence,
-				StatusMsg:       statusMsg,
-				UserID:          userID,
-			},
-		},
+	t.pendingMu.Lock()
+	t.nextGeneration++
+	t.pending[userID] = pendingPresence{
+		presence:   presence,
+		status:     statusMsg,
+		lastSeen:   spec.Timestamp(ts),
+		generation: t.nextGeneration,
 	}
+	t.pendingMu.Unlock()
 
-	edu := &gomatrixserverlib.EDU{
-		Type:   spec.MPresence,
-		Origin: string(serverName),
-	}
-	if edu.Content, err = json.Marshal(content); err != nil {
-		log.WithError(err).Error("failed to marshal EDU JSON")
-		return true
-	}
-
-	log.Tracef("sending presence EDU to %d servers", len(joined))
-	if err = t.queues.SendEDU(edu, serverName, joined); err != nil { //nolint:contextcheck
-		log.WithError(err).Error("failed to send EDU")
-		return false
-	}
-
-	// Dropped on purpose, as above.
 	return true
 }
