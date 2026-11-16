@@ -949,21 +949,12 @@ func (r *messagesReq) filterByStreamToken(
 		switch {
 		case r.backwardOrdering:
 			// Backfilled events are stored after the token was issued, so their
-			// stream positions are above it, but they belong to older history
-			// (strictly shallower than the token's own position in the topology).
-			keep := ev.StreamPosition <= r.fromStream.PDUPosition
-			if !keep && ev.ExcludeFromSync {
-				if r.from == nil || r.from.Depth == 0 {
-					keep = true
-				} else {
-					evDepth, depthErr := r.topologyDepth(ctx, ev)
-					if depthErr != nil {
-						return nil, end, depthErr
-					}
-					keep = evDepth < int64(r.from.Depth)
-				}
-			}
-			if keep {
+			// stream positions are above it, but they belong to older history.
+			// GetEventsBeforeStreamPosition has already bounded them by depth, so
+			// the bound lives in one place: a second, narrower depth check here
+			// would drop history that the storage bound deliberately includes,
+			// such as the parents of a join that were stored after it.
+			if ev.StreamPosition <= r.fromStream.PDUPosition || ev.ExcludeFromSync {
 				filtered = append(filtered, ev)
 				droppedBackfilledSuffix = false
 			}

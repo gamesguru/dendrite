@@ -338,6 +338,72 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 	})
 }
 
+// A join can be stored before its parents, which then arrive as backfill with
+// stream positions above the join's prev_batch. The /messages stream-token path
+// must keep them end to end: storage returns them and the routing filter must not
+// drop them with a narrower depth bound of its own.
+func TestBackwardStreamTokenKeepsParentsStoredAfterJoin(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		base := room.Events()
+		var parents []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			parents = append(parents, room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("parent %d", i)}))
+		}
+		join := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "join"})
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		for _, ev := range base {
+			_, err = db.WriteEvent(ctx, ev, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+		joinPos, err := db.WriteEvent(ctx, join, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		for _, ev := range parents {
+			_, err = db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer func() { _ = snapshot.Rollback() }()
+
+		// The prev_batch of the join's timeline sits just before the join.
+		token := joinPos - 1
+		from, err := snapshot.StreamToTopologicalPosition(ctx, room.ID, token, true)
+		require.NoError(t, err)
+		events, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, token, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 20}, true)
+		require.NoError(t, err)
+
+		req := messagesReq{
+			snapshot:         snapshot,
+			from:             &from,
+			fromStream:       &types.StreamingToken{PDUPosition: token},
+			backwardOrdering: true,
+		}
+		filtered, _, err := req.filterByStreamToken(ctx, events, end)
+		require.NoError(t, err)
+		var got []string
+		for _, ev := range filtered {
+			got = append(got, ev.EventID())
+		}
+		for _, ev := range parents {
+			assert.Contains(t, got, ev.EventID(), "a parent stored after the join must survive the /messages stream-token filter")
+		}
+		assert.NotContains(t, got, join.EventID())
+	})
+}
+
 func TestForwardStreamTokenEndStaysAtLastIncludedEvent(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
