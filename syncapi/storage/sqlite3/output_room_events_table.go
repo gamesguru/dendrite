@@ -97,6 +97,7 @@ const updateEventJSONSQL = "" +
 // does not count as a redaction.
 const updateUnredactedEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2" +
+	" AND json(headered_event_json) = json($3)" +
 	" AND json_type(headered_event_json, '$.unsigned.redacted_because') IS NULL"
 
 const selectStateInRangeSQL = "" +
@@ -226,9 +227,9 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 	return err
 }
 
-// UpdateUnredactedEventJSON is UpdateEventJSON, but writes nothing if the stored
-// event is redacted. It reports whether a row was written.
-func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) (bool, error) {
+// UpdateUnredactedEventJSON writes only if the stored JSON matches expectedJSON
+// and the event is not redacted.
+func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error) {
 	headeredJSON, err := json.Marshal(event)
 	if err != nil {
 		return false, err
@@ -237,7 +238,7 @@ func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Conte
 	if err != nil {
 		return false, err
 	}
-	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, eventID)
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, eventID, string(expectedJSON))
 	if err != nil {
 		return false, err
 	}

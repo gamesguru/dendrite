@@ -104,6 +104,17 @@ func (r *Queryer) QueryStateAfterEvents(
 	roomState := state.NewStateResolution(r.DB, info, r)
 	response.RoomExists = true
 	response.RoomVersion = info.RoomVersion
+	// A partial-state room (MSC3706) can answer from an incomplete state set,
+	// and the durable marker records rooms that left partial state without
+	// repairing every stored snapshot. Treat an unreadable flag as incomplete
+	// so callers do not persist state derived from a snapshot that is not
+	// provably complete.
+	partial, partialErr := r.DB.IsRoomPartialState(ctx, info.RoomNID)
+	if partialErr != nil || partial {
+		response.StateIncomplete = true
+	} else if incomplete, incompleteErr := r.DB.StateSnapshotsIncomplete(ctx, info.RoomNID); incompleteErr != nil || incomplete {
+		response.StateIncomplete = true
+	}
 
 	prevStates, err := r.DB.StateAtEventIDs(ctx, request.PrevEventIDs)
 	if err != nil {

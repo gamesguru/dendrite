@@ -75,6 +75,12 @@ const selectResyncStateNIDSQL = "" +
 const updateResyncStateNIDSQL = "" +
 	"UPDATE roomserver_rooms SET resync_state_nid = $2 WHERE room_nid = $1"
 
+const selectStateSnapshotsIncompleteSQL = "" +
+	"SELECT state_snapshots_incomplete FROM roomserver_rooms WHERE room_nid = $1"
+
+const markStateSnapshotsIncompleteSQL = "" +
+	"UPDATE roomserver_rooms SET state_snapshots_incomplete = TRUE WHERE room_nid = $1"
+
 const selectRoomNIDForUpdateSQL = "" +
 	"SELECT room_nid FROM roomserver_rooms WHERE room_id = $1"
 
@@ -90,6 +96,8 @@ type roomStatements struct {
 	selectRoomInfoStmt                 *sql.Stmt
 	selectResyncStateNIDStmt           *sql.Stmt
 	updateResyncStateNIDStmt           *sql.Stmt
+	selectStateSnapshotsIncompleteStmt *sql.Stmt
+	markStateSnapshotsIncompleteStmt   *sql.Stmt
 }
 
 func CreateRoomsTable(db *sql.DB) error {
@@ -100,6 +108,11 @@ func CreateRoomsTable(db *sql.DB) error {
 	m.AddMigrations(sqlutil.Migration{
 		Version: "roomserver: add resync_state_nid to rooms",
 		Up:      deltas.UpResyncStateNID,
+	})
+	m.AddMigrations(sqlutil.Migration{
+		Version: "roomserver: add state_snapshots_incomplete to rooms",
+		Up:      deltas.UpStateSnapshotsIncomplete,
+		Down:    deltas.DownStateSnapshotsIncomplete,
 	})
 	return m.Up(context.Background())
 }
@@ -120,6 +133,8 @@ func PrepareRoomsTable(db *sql.DB) (tables.Rooms, error) {
 		{&s.selectRoomNIDForUpdateStmt, selectRoomNIDForUpdateSQL},
 		{&s.selectResyncStateNIDStmt, selectResyncStateNIDSQL},
 		{&s.updateResyncStateNIDStmt, updateResyncStateNIDSQL},
+		{&s.selectStateSnapshotsIncompleteStmt, selectStateSnapshotsIncompleteSQL},
+		{&s.markStateSnapshotsIncompleteStmt, markStateSnapshotsIncompleteSQL},
 	}.Prepare(db)
 }
 
@@ -344,5 +359,16 @@ func (s *roomStatements) UpdateResyncStateNID(
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.updateResyncStateNIDStmt)
 	_, err := stmt.ExecContext(ctx, int64(roomNID), int64(resyncStateNID))
+	return err
+}
+
+func (s *roomStatements) SelectStateSnapshotsIncomplete(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error) {
+	var incomplete bool
+	err := sqlutil.TxStmt(txn, s.selectStateSnapshotsIncompleteStmt).QueryRowContext(ctx, int64(roomNID)).Scan(&incomplete)
+	return incomplete, err
+}
+
+func (s *roomStatements) MarkStateSnapshotsIncomplete(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error {
+	_, err := sqlutil.TxStmt(txn, s.markStateSnapshotsIncompleteStmt).ExecContext(ctx, int64(roomNID))
 	return err
 }

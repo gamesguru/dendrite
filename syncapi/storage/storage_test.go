@@ -117,7 +117,7 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.NoError(t, db.UpdateEventJSON(ctx, redacted.EventID(), redacted))
 		require.NoError(t, stale.SetUnsignedField("age", 1))
 
-		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), &stale)
+		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), originalJSON, &stale)
 		require.NoError(t, err)
 		require.False(t, written, "a redacted row must not be rewritten")
 
@@ -131,8 +131,10 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		live := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "live"})
 		_, err = db.WriteEvent(ctx, live, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
+		liveJSON, err := live.MarshalJSON()
+		require.NoError(t, err)
 		require.NoError(t, live.SetUnsignedField("age", 2))
-		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), live)
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), liveJSON, live)
 		require.NoError(t, err)
 		require.True(t, written)
 
@@ -148,8 +150,10 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		})
 		_, err = db.WriteEvent(ctx, contentKey, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
+		contentKeyJSON, err := contentKey.MarshalJSON()
+		require.NoError(t, err)
 		require.NoError(t, contentKey.SetUnsignedField("age", 3))
-		written, err = db.UpdateUnredactedEventJSON(ctx, contentKey.EventID(), contentKey)
+		written, err = db.UpdateUnredactedEventJSON(ctx, contentKey.EventID(), contentKeyJSON, contentKey)
 		require.NoError(t, err)
 		require.True(t, written)
 
@@ -157,6 +161,26 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, stored, 1)
 		require.Equal(t, int64(3), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// A non-redaction rewrite after the repair read must not be overwritten.
+		changed := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "changed"})
+		_, err = db.WriteEvent(ctx, changed, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		staleJSON, err := changed.MarshalJSON()
+		require.NoError(t, err)
+		var staleChanged rstypes.HeaderedEvent
+		require.NoError(t, staleChanged.UnmarshalJSON(staleJSON))
+		require.NoError(t, changed.SetUnsignedField("concurrent", true))
+		require.NoError(t, db.UpdateEventJSON(ctx, changed.EventID(), changed))
+		require.NoError(t, staleChanged.SetUnsignedField("age", 4))
+		written, err = db.UpdateUnredactedEventJSON(ctx, changed.EventID(), staleJSON, &staleChanged)
+		require.NoError(t, err)
+		require.False(t, written, "a row changed after the repair read must not be rewritten")
+		stored, err = db.Events(ctx, []string{changed.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.True(t, gjson.GetBytes(stored[0].Unsigned(), "concurrent").Bool())
+		require.False(t, gjson.GetBytes(stored[0].Unsigned(), "age").Exists())
 	})
 }
 

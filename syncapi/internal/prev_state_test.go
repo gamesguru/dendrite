@@ -74,7 +74,7 @@ func (d *repairDB) Events(_ context.Context, ids []string) ([]*rstypes.HeaderedE
 	return out, nil
 }
 
-func (d *repairDB) UpdateUnredactedEventJSON(_ context.Context, _ string, _ *rstypes.HeaderedEvent) (bool, error) {
+func (d *repairDB) UpdateUnredactedEventJSON(_ context.Context, _ string, _ []byte, _ *rstypes.HeaderedEvent) (bool, error) {
 	// The rows hold the event pointers the repair mutates, so the write is the
 	// mutation; counting calls is enough here.
 	d.updates++
@@ -174,14 +174,14 @@ func TestRepairRoomPrevStateSkipsRedactedEvents(t *testing.T) {
 
 // A redaction that lands after the repair re-reads the event but before the
 // conditional write must win: the update is refused and the event is skipped.
-func TestRepairRoomPrevStateSkipsWriteWhenRedactedMeanwhile(t *testing.T) {
+func TestRepairRoomPrevStateSkipsWriteWhenJSONChangedMeanwhile(t *testing.T) {
 	_, newJoin, roomID, q, db := profileChange(t)
 	db.refuseUpdate = true
 
 	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, report.Redacted)
+	assert.Equal(t, 1, report.WriteSkipped)
 	assert.Equal(t, 0, report.Repaired)
 	assert.Equal(t, 0, report.Repairable)
 	assert.Equal(t, 1, db.updates)
@@ -220,6 +220,23 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 	t.Run("prev events unknown to the roomserver", func(t *testing.T) {
 		oldJoin, newJoin, roomID, q, db := profileChange(t)
 		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{RoomExists: true}
+
+		report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
+		require.NoError(t, err)
+
+		assert.Equal(t, 1, report.LookupUnavailable)
+		assert.Equal(t, 0, report.Repaired)
+		assert.False(t, HasPrevContent(newJoin))
+	})
+	t.Run("state may be incomplete", func(t *testing.T) {
+		oldJoin, newJoin, roomID, q, db := profileChange(t)
+		// The predecessor is present, but the room is still partially stated or
+		// keeps snapshots from a partial-state period, so the set may be
+		// incomplete.
+		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{
+			RoomExists: true, PrevEventsExist: true, StateIncomplete: true,
+			StateEvents: []*rstypes.HeaderedEvent{oldJoin},
+		}
 
 		report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
 		require.NoError(t, err)

@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -61,7 +62,9 @@ func LookupPrevState(
 	if err := q.QueryStateAfterEvents(ctx, req, res); err != nil {
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, fmt.Errorf("QueryStateAfterEvents: %w", err)
 	}
-	if !res.RoomExists || !res.PrevEventsExist {
+	if !res.RoomExists || !res.PrevEventsExist || res.StateIncomplete {
+		// Incomplete state means the answer may omit the true predecessor, so
+		// it is unavailable rather than absent: do not write prev_content.
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, nil
 	}
 	for _, prev := range res.StateEvents {
@@ -141,8 +144,9 @@ func SetHistoricalPrevState(ctx context.Context, q StateAfterQuerier, ev *rstype
 type PrevStateRepairDatabase interface {
 	SelectRoomEventsAfterID(ctx context.Context, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)
 	Events(ctx context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error)
-	// UpdateUnredactedEventJSON writes nothing if the stored event is redacted.
-	UpdateUnredactedEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) (bool, error)
+	// UpdateUnredactedEventJSON writes only if the stored JSON still matches expectedJSON
+	// and the event is not redacted.
+	UpdateUnredactedEventJSON(ctx context.Context, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error)
 }
 
 // PrevStateRepairSample is one event the repair would change, or changed.
@@ -176,6 +180,9 @@ type PrevStateRepairReport struct {
 	NoPredecessor int `json:"no_predecessor"`
 	// LookupUnavailable is how many events the roomserver cannot answer for.
 	LookupUnavailable int `json:"lookup_unavailable"`
+	// WriteSkipped counts apply writes skipped because the stored JSON changed
+	// after it was read by the repair.
+	WriteSkipped int `json:"write_skipped"`
 	// Errors is how many events failed to look up or to write.
 	Errors  int                     `json:"errors"`
 	Samples []PrevStateRepairSample `json:"samples,omitempty"`
@@ -239,10 +246,9 @@ func RepairRoomPrevState(
 				EventID: ev.EventID(), Type: ev.Type(), StateKey: *ev.StateKey(), ReplacesState: prev.ReplacesState,
 			}
 			if apply {
-				// The scan may be stale. Re-read the event before applying the
-				// fields, then have the write reject a row redacted since this
-				// read. Other concurrent JSON changes after this read are not
-				// compared and could still be overwritten.
+				// The scan may be stale. Re-read the event and make the write
+				// conditional on that exact JSON still being stored, so concurrent
+				// redactions or other event rewrites are not overwritten.
 				latest, lerr := db.Events(ctx, []string{ev.EventID()})
 				if lerr != nil || len(latest) != 1 || latest[0] == nil {
 					report.Errors++
@@ -252,19 +258,25 @@ func RepairRoomPrevState(
 				if IsRedacted(ev) || HasPrevContent(ev) {
 					continue
 				}
+				expectedJSON, lerr := json.Marshal(ev)
+				if lerr != nil {
+					report.Errors++
+					continue
+				}
 				if err = ApplyPrevState(ev, prev); err != nil {
 					report.Errors++
 					continue
 				}
-				// The write itself refuses a row that was redacted after the
-				// re-read above, so a redaction can never be overwritten.
-				written, werr := db.UpdateUnredactedEventJSON(ctx, ev.EventID(), ev)
+				// The write fails if the row was redacted or changed since the
+				// re-read, so neither a redaction nor another rewrite is
+				// overwritten.
+				written, werr := db.UpdateUnredactedEventJSON(ctx, ev.EventID(), expectedJSON, ev)
 				if werr != nil {
 					report.Errors++
 					continue
 				}
 				if !written {
-					report.Redacted++
+					report.WriteSkipped++
 					continue
 				}
 				report.Repaired++

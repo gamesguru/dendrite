@@ -2730,6 +2730,10 @@ func (d *Database) ResyncStateNID(ctx context.Context, roomNID types.RoomNID) (t
 	return d.RoomsTable.SelectResyncStateNID(ctx, nil, roomNID)
 }
 
+func (d *Database) StateSnapshotsIncomplete(ctx context.Context, roomNID types.RoomNID) (bool, error) {
+	return d.RoomsTable.SelectStateSnapshotsIncomplete(ctx, nil, roomNID)
+}
+
 // GetPartialStateServers returns the list of servers known to be in a partial state room.
 func (d *Database) GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
 	return d.PartialStateTable.SelectPartialStateServers(ctx, nil, roomNID)
@@ -2794,14 +2798,23 @@ func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID
 	return later, joined, nil
 }
 
-// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
+// ClearRoomPartialState removes the partial state flag from a room
 // Returns the device list stream ID that was stored at join time for device list replay.
 func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	var deviceListStreamID int64
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		var err error
+		wasPartial, err := d.PartialStateTable.SelectPartialStateRoom(ctx, txn, roomNID)
+		if err != nil {
+			return err
+		}
 		deviceListStreamID, err = d.PartialStateTable.DeletePartialStateRoom(ctx, txn, roomNID)
-		return err
+		if err != nil || !wasPartial {
+			return err
+		}
+		// Do not overload resync_state_nid: it drives state-epoch suppression
+		// and must continue to describe an actual full-state resync.
+		return d.RoomsTable.MarkStateSnapshotsIncomplete(ctx, txn, roomNID)
 	})
 	return deviceListStreamID, err
 }

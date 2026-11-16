@@ -493,9 +493,9 @@ func (d *Database) WriteEvent(
 	return pduPosition, returnErr
 }
 
-func (d *Database) UpdateUnredactedEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) (written bool, err error) {
+func (d *Database) UpdateUnredactedEventJSON(ctx context.Context, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (written bool, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		written, err = d.OutputEvents.UpdateUnredactedEventJSON(ctx, txn, eventID, event)
+		written, err = d.OutputEvents.UpdateUnredactedEventJSON(ctx, txn, eventID, expectedJSON, event)
 		return err
 	})
 	if err != nil {

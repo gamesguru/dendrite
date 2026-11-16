@@ -71,8 +71,9 @@ type Events interface {
 	SelectRoomsWithEventsSince(ctx context.Context, txn *sql.Tx, roomIDs []string, since types.StreamPosition) ([]string, error)
 	SelectEvents(ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool) ([]types.StreamEvent, error)
 	UpdateEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) error
-	// UpdateUnredactedEventJSON is UpdateEventJSON that writes nothing if the stored event is redacted. It reports whether a row was written.
-	UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) (bool, error)
+	// UpdateUnredactedEventJSON writes only if the stored JSON still matches
+	// expectedJSON and the stored event is not redacted. It reports whether a row was written.
+	UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error)
 	// SelectRoomEventsAfterID returns up to limit events of a room with an id greater than afterID, in id order.
 	// Events excluded from sync are included. limit must be positive.
 	SelectRoomEventsAfterID(ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)

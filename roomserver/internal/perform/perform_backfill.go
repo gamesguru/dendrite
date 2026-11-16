@@ -640,12 +640,9 @@ func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID
 
 // localStateUsable reports whether a stored before-state snapshot may be
 // reused for this room. A snapshot taken while the room had partial state
-// (MSC3706) can be incomplete, so reusing it would feed an incomplete state set
-// into backfill verification; those rooms keep asking federation instead.
-// A room that has been resynced out of partial state stays distrusted: the
-// resync leaves the state of events whose ancestors it could not obtain
-// unchanged, and the partial flag alone no longer records that. The check is per
-// requester because a requester is always scoped to one room.
+// (MSC3706) can be incomplete, so the durable marker keeps backfill from using
+// it after the partial flag is cleared, including when a join is abandoned.
+// The check is per requester because a requester is always scoped to one room.
 func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
 	if b.partialStateChecked {
 		return !b.partialState
@@ -666,12 +663,12 @@ func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
 		b.partialState = true
 		return false
 	}
-	resyncStateNID, err := b.db.ResyncStateNID(ctx, b.roomNID)
+	incomplete, err := b.db.StateSnapshotsIncomplete(ctx, b.roomNID)
 	if err != nil {
 		b.partialState = true
 		return false
 	}
-	b.partialState = resyncStateNID != 0
+	b.partialState = incomplete
 	return !b.partialState
 }
 

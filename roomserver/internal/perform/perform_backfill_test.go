@@ -250,17 +250,17 @@ type storedEventsDB struct {
 	// partial marks the room as having partial state, so snapshots must not
 	// be reused.
 	partial bool
-	// resyncStateNID is nonzero once the room has been resynced out of partial
-	// state, which leaves some stored snapshots incomplete.
-	resyncStateNID types.StateSnapshotNID
+	// incomplete is the durable marker left behind when a room leaves partial
+	// state, whether by resync or by an abandoned join.
+	incomplete bool
 }
 
 func (d *storedEventsDB) IsRoomPartialState(context.Context, types.RoomNID) (bool, error) {
 	return d.partial, nil
 }
 
-func (d *storedEventsDB) ResyncStateNID(context.Context, types.RoomNID) (types.StateSnapshotNID, error) {
-	return d.resyncStateNID, nil
+func (d *storedEventsDB) StateSnapshotsIncomplete(context.Context, types.RoomNID) (bool, error) {
+	return d.incomplete, nil
 }
 
 func newStoredEventsDB(events ...gomatrixserverlib.PDU) *storedEventsDB {
@@ -472,11 +472,9 @@ func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {
 	require.Equal(t, 1, fed.stateIDLookups, "no further /state_ids once the room is not partial")
 }
 
-// A resync only recomputes the state of events whose ancestors it can obtain.
-// Events whose ancestors are unknown keep the before-state they were stored
-// with while the room was partial, and clearing the partial flag does not make
-// that state complete. Such rooms must not reuse stored snapshots.
-func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialResync(t *testing.T) {
+// The partial flag can be cleared without a successful resync (for example,
+// when an abandoned join is removed). The durable marker still prevents reuse.
+func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialStateEnds(t *testing.T) {
 	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
 	newEvent := func(body string) gomatrixserverlib.PDU {
 		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
@@ -491,7 +489,7 @@ func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialResync(t *testing.T) {
 	db := newStoredEventsDB(member, target)
 	db.beforeState = map[string]types.StateSnapshotNID{target.EventID(): 7}
 	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
-	db.resyncStateNID = 9
+	db.incomplete = true
 
 	fed := &countingFedClient{}
 	requester := &backfillRequester{
@@ -505,6 +503,6 @@ func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialResync(t *testing.T) {
 	}
 	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
 	require.Error(t, err)
-	require.Nil(t, got, "a resynced room must not reuse snapshots the resync may not have repaired")
-	require.Equal(t, 1, fed.stateIDLookups, "a resynced room must ask federation")
+	require.Nil(t, got, "a room that left partial state must not reuse snapshots it may not have repaired")
+	require.Equal(t, 1, fed.stateIDLookups, "a room that left partial state must ask federation")
 }

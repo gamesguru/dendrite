@@ -81,6 +81,11 @@ type QueryStateAfterEventsResponse struct {
 	// Do all the previous events exist on this roomserver?
 	// If some of previous events do not exist this will be false and StateEvents will be empty.
 	PrevEventsExist bool `json:"prev_events_exist"`
+	// StateIncomplete is true when StateEvents may be a subset of the real
+	// state: the room is still in partial state (MSC3706), or its stored
+	// snapshots may include state from a partial-state period that has ended.
+	// Callers must not treat a missing entry as absent.
+	StateIncomplete bool `json:"state_incomplete"`
 	// The state events requested.
 	// This list will be in an arbitrary order.
 	StateEvents []*types.HeaderedEvent `json:"state_events"`
