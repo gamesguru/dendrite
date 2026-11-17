@@ -132,3 +132,30 @@ func TestTypingStreamProviderPositionAfterEventsAdvances(t *testing.T) {
 		t.Fatalf("expected the earlier read position to be kept, got %d", got)
 	}
 }
+
+// With typing updates in several rooms, the fallback position is the lowest
+// room position that produced an event, so no other room's update is skipped.
+func TestTypingStreamProviderAddTypingEventsReportsOldestPosition(t *testing.T) {
+	const roomA, roomB = "!a:test", "!b:test"
+
+	cache := caching.NewTypingCache()
+	provider := &TypingStreamProvider{EDUCache: cache}
+	posA := cache.AddTypingUser("@alice:test", roomA, nil)
+	posB := cache.AddTypingUser("@bob:test", roomB, nil)
+	if posA >= posB {
+		t.Fatalf("expected increasing positions, got %d then %d", posA, posB)
+	}
+
+	req := &types.SyncRequest{
+		Context:  context.Background(),
+		Response: types.NewResponse(),
+		Rooms:    map[string]string{roomA: spec.Join, roomB: spec.Join},
+	}
+	added, oldest := provider.addTypingEvents(req, 0)
+	if !added {
+		t.Fatal("expected typing events to be added")
+	}
+	if int64(oldest) != posA {
+		t.Fatalf("expected the oldest position %d, got %d", posA, oldest)
+	}
+}
