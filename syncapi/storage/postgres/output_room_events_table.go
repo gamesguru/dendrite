@@ -108,18 +108,12 @@ const selectEventsWithFilterSQL = "" +
 	" AND ( $6::bool   IS NULL OR     contains_url = $6 )" +
 	" LIMIT $7"
 
-const selectRecentEventsSQL = "" +
-	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events" +
-	" WHERE room_id = $1 AND id > $2 AND id <= $3" +
-	" AND ( $4::text[] IS NULL OR     sender  = ANY($4)  )" +
-	" AND ( $5::text[] IS NULL OR NOT(sender  = ANY($5)) )" +
-	" AND ( $6::text[] IS NULL OR     type LIKE ANY($6)  )" +
-	" AND ( $7::text[] IS NULL OR NOT(type LIKE ANY($7)) )" +
-	" ORDER BY id DESC LIMIT $8"
-
-// selectRecentEventsForSyncSQL contains an optimization to get the recent events for a list of rooms, using a LATERAL JOIN
-// The sub select inside LATERAL () is executed for all room_ids it gets as a parameter $1.
-const selectRecentEventsForSyncSQL = `
+// The recent-events queries take a list of rooms ($1) and use a LATERAL JOIN so the
+// per-room limit is applied inside the sub select, which is executed for every room ID.
+// The query for sync additionally leaves out events marked as excluded from sync; the
+// two must otherwise stay identical, as both are called with the same arguments and
+// scanned by the same code.
+const selectRecentEventsHead = `
 WITH room_ids AS (
      SELECT unnest($1::text[]) AS room_id
 )
@@ -130,7 +124,9 @@ FROM room_ids,
                     FROM syncapi_output_room_events recent_events
                     WHERE
                       recent_events.room_id = room_ids.room_id
-                      AND recent_events.exclude_from_sync = FALSE
+`
+
+const selectRecentEventsTail = `
                       AND id > $2 AND id <= $3
                       AND ( $4::text[] IS NULL OR     sender  = ANY($4)  )
                       AND ( $5::text[] IS NULL OR NOT(sender  = ANY($5)) )
@@ -140,6 +136,15 @@ FROM room_ids,
                     LIMIT $8
               ) AS x
 `
+
+// selectRecentEventsSQL returns the recent events of every room in $1, including those
+// excluded from sync.
+const selectRecentEventsSQL = selectRecentEventsHead + selectRecentEventsTail
+
+// selectRecentEventsForSyncSQL returns the recent events of every room in $1 that are
+// not excluded from sync.
+const selectRecentEventsForSyncSQL = selectRecentEventsHead +
+	"                      AND recent_events.exclude_from_sync = FALSE" + selectRecentEventsTail
 
 const selectMaxEventIDSQL = "" +
 	"SELECT MAX(id) FROM syncapi_output_room_events"
