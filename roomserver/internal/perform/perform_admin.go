@@ -1132,7 +1132,7 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		merged := ev.JSON()
 		var merr error
 		for _, key := range []string{"unsigned", "signatures"} {
-			local := gjson.Result{}
+			var local gjson.Result
 			if key == "unsigned" {
 				local = gjson.ParseBytes(have[0].Unsigned())
 			} else {
@@ -1155,8 +1155,13 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			lastErr = fmt.Errorf("room version %s requires a signed event when the stored copy has no signatures", roomInfo.RoomVersion)
 			continue
 		}
-		if ev, perr = verImpl.NewEventFromTrustedJSON(merged, false); perr != nil || ev.Redacted() {
-			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %v", server, perr)
+		ev, perr = verImpl.NewEventFromTrustedJSON(merged, false)
+		if perr != nil {
+			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %w", server, perr)
+			continue
+		}
+		if ev.Redacted() {
+			lastErr = fmt.Errorf("merged copy from %s is still pruned", server)
 			continue
 		}
 		// The merged copy carries this store's own signatures, so a failure here
@@ -1251,7 +1256,7 @@ func (r *Admin) refetchServerCandidates(
 		}
 	}
 	if roomID, err := spec.NewRoomID(e.RoomID); err == nil {
-		add(roomID.Domain())
+		add(eventutil.RoomIDDomain(*roomID))
 	}
 
 	hosts := &fedapi.QueryJoinedHostServerNamesInRoomResponse{}

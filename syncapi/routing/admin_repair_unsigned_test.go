@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/go-chi/chi/v5"
@@ -59,11 +60,15 @@ func TestAdminRepairUnsignedRoomVersionError(t *testing.T) {
 
 func TestRepairUnsignedAllRoomsSumsReportsAndSurvivesFailures(t *testing.T) {
 	reports := map[string]*internal.PrevStateRepairReport{
-		"!a:example.org": {RoomID: "!a:example.org", Scanned: 10, StateEvents: 8, Redacted: 1, AlreadyHad: 2,
+		"!a:example.org": {
+			RoomID: "!a:example.org", Scanned: 10, StateEvents: 8, Redacted: 1, AlreadyHad: 2,
 			Repairable: 4, Repaired: 4, NoPredecessor: 1, LookupUnavailable: 0, WriteSkipped: 1, Errors: 0,
-			Samples: []internal.PrevStateRepairSample{{EventID: "$x"}}},
-		"!c:example.org": {RoomID: "!c:example.org", Scanned: 5, StateEvents: 5, AlreadyHad: 1,
-			Repairable: 0, Repaired: 0, NoPredecessor: 2, LookupUnavailable: 2, Errors: 3},
+			Samples: []internal.PrevStateRepairSample{{EventID: "$x"}},
+		},
+		"!c:example.org": {
+			RoomID: "!c:example.org", Scanned: 5, StateEvents: 5, AlreadyHad: 1,
+			Repairable: 0, Repaired: 0, NoPredecessor: 2, LookupUnavailable: 2, Errors: 3,
+		},
 	}
 	var asked []string
 	repair := func(_ context.Context, roomID string, apply bool) (*internal.PrevStateRepairReport, error) {
@@ -91,7 +96,7 @@ func TestRepairUnsignedAllRoomsSumsReportsAndSurvivesFailures(t *testing.T) {
 }
 
 func TestRepairUnsignedAllRoomsStopsWhenContextEnds(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	calls := 0
 	repair := func(_ context.Context, roomID string, _ bool) (*internal.PrevStateRepairReport, error) {
 		calls++

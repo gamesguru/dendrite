@@ -553,11 +553,12 @@ func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched
 						if checkErr != nil {
 							return checkErr
 						}
-						if len(check) == 0 {
+						switch {
+						case len(check) == 0:
 							outputStatus = "not_present"
-						} else if gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists() {
+						case gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists():
 							outputStatus = "redacted"
-						} else {
+						default:
 							outputStatus = "write_skipped"
 						}
 					} else {
@@ -612,11 +613,12 @@ func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched
 					if checkErr != nil {
 						return checkErr
 					}
-					if len(check) == 0 || check[0].EventID() != eventID {
+					switch {
+					case len(check) == 0 || check[0].EventID() != eventID:
 						stateStatus = "not_present"
-					} else if gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists() {
+					case gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists():
 						stateStatus = "redacted"
-					} else {
+					default:
 						stateStatus = "write_skipped"
 					}
 					return nil
@@ -671,7 +673,7 @@ func verifyRefetchedContent(eventID string, stored, fetched *rstypes.HeaderedEve
 func mergeFetchedEventWithLocalUnsigned(fetched, local *rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
 	data := fetched.JSON()
 	for _, key := range []string{"unsigned", "signatures"} {
-		localValue := gjson.Result{}
+		var localValue gjson.Result
 		if key == "unsigned" {
 			localValue = gjson.ParseBytes(local.Unsigned())
 		} else {
