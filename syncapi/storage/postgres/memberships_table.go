@@ -130,7 +130,8 @@ const selectMembershipCurrentSQL = "" +
 	" ORDER BY m.stream_pos DESC, " + isCurrentMemberEventSQL + " DESC LIMIT 1"
 
 const selectMembershipAtStreamSQL = "" +
-	"SELECT m.membership, m.event_id, m.stream_pos FROM syncapi_memberships m WHERE m.room_id = $1 and m.user_id = $2 AND m.stream_pos <= $3" +
+	"SELECT m.membership, m.event_id, m.stream_pos, " + isCurrentMemberEventSQL + " FROM syncapi_memberships m" +
+	" WHERE m.room_id = $1 and m.user_id = $2 AND m.stream_pos <= $3" +
 	" ORDER BY m.stream_pos DESC, " + isCurrentMemberEventSQL + " DESC LIMIT 1"
 
 const updateMembershipTopologicalPosSQL = "" +
@@ -307,12 +308,21 @@ func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 	}
 	var currentMembership, currentEventID string
 	var currentPos int64
+	var currentIsCurrentEvent bool
 	currentStmt := sqlutil.TxStmt(txn, s.selectMembershipAtStreamStmt)
-	currentErr := currentStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&currentMembership, &currentEventID, &currentPos)
+	currentErr := currentStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&currentMembership, &currentEventID, &currentPos, &currentIsCurrentEvent)
 	if currentErr != nil && currentErr != sql.ErrNoRows {
 		return "", "", currentErr
 	}
-	if historyErr == nil && (currentErr == sql.ErrNoRows || historyPos > currentPos) {
+	// The compact row wins when it is newer. On an exact tie it overrides the
+	// history only if its event is the room's current member event: history is
+	// last-writer-wins per position, so a resync can leave it holding a stale
+	// row, but a compact row whose event is not current may merely be the one
+	// that a later update of the same membership left behind, while history
+	// still holds the transition that happened at that position.
+	compactWins := currentErr == nil &&
+		(historyErr == sql.ErrNoRows || currentPos > historyPos || (currentPos == historyPos && currentIsCurrentEvent))
+	if historyErr == nil && !compactWins {
 		return historyMembership, historyEventID, nil
 	}
 	if currentErr == nil {

@@ -428,3 +428,55 @@ func TestMembershipTiedStreamPositionPrefersCurrentEvent(t *testing.T) {
 		require.NotContains(t, eventIDs, invite.EventID())
 	})
 }
+
+// A later update of the same membership (a profile change) moves the compact
+// join row to its own position, leaving only the stale invite at the earlier
+// one. A lookup at that earlier position must still find the join the history
+// recorded there, not fall back to the invite.
+func TestMembershipAtStreamPositionKeepsHistoryAfterProfileUpdate(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		invite := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Invite}, test.WithStateKey(bob.ID))
+		join := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		rename := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join, "displayname": "Bob"}, test.WithStateKey(bob.ID))
+
+		table, db, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+
+		var current tables.CurrentRoomState
+		switch dbType {
+		case test.DBTypePostgres:
+			var err error
+			current, err = postgres.NewPostgresCurrentRoomStateTable(db)
+			require.NoError(t, err)
+		case test.DBTypeSQLite:
+			var stream sqlite3.StreamIDStatements
+			require.NoError(t, stream.Prepare(db))
+			var err error
+			current, err = sqlite3.NewSqliteCurrentRoomStateTable(db, &stream)
+			require.NoError(t, err)
+		}
+		joined := spec.Join
+
+		// Invite then join at one position; the join is the current state.
+		require.NoError(t, table.UpsertMembership(ctx, nil, invite, 50, 460))
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 50, 0))
+		require.NoError(t, current.UpsertRoomState(ctx, nil, join, &joined, 50))
+		// The profile update replaces the compact join row and the current event.
+		require.NoError(t, table.UpsertMembership(ctx, nil, rename, 70, 0))
+		require.NoError(t, current.UpsertRoomState(ctx, nil, rename, &joined, 70))
+
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 50)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership, "the join at position 50, not the compact invite")
+		require.Equal(t, join.EventID(), eventID)
+
+		membership, eventID, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, rename.EventID(), eventID)
+	})
+}
