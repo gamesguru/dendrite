@@ -17,6 +17,7 @@ import (
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -531,6 +532,42 @@ func (a anchorRoomserverAPI) QueryEventsByID(_ context.Context, req *roomserverA
 		}
 	}
 	return nil
+}
+
+type recordingFallbackRoomserverAPI struct {
+	anchorRoomserverAPI
+	stored []string
+}
+
+func (r *recordingFallbackRoomserverAPI) InputRoomEvents(_ context.Context, req *roomserverAPI.InputRoomEventsRequest, _ *roomserverAPI.InputRoomEventsResponse) {
+	for _, in := range req.InputRoomEvents {
+		r.stored = append(r.stored, in.Event.EventID())
+		r.events[in.Event.EventID()] = in.Event
+	}
+}
+
+func TestStorePrunedFallbacksOnlyStoresStillMissingEvents(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newMember := func(stateKey string) *types.HeaderedEvent {
+		raw := fmt.Sprintf(`{"type":"m.room.member","state_key":%q,"room_id":"!r:test","sender":%q,"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`, stateKey, stateKey)
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(raw), false)
+		require.NoError(t, err)
+		return &types.HeaderedEvent{PDU: ev}
+	}
+	full, stillMissing := newMember("@full:test"), newMember("@missing:test")
+	rs := &recordingFallbackRoomserverAPI{anchorRoomserverAPI: anchorRoomserverAPI{
+		events: map[string]*types.HeaderedEvent{full.EventID(): full},
+	}}
+	w := &PartialStateWorker{rsAPI: rs}
+	fallback := []roomserverAPI.InputRoomEvent{
+		{Kind: roomserverAPI.KindOutlier, Event: full},
+		{Kind: roomserverAPI.KindOutlier, Event: stillMissing},
+	}
+
+	w.storePrunedFallbacks(context.Background(), logrus.NewEntry(logrus.New()), "!r:test", gomatrixserverlib.RoomVersionV10, fallback)
+
+	require.Equal(t, []string{stillMissing.EventID()}, rs.stored,
+		"the /state fallback should only be stored when per-event fetching left it missing")
 }
 
 func TestFindStateAnchor(t *testing.T) {

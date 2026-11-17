@@ -1316,19 +1316,17 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	if err != nil {
 		return nil, err
 	}
-	// Keep a local hash-pruned copy as a last-resort fallback, but try the
-	// federation candidates first in case one still has the full event.
-	var prunedEvent gomatrixserverlib.PDU
-
+	var storedPrunedFallback gomatrixserverlib.PDU
 	if localFirst {
 		// fetch from the roomserver
 		events, err := t.db.EventsFromIDs(ctx, t.roomInfo, []string{missingEventID})
 		if err != nil {
 			t.log.Warnf("Failed to query roomserver for missing event %s: %s - falling back to remote", missingEventID, err)
 		} else if len(events) == 1 {
-			if eventutil.LooksHashPruned(events[0].JSON(), events[0]) {
-				prunedEvent = events[0].PDU
-				t.log.WithField("missing_event_id", missingEventID).Warn("Local event failed its content hash; trying federation sources")
+			if eventutil.StoredCopyLooksHashPruned(verImpl, events[0].JSON()) {
+				// The database reconstructs hash-pruned rows as Redacted()==false,
+				// so verify the stored JSON itself and keep it only as a last resort.
+				storedPrunedFallback = events[0].PDU
 			} else {
 				return events[0].PDU, nil
 			}
@@ -1338,6 +1336,7 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	found := false
 	var validationError error
 	// A copy that looks hash-pruned is only used if no server has a full one.
+	var prunedEvent gomatrixserverlib.PDU
 	var prunedValidationError error
 	// Cap the number of servers to try per event to avoid exhaustively
 	// iterating hundreds of servers that don't have the event.
@@ -1379,7 +1378,7 @@ serverLoop:
 					t.log.WithFields(logrus.Fields{
 						"missing_event_id": missingEventID,
 						"server_name":      serverName,
-					}).Warn("Event from /event failed its content hash, trying another server")
+					}).Debug("Event from /event looks hash-pruned (redacted with no redaction metadata); preferring a full copy if one is available")
 					if prunedEvent == nil {
 						prunedEvent = event
 					}
@@ -1398,6 +1397,11 @@ serverLoop:
 		event, validationError = prunedEvent, prunedValidationError
 		found = true
 	}
+	if !found && storedPrunedFallback != nil {
+		// A local copy is already stored and previously accepted. Preserve the old
+		// local-first trust behavior if federation has no better copy.
+		return t.cacheAndReturn(storedPrunedFallback), nil
+	}
 	if !found {
 		// Remember that this event is unfindable so we don't retry it
 		// within this request.
@@ -1410,6 +1414,11 @@ serverLoop:
 	if err := verifyFetchedEventSignatures(ctx, event, missingEventID, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
+		if storedPrunedFallback != nil {
+			// Do not turn an already-stored event into a gap solely because this
+			// retry could not fetch signature keys for the remote fallback.
+			return t.cacheAndReturn(storedPrunedFallback), nil
+		}
 		t.log.WithError(err).Warnf("Couldn't validate signature of event %q from /event", missingEventID)
 		return nil, err
 	}

@@ -63,3 +63,26 @@ func TestLooksHashPruned(t *testing.T) {
 		require.False(t, LooksHashPruned(nil, nil))
 	})
 }
+
+func TestStoredCopyLooksHashPruned(t *testing.T) {
+	verImpl, err := gomatrixserverlib.GetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	require.NoError(t, err)
+	full := buildSignedMessage(t)
+	tampered, err := sjson.SetBytes(full, "content.body", "changed")
+	require.NoError(t, err)
+
+	// What the roomserver stores after a hash failure: the redacted form, no redacted_because.
+	storedPruned := parseV10(t, tampered).JSON()
+	// The database loads such a row with redacted=false, so the Redacted() flag cannot find it.
+	fromDB, err := verImpl.NewEventFromTrustedJSON(storedPruned, false)
+	require.NoError(t, err)
+	require.False(t, fromDB.Redacted())
+
+	require.True(t, StoredCopyLooksHashPruned(verImpl, storedPruned))
+	require.False(t, StoredCopyLooksHashPruned(verImpl, full), "a complete copy passes its content hash")
+
+	genuine, err := sjson.SetBytes(storedPruned, "unsigned.redacted_because", map[string]any{"type": "m.room.redaction"})
+	require.NoError(t, err)
+	require.False(t, StoredCopyLooksHashPruned(verImpl, genuine), "a recorded redaction is authoritative")
+	require.False(t, StoredCopyLooksHashPruned(verImpl, []byte(`not json`)))
+}

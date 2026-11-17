@@ -251,8 +251,8 @@ func (r *Inputer) processRoomEvent(
 					if eventsErr != nil {
 						return fmt.Errorf("r.DB.Events: %w", eventsErr)
 					}
-					if len(events) == 1 && events[0].Redacted() &&
-						!gjson.GetBytes(events[0].JSON(), "unsigned.redacted_because").Exists() {
+					if verImpl, verErr := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion); verErr == nil &&
+						len(events) == 1 && eventutil.StoredCopyLooksHashPruned(verImpl, events[0].JSON()) {
 						break
 					}
 				}
@@ -1175,7 +1175,14 @@ func (r *Inputer) fetchAuthEvents(
 	if versionErr != nil {
 		return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
 	}
-	for _, serverName := range servers {
+	// Cap the candidate list: a hash-pruned-looking copy makes us try the next
+	// server, and a legitimately redacted chain looks the same, so an uncapped
+	// list could turn one fetch into a request to every joined host.
+	authServers := servers
+	if len(authServers) > maxServersPerEvent {
+		authServers = authServers[:maxServersPerEvent]
+	}
+	for _, serverName := range authServers {
 		// Request the entire auth chain for the event in question. This should
 		// contain all of the auth events — including ones that we already know —
 		// so we'll need to filter through those in the next section.
@@ -1187,8 +1194,15 @@ func (r *Inputer) fetchAuthEvents(
 		suspicious := false
 		for _, raw := range candidate.AuthEvents {
 			parsed, parseErr := verImpl.NewEventFromUntrustedJSON(raw)
-			if parseErr == nil && eventutil.LooksHashPruned(raw, parsed) {
-				logger.Warnf("Auth chain from %q contains event %q that failed its content hash; trying another server", serverName, parsed.EventID())
+			if parseErr != nil {
+				continue
+			}
+			// Only a copy we still need matters; the chain repeats events we hold.
+			if _, wanted := unknown[parsed.EventID()]; !wanted {
+				continue
+			}
+			if eventutil.LooksHashPruned(raw, parsed) {
+				logger.Debugf("Auth chain from %q contains event %q that looks hash-pruned; continuing candidate search", serverName, parsed.EventID())
 				suspicious = true
 				break
 			}
@@ -1206,6 +1220,7 @@ func (r *Inputer) fetchAuthEvents(
 	}
 	if !found && havePrunedResponse {
 		// Keep the only available chain if every candidate has pruned copies.
+		logger.Debugf("Accepting the only available auth chain for %q despite a hash-pruned copy", event.EventID())
 		res = prunedResponse
 		found = true
 	}
@@ -1234,7 +1249,7 @@ func (r *Inputer) fetchAuthEvents(
 			requested[authEventID] = struct{}{}
 			var fetched gomatrixserverlib.PDU
 			var fetchedRaw []byte
-			for _, serverName := range servers {
+			for _, serverName := range authServers {
 				txn, getErr := r.FSAPI.GetEvent(ctx, virtualHost, serverName, authEventID)
 				if getErr != nil || len(txn.PDUs) == 0 {
 					logger.WithError(getErr).Debugf("Failed to get missing auth event %q from %q", authEventID, serverName)
@@ -1248,7 +1263,7 @@ func (r *Inputer) fetchAuthEvents(
 					}
 					if eventutil.LooksHashPruned(pdu, parsed) {
 						// Prefer another server's copy; keep the first as a fallback.
-						logger.Warnf("Auth event %q from %q failed its content hash, trying another server", authEventID, serverName)
+						logger.Debugf("Auth event %q from %q looks hash-pruned; preferring a full copy if one is available", authEventID, serverName)
 						if fetched == nil {
 							fetched, fetchedRaw = parsed, pdu
 						}
