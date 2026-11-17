@@ -484,6 +484,37 @@ func TestStateIDsBeforeEventRollsForwardFromStoredParent(t *testing.T) {
 	require.Equal(t, 2, fed.stateIDLookups)
 }
 
+// The create event has an empty before-state by definition, so its child is
+// resolved locally even though no snapshot is stored for the create event.
+func TestStateIDsBeforeEventRollsForwardFromCreate(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	create := newEvent(`{"type":"m.room.create","room_id":"!r:test","sender":"@a:test","state_key":"",` +
+		`"content":{"room_version":"10"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	target := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test","state_key":"@a:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":2,"depth":2,"prev_events":["` + create.EventID() + `"],"auth_events":[]}`)
+
+	db := newStoredEventsDB(create)
+	fed := &countingFedClient{}
+	b := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
+		db:                      db,
+		roomVersion:             gomatrixserverlib.RoomVersionV10,
+		roomNID:                 1,
+		eventIDToBeforeStateIDs: map[string][]string{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{},
+	}
+	got, err := b.StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, []string{create.EventID()}, got)
+	require.Zero(t, fed.stateIDLookups, "the create event's child must not trigger /state_ids")
+}
+
 // A room with partial state (MSC3706) can hold incomplete before-state
 // snapshots, so they must not be reused: backfill asks federation instead.
 func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {

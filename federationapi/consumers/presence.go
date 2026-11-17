@@ -352,6 +352,7 @@ func (t *OutputPresenceConsumer) flushPending() {
 		}
 		return keys[i].destination < keys[j].destination
 	})
+	queued := 0
 	for _, key := range keys {
 		updates := byDestination[key]
 		edu := &gomatrixserverlib.EDU{Type: spec.MPresence, Origin: string(key.origin)}
@@ -372,13 +373,16 @@ func (t *OutputPresenceConsumer) flushPending() {
 			for _, userID := range destinationUsers[key] {
 				markPresenceDestinationFailed(failedDestinations, userID, key.destination)
 			}
+			continue
 		}
+		queued++
 	}
 
 	log.WithFields(log.Fields{
 		"users":        len(snapshot),
-		"destinations": len(keys),
-	}).Info("Queued presence EDUs")
+		"destinations": queued,
+		"attempted":    len(keys),
+	}).Debug("Queued presence EDUs")
 
 	acked := make(map[*nats.Msg]struct{})
 	ackFailed := make(map[string]bool)

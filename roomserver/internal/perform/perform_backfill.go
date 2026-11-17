@@ -574,6 +574,11 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 				b.eventIDToBeforeStateIDs[prevEventID] = prevEventStateIDs
 			}
 		}
+		if !ok && prevEvent.Type() == spec.MRoomCreate && len(prevEvent.PrevEventIDs()) == 0 {
+			// The create event is the root of the DAG: the state before it is
+			// empty by definition, and it has no stored before-state to read.
+			prevEventStateIDs, ok = []string{}, true
+		}
 		if !ok {
 			if b.localStateUsable(ctx) {
 				reason = "parent-has-no-state"
