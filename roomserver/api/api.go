@@ -508,4 +508,7 @@ type AdminRefetchEvent struct {
 	RoomID  string          `json:"room_id"`
 	EventID string          `json:"event_id"`
 	Server  spec.ServerName `json:"server,omitempty"`
+	// Servers are tried in order, after Server, before the sender's homeserver
+	// and the room's other servers.
+	Servers []spec.ServerName `json:"servers,omitempty"`
 }

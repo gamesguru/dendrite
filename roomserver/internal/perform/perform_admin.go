@@ -1073,19 +1073,26 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	var servers []spec.ServerName
 	if e.Server != "" {
 		servers = append(servers, e.Server)
-	} else if sender, qerr := r.Queryer.QueryUserIDForSender(ctx, have[0].RoomID(), have[0].SenderID()); qerr == nil && sender != nil {
+	}
+	servers = append(servers, e.Servers...)
+	if sender, qerr := r.Queryer.QueryUserIDForSender(ctx, have[0].RoomID(), have[0].SenderID()); qerr == nil && sender != nil {
 		servers = append(servers, sender.Domain())
 	}
 	hosts := &fedapi.QueryJoinedHostServerNamesInRoomResponse{}
 	if herr := r.Inputer.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, &fedapi.QueryJoinedHostServerNamesInRoomRequest{
 		RoomID: e.RoomID, ExcludeSelf: true, ExcludeBlacklisted: true,
 	}, hosts); herr == nil {
-		for _, h := range hosts.ServerNames {
-			if len(servers) == 0 || h != servers[0] {
-				servers = append(servers, h)
-			}
+		servers = append(servers, hosts.ServerNames...)
+	}
+	seen := make(map[spec.ServerName]struct{}, len(servers))
+	unique := servers[:0]
+	for _, h := range servers {
+		if _, dup := seen[h]; !dup && h != "" {
+			seen[h] = struct{}{}
+			unique = append(unique, h)
 		}
 	}
+	servers = unique
 	if len(servers) == 0 {
 		return "", fmt.Errorf("no server to ask for %s", e.EventID)
 	}

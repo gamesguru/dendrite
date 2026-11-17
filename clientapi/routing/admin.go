@@ -864,8 +864,10 @@ func AdminImportEvents(
 // {"dry_run": bool, "events": [{"room_id", "event_id", "server"?}, ...]}.
 func AdminRefetchPruned(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
 	var body struct {
-		DryRun bool                              `json:"dry_run"`
-		Events []roomserverAPI.AdminRefetchEvent `json:"events"`
+		DryRun bool `json:"dry_run"`
+		// Servers are tried for every event, after any per-event servers.
+		Servers []spec.ServerName                 `json:"servers"`
+		Events  []roomserverAPI.AdminRefetchEvent `json:"events"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error())}
@@ -873,10 +875,11 @@ func AdminRefetchPruned(req *http.Request, device *userapi.Device, rsAPI roomser
 	if len(body.Events) == 0 || len(body.Events) > maxAdminFetchEvents {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"events\" array of 1-100 events.")}
 	}
-	for _, e := range body.Events {
+	for i, e := range body.Events {
 		if e.RoomID == "" || e.EventID == "" {
 			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Every event needs room_id and event_id.")}
 		}
+		body.Events[i].Servers = append(body.Events[i].Servers, body.Servers...)
 	}
 	results := rsAPI.PerformAdminRefetchEvents(req.Context(), body.Events, body.DryRun)
 	totals := map[string]int{}
