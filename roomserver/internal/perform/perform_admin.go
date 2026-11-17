@@ -21,6 +21,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
+	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -1001,6 +1002,9 @@ func (r *Admin) PerformAdminImportEvents(
 	return results, nil
 }
 
+// maxRefetchServers bounds how many servers are asked for one event.
+const maxRefetchServers = 8
+
 // Outcomes of PerformAdminRefetchEvents.
 const (
 	RefetchOutcomeRefetched    = "refetched"
@@ -1062,21 +1066,38 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		return RefetchOutcomeAlreadyFull, nil
 	}
 
-	servers := []spec.ServerName{e.Server}
-	if e.Server == "" {
-		servers = servers[:0]
-		if sender, qerr := r.Queryer.QueryUserIDForSender(ctx, have[0].RoomID(), have[0].SenderID()); qerr == nil && sender != nil {
-			servers = append(servers, sender.Domain())
+	// Ask the named server (or the sender's homeserver) first, then every other
+	// server in the room: the event ID commits to hashes.sha256, so a copy from
+	// any server whose ID matches and whose content hash verifies is the real
+	// event, which makes a dead origin recoverable.
+	var servers []spec.ServerName
+	if e.Server != "" {
+		servers = append(servers, e.Server)
+	} else if sender, qerr := r.Queryer.QueryUserIDForSender(ctx, have[0].RoomID(), have[0].SenderID()); qerr == nil && sender != nil {
+		servers = append(servers, sender.Domain())
+	}
+	hosts := &fedapi.QueryJoinedHostServerNamesInRoomResponse{}
+	if herr := r.Inputer.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, &fedapi.QueryJoinedHostServerNamesInRoomRequest{
+		RoomID: e.RoomID, ExcludeSelf: true, ExcludeBlacklisted: true,
+	}, hosts); herr == nil {
+		for _, h := range hosts.ServerNames {
+			if len(servers) == 0 || h != servers[0] {
+				servers = append(servers, h)
+			}
 		}
-		if len(servers) == 0 {
-			return "", fmt.Errorf("no server given and the sender's homeserver is unknown")
-		}
+	}
+	if len(servers) == 0 {
+		return "", fmt.Errorf("no server to ask for %s", e.EventID)
+	}
+	if len(servers) > maxRefetchServers {
+		servers = servers[:maxRefetchServers]
 	}
 	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
 	if err != nil {
 		return "", err
 	}
 	var lastErr error
+	sawPruned := false
 	for _, server := range servers {
 		txn, ferr := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, server, e.EventID)
 		if ferr != nil || len(txn.PDUs) == 0 {
@@ -1093,12 +1114,9 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			continue
 		}
 		if ev.Redacted() {
-			// Still fails its content hash: the origin has only a pruned copy too.
-			lastErr = nil
-			return RefetchOutcomeHashMismatch, nil
-		}
-		if err = r.verifyAdminEventSignatures(ctx, ev); err != nil {
-			return "", fmt.Errorf("signature check failed: %w", err)
+			// This server has only a pruned copy too; try the next one.
+			sawPruned = true
+			continue
 		}
 		if dryRun {
 			return RefetchOutcomeWouldRefetch, nil
@@ -1119,6 +1137,9 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			return "", fmt.Errorf("event %s is still pruned after the refetch", e.EventID)
 		}
 		return RefetchOutcomeRefetched, nil
+	}
+	if sawPruned {
+		return RefetchOutcomeHashMismatch, nil
 	}
 	return "", lastErr
 }
