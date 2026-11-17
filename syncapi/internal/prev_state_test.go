@@ -246,9 +246,10 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 	})
 	t.Run("state may be incomplete", func(t *testing.T) {
 		oldJoin, newJoin, roomID, q, db := profileChange(t)
-		// The predecessor is present, but the room is still partially stated or
-		// keeps snapshots from a partial-state period, so the set may be
-		// incomplete.
+		// The predecessor is present, but the room keeps snapshots from a
+		// partial-state period. A present entry was resolved over a partial set,
+		// so it is not proof of the true predecessor; the answer stays
+		// unavailable rather than being written as prev_content.
 		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{
 			RoomExists: true, PrevEventsExist: true, StateIncomplete: true,
 			StateEvents: []*rstypes.HeaderedEvent{oldJoin},

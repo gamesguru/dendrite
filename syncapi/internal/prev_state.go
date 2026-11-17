@@ -63,8 +63,12 @@ func LookupPrevState(
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, fmt.Errorf("QueryStateAfterEvents: %w", err)
 	}
 	if !res.RoomExists || !res.PrevEventsExist || res.StateIncomplete {
-		// Incomplete state means the answer may omit the true predecessor, so
-		// it is unavailable rather than absent: do not write prev_content.
+		// Incomplete state may omit the true predecessor, and an entry it does
+		// contain was resolved over a partial set, so it can differ from the
+		// full-state winner (for example an event accepted provisionally during
+		// the partial-state period). Treat the answer as unavailable rather than
+		// absent: do not persist prev_content from a snapshot that is not
+		// provably complete.
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, nil
 	}
 	for _, prev := range res.StateEvents {
