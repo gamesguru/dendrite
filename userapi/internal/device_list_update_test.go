@@ -299,6 +299,54 @@ func TestUpdateNoPrevID(t *testing.T) {
 	}
 }
 
+func TestDeviceListRefreshDiscardsFetchSupersededByManualUpdate(t *testing.T) {
+	const userID = "@elsie:remote.test"
+	db := &mockDeviceListUpdaterDatabase{staleUsers: make(map[string]bool)}
+	producer := &mockKeyChangeProducer{}
+	requestStarted := make(chan struct{})
+	finishRequest := make(chan struct{})
+	fedClient := newFedClient(func(*http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-finishRequest
+		return &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(`{"user_id":"` + userID + `","stream_id":2,"devices":[{"device_id":"OLD","keys":{}}]}`)),
+		}, nil
+	})
+	updater := NewDeviceListUpdater(process.NewProcessContext(), db, &mockDeviceListUpdaterAPI{}, producer, fedClient, 1, nil, "example.test", caching.DisableMetrics, testIsBlacklistedOrBackingOff)
+	updater.workerChans[0] = make(chan spec.ServerName, 1)
+	result := make(chan error, 1)
+	go func() {
+		_, err := updater.processServerUser(context.Background(), "remote.test", userID)
+		result <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the device list fetch did not start")
+	}
+
+	workerWake := make(chan struct{})
+	go func() {
+		<-updater.workerChans[0]
+		updater.clearChannel(userID)
+		close(workerWake)
+	}()
+	require.NoError(t, updater.ManualUpdate(context.Background(), "remote.test", userID))
+	<-workerWake
+
+	close(finishRequest)
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, errDeviceListFetchSuperseded)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the superseded fetch did not return")
+	}
+	assert.True(t, db.isStale(userID), "the newer invalidation must remain in effect")
+	assert.Empty(t, db.storedKeys, "the older snapshot must not replace device keys")
+	assert.Empty(t, producer.events, "the older snapshot must not emit a key change")
+}
+
 // Test that if we make N calls to ManualUpdate for the same user, we only do it once, assuming the
 // update is still ongoing.
 func TestDebounce(t *testing.T) {

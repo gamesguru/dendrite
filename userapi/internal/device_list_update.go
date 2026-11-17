@@ -46,6 +46,8 @@ var deviceListUpdateCount = prometheus.NewCounterVec(
 
 const requestTimeout = time.Second * 30
 
+var errDeviceListFetchSuperseded = errors.New("device list fetch was superseded by a newer update")
+
 func init() { //nolint:gochecknoinits
 	prometheus.MustRegister(
 		deviceListUpdateCount,
@@ -87,6 +89,10 @@ type DeviceListUpdater struct {
 	// TODO: Put in an LRU cache to bound growth
 	userIDToMutex map[string]*sync.Mutex
 	mu            *sync.Mutex // protects UserIDToMutex
+	// updateGeneration is guarded by the corresponding per-user mutex. A full
+	// device-list fetch may only replace keys and mark the list fresh if no newer
+	// update or invalidation arrived while the fetch was in flight.
+	updateGeneration map[string]uint64
 
 	db          DeviceListUpdaterDatabase
 	api         DeviceListUpdaterAPI
@@ -190,6 +196,7 @@ func NewDeviceListUpdater(
 		process:                     process,
 		userIDToMutex:               make(map[string]*sync.Mutex),
 		mu:                          &sync.Mutex{},
+		updateGeneration:            make(map[string]uint64),
 		pendingUsers:                make(map[string]struct{}),
 		pendingLocalLists:           make(map[string]map[string]uint64),
 		db:                          db,
@@ -260,11 +267,21 @@ func (u *DeviceListUpdater) mutex(userID string) *sync.Mutex {
 	return u.userIDToMutex[userID]
 }
 
+// bumpUpdateGenerationLocked invalidates any full device-list fetch that began
+// before the current update. The caller must hold the user's mutex.
+func (u *DeviceListUpdater) bumpUpdateGenerationLocked(userID string) {
+	if u.updateGeneration == nil {
+		u.updateGeneration = make(map[string]uint64)
+	}
+	u.updateGeneration[userID]++
+}
+
 // ManualUpdate invalidates the device list for the given user and fetches the latest and tracks it.
 // Blocks until the device list is synced or the timeout is reached.
 func (u *DeviceListUpdater) ManualUpdate(ctx context.Context, serverName spec.ServerName, userID string) error {
 	mu := u.mutex(userID)
 	mu.Lock()
+	u.bumpUpdateGenerationLocked(userID)
 	err := u.db.MarkDeviceListStale(ctx, userID, true)
 	mu.Unlock()
 	if err != nil {
@@ -292,6 +309,7 @@ func (u *DeviceListUpdater) update(ctx context.Context, event gomatrixserverlib.
 	mu := u.mutex(event.UserID)
 	mu.Lock()
 	defer mu.Unlock()
+	u.bumpUpdateGenerationLocked(event.UserID)
 	// check if we have the prev IDs
 	exists, err := u.db.PrevIDsExists(ctx, event.UserID, event.PrevID)
 	if err != nil {
@@ -538,7 +556,12 @@ func (u *DeviceListUpdater) HandleRoomUnPartialStated(ctx context.Context, roomI
 	u.pendingMu.Unlock()
 
 	for _, userID := range changed {
-		if err := u.db.MarkDeviceListStale(ctx, userID, true); err != nil {
+		mu := u.mutex(userID)
+		mu.Lock()
+		u.bumpUpdateGenerationLocked(userID)
+		err := u.db.MarkDeviceListStale(ctx, userID, true)
+		mu.Unlock()
+		if err != nil {
 			return fmt.Errorf("failed to mark device list for %s as stale: %w", userID, err)
 		}
 		if err := u.producer.ProduceKeyChanges([]api.DeviceMessage{{
@@ -789,6 +812,12 @@ func (u *DeviceListUpdater) processServer(serverName spec.ServerName) (time.Dura
 	for _, userID := range userIDs {
 		userWait, err := u.processServerUser(ctx, serverName, userID)
 		if err != nil {
+			if errors.Is(err, errDeviceListFetchSuperseded) {
+				// The newer update already left this user's list stale. Retry
+				// promptly, but keep processing other users on this server.
+				waitTime = 0
+				continue
+			}
 			if userWait > waitTime {
 				waitTime = userWait
 			}
@@ -812,6 +841,7 @@ func (u *DeviceListUpdater) processServer(serverName spec.ServerName) (time.Dura
 func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName spec.ServerName, userID string) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
+	updateGeneration := u.currentUpdateGeneration(userID)
 
 	// If we are processing more than one user per server, this unblocks further calls to Update
 	// immediately instead of just after **all** users have been processed.
@@ -865,6 +895,14 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 		logger.WithError(err).Debugf("User ID %q in device list update response doesn't match expected %q", res.UserID, userID)
 		return defaultWaitTime, nil
 	}
+	userMu := u.mutex(userID)
+	userMu.Lock()
+	defer userMu.Unlock()
+	if u.updateGeneration[userID] != updateGeneration {
+		logger.Debug("Discarded device list fetch superseded by a newer update")
+		return defaultWaitTime, errDeviceListFetchSuperseded
+	}
+
 	if res.MasterKey != nil || res.SelfSigningKey != nil {
 		uploadReq := &api.PerformUploadDeviceKeysRequest{
 			UserID: userID,
@@ -893,6 +931,15 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 	return defaultWaitTime, nil
 }
 
+func (u *DeviceListUpdater) currentUpdateGeneration(userID string) uint64 {
+	mu := u.mutex(userID)
+	mu.Lock()
+	defer mu.Unlock()
+	return u.updateGeneration[userID]
+}
+
+// updateDeviceList stores a fetched list. The caller must hold the user's mutex
+// and verify the fetch generation before calling this method.
 func (u *DeviceListUpdater) updateDeviceList(res *fclient.RespUserDevices) error {
 	ctx := u.process.Context() // Persistence outlives individual requests, but not ownership.
 	keys := make([]api.DeviceMessage, len(res.Devices))
