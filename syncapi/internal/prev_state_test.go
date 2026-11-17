@@ -244,14 +244,11 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 		assert.Equal(t, 0, report.Repaired)
 		assert.False(t, HasPrevContent(newJoin))
 	})
-	t.Run("state may be incomplete", func(t *testing.T) {
+	t.Run("incomplete state without the predecessor", func(t *testing.T) {
 		oldJoin, newJoin, roomID, q, db := profileChange(t)
-		// The predecessor is present, but the room is still partially stated or
-		// keeps snapshots from a partial-state period, so the set may be
-		// incomplete.
+		// The set may be a subset, so an empty answer is not proof of absence.
 		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{
 			RoomExists: true, PrevEventsExist: true, StateIncomplete: true,
-			StateEvents: []*rstypes.HeaderedEvent{oldJoin},
 		}
 
 		report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
@@ -260,6 +257,20 @@ func TestRepairRoomPrevStateLeavesEventsWithoutAnAnswer(t *testing.T) {
 		assert.Equal(t, 1, report.LookupUnavailable)
 		assert.Equal(t, 0, report.Repaired)
 		assert.False(t, HasPrevContent(newJoin))
+	})
+	t.Run("incomplete state with the predecessor", func(t *testing.T) {
+		oldJoin, newJoin, roomID, q, db := profileChange(t)
+		// A snapshot may lack entries but a present one is real, so it repairs.
+		q.answers[oldJoin.EventID()] = rsapi.QueryStateAfterEventsResponse{
+			RoomExists: true, PrevEventsExist: true, StateIncomplete: true,
+			StateEvents: []*rstypes.HeaderedEvent{oldJoin},
+		}
+
+		report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
+		require.NoError(t, err)
+
+		assert.Equal(t, 1, report.Repaired)
+		assert.Equal(t, oldJoin.EventID(), gjson.GetBytes(db.stored(t, newJoin.EventID()).Unsigned(), "replaces_state").Str)
 	})
 	t.Run("the event itself is not its predecessor", func(t *testing.T) {
 		oldJoin, newJoin, roomID, q, db := profileChange(t)
