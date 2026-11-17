@@ -99,7 +99,9 @@ const selectMaxTopologyPositionSQL = "" +
 	"SELECT COALESCE(MAX(topological_position), -1) FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND event_id IN ($2)"
 
-// The lowest topological position among the room's events that sync delivers.
+// The first delivered, non-create state event establishes when the room's
+// state timeline became live. Backfilled messages must not drag the boundary
+// into history.
 const selectLiveStartPositionSQL = "" +
 	"SELECT t.topological_position FROM syncapi_output_room_events_topology t" +
 	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +

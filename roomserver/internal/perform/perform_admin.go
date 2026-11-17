@@ -1166,12 +1166,13 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %w", server, perr)
 			continue
 		}
-		if ev.Redacted() {
+		if eventutil.StoredCopyLooksHashPruned(verImpl, merged) {
 			lastErr = fmt.Errorf("merged copy from %s is still pruned", server)
 			continue
 		}
-		// The merged copy carries this store's own signatures, so a failure here
-		// (for example the origin's keys are unreachable) is reported, not fatal.
+		// v1 and v2 require verified signatures and fail above. Later room
+		// versions accept a hash-valid copy with unverified signatures and report
+		// that outcome to the caller.
 		verr := r.verifyAdminEventSignatures(ctx, ev)
 		signed, signatureFailureIsFatal := adminRefetchSignatureStatus(roomInfo.RoomVersion, verr)
 		if signatureFailureIsFatal {
@@ -1233,16 +1234,36 @@ func (r *Admin) refetchServerCandidates(
 	if sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID()); err == nil && sender != nil {
 		senderServer = sender.Domain()
 	}
-	servers := explicitRefetchServers(e.Server, e.Servers, senderServer)
+	if r.Cfg.Matrix.IsLocalServerName(senderServer) {
+		senderServer = ""
+	}
+	explicitCapacity := min(len(e.Servers), maxRefetchServers)
+	filteredExplicit := make([]spec.ServerName, 0, explicitCapacity)
+	for _, candidate := range e.Servers {
+		if len(filteredExplicit) >= maxRefetchServers {
+			break
+		}
+		if candidate != "" && !r.Cfg.Matrix.IsLocalServerName(candidate) {
+			filteredExplicit = append(filteredExplicit, candidate)
+		}
+	}
+	firstExplicit := e.Server
+	if r.Cfg.Matrix.IsLocalServerName(firstExplicit) {
+		firstExplicit = ""
+	}
+	servers := explicitRefetchServers(firstExplicit, filteredExplicit, senderServer)
+	seen := make(map[spec.ServerName]struct{}, len(servers)+1)
+	for _, candidate := range servers {
+		seen[candidate] = struct{}{}
+	}
 	add := func(candidate spec.ServerName) {
-		if candidate == "" {
+		if candidate == "" || r.Cfg.Matrix.IsLocalServerName(candidate) || len(servers) >= maxRefetchServers {
 			return
 		}
-		for _, existing := range servers {
-			if existing == candidate {
-				return
-			}
+		if _, ok := seen[candidate]; ok {
+			return
 		}
+		seen[candidate] = struct{}{}
 		servers = append(servers, candidate)
 	}
 
@@ -1288,20 +1309,26 @@ func (r *Admin) refetchServerCandidates(
 // explicitRefetchServers keeps explicit order while reserving a candidate slot
 // for the sender's homeserver only when it is not already in the explicit list.
 func explicitRefetchServers(first spec.ServerName, explicit []spec.ServerName, sender spec.ServerName) []spec.ServerName {
-	ordered := make([]spec.ServerName, 0, len(explicit)+1)
+	ordered := make([]spec.ServerName, 0, maxRefetchServers+1)
+	seen := make(map[spec.ServerName]struct{}, maxRefetchServers+2)
 	add := func(candidate spec.ServerName) {
 		if candidate == "" {
 			return
 		}
-		for _, existing := range ordered {
-			if existing == candidate {
-				return
-			}
+		if _, ok := seen[candidate]; ok {
+			return
 		}
+		seen[candidate] = struct{}{}
 		ordered = append(ordered, candidate)
 	}
 	add(first)
-	for _, candidate := range explicit {
+	// The result is capped at maxRefetchServers, so only that many explicit
+	// candidates can be selected; later entries are represented by the sender
+	// fallback below. This also bounds work on an operator-supplied list.
+	for i, candidate := range explicit {
+		if i >= maxRefetchServers {
+			break
+		}
 		add(candidate)
 	}
 

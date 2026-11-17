@@ -1293,6 +1293,7 @@ func (w *PartialStateWorker) fetchMissingViaState(
 	}
 
 	missingSet := idSet(missing)
+	seenPruned := make(map[string]struct{})
 	var inputs []roomserverAPI.InputRoomEvent
 	for _, raw := range append(append(gomatrixserverlib.EventJSONs{}, state.GetStateEvents()...), state.GetAuthEvents()...) {
 		ev, evErr := verImpl.NewEventFromUntrustedJSON(raw)
@@ -1304,6 +1305,10 @@ func (w *PartialStateWorker) fetchMissingViaState(
 			continue
 		}
 		if eventutil.LooksHashPruned(raw, ev) {
+			if _, seen := seenPruned[ev.EventID()]; seen {
+				continue
+			}
+			seenPruned[ev.EventID()] = struct{}{}
 			logger.WithFields(logrus.Fields{
 				"event_id":    ev.EventID(),
 				"server_name": serverName,

@@ -62,6 +62,35 @@ func TestAdminRefetchSignatureStatus(t *testing.T) {
 	}
 }
 
+func TestExplicitRefetchServersBoundsLargeLists(t *testing.T) {
+	large := make([]spec.ServerName, 100)
+	for i := range large {
+		large[i] = spec.ServerName(fmt.Sprintf("server-%d.test", i))
+	}
+	got := explicitRefetchServers("", large, "sender.test")
+	want := append(append([]spec.ServerName(nil), large[:maxRefetchServers-1]...), "sender.test")
+	if len(got) != len(want) {
+		t.Fatalf("got %d candidates, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidate %d = %q, want %q (all %v)", i, got[i], want[i], got)
+		}
+	}
+
+	duplicates := []spec.ServerName{"a.test", "a.test", "b.test", "b.test"}
+	got = explicitRefetchServers("", duplicates, "")
+	want = []spec.ServerName{"a.test", "b.test"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d deduplicated candidates, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidate %d = %q, want %q (all %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestExplicitRefetchServersReservesSenderSlotOnlyWhenNeeded(t *testing.T) {
 	explicit := make([]spec.ServerName, maxRefetchServers)
 	for i := range explicit {

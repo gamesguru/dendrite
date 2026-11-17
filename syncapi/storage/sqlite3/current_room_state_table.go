@@ -506,22 +506,13 @@ func (s *currentRoomStateStatements) UpdateUnredactedEventJSON(
 	if err != nil {
 		return false, err
 	}
-	containsURL := contentContainsURL(event.Content())
+	containsURL := eventContainsURL(event.Content())
 	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, data, containsURL, eventID, string(expectedJSON))
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
-}
-
-func contentContainsURL(content []byte) bool {
-	var fields map[string]any
-	if json.Unmarshal(content, &fields) != nil {
-		return false
-	}
-	_, ok := fields["url"]
-	return ok
 }
 
 func currentRoomStateRowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {

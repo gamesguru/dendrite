@@ -41,14 +41,15 @@ import (
 // server that only offers some history via /backfill.
 type hiddenPrevFederation struct {
 	remoteFederation
-	hidden       map[string]*types.HeaderedEvent
-	stateIDs     []string
-	stateHits    atomic.Int32
-	eventHits    atomic.Int32
-	mu           sync.Mutex
-	eventCopies  map[string][][]byte
-	eventServers map[string][]spec.ServerName
-	joinedHosts  []spec.ServerName
+	hidden        map[string]*types.HeaderedEvent
+	stateIDs      []string
+	stateHits     atomic.Int32
+	eventHits     atomic.Int32
+	eventHitsByID map[string]int
+	mu            sync.Mutex
+	eventCopies   map[string][][]byte
+	eventServers  map[string][]spec.ServerName
+	joinedHosts   []spec.ServerName
 }
 
 func (f *hiddenPrevFederation) LookupStateIDs(
@@ -82,7 +83,11 @@ func (f *hiddenPrevFederation) GetEvent(
 		f.eventServers[eventID] = append(f.eventServers[eventID], serverName)
 	}
 	if copies := f.eventCopies[eventID]; len(copies) > 0 {
-		index := int(f.eventHits.Load()) - 1
+		if f.eventHitsByID == nil {
+			f.eventHitsByID = map[string]int{}
+		}
+		index := f.eventHitsByID[eventID]
+		f.eventHitsByID[eventID] = index + 1
 		if index >= len(copies) {
 			index = len(copies) - 1
 		}
@@ -208,6 +213,7 @@ func TestMissingPrevEventPrefersFullCopyAndFallsBackToPruned(t *testing.T) {
 				federation := &hiddenPrevFederation{
 					remoteFederation: remoteFederation{room: room, keyRing: keyRing},
 					hidden:           map[string]*types.HeaderedEvent{hidden.EventID(): hidden},
+					eventHitsByID:    make(map[string]int),
 					stateIDs:         stateIDs,
 					eventCopies:      map[string][][]byte{hidden.EventID(): copies},
 					eventServers:     make(map[string][]spec.ServerName),

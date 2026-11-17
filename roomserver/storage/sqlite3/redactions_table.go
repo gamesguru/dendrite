@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS roomserver_redactions (
 	-- https://matrix.org/docs/spec/rooms/v3#authorization-rules-for-events
 	validated BOOLEAN NOT NULL
 );
+CREATE INDEX IF NOT EXISTS roomserver_redactions_redacts_event_id ON roomserver_redactions(redacts_event_id);
 `
 
 const insertRedactionSQL = "" +

@@ -34,16 +34,18 @@ CREATE TABLE IF NOT EXISTS roomserver_event_json (
 );
 `
 
-// The stored copy is only replaced when it carries no `unsigned.redacted_because`. A text
-// check is necessary because PostgreSQL's JSON types reject an escaped NUL (`\u0000`) in valid
-// event content. Unsigned is the last top-level key in canonical event JSON, so search only
-// that suffix and avoid matching arbitrary content fields with the same name.
+// The stored copy is only replaced when it carries no `unsigned.redacted_because`.
+// Looking the field up by path keeps content fields and nested extension keys with
+// the same name from blocking a repair. PostgreSQL's JSON types reject escaped NULs
+// and lone surrogates that valid event content can contain, so replace those escapes
+// before parsing; only the presence of the field matters here.
 const insertEventJSONSQL = "" +
 	"INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)" +
 	" ON CONFLICT (event_nid) DO UPDATE SET event_json = EXCLUDED.event_json" +
 	" WHERE NOT $3::boolean" +
-	" AND (strpos(roomserver_event_json.event_json, '\"unsigned\":') = 0" +
-	" OR strpos(substring(roomserver_event_json.event_json FROM strpos(roomserver_event_json.event_json, '\"unsigned\":')), '\"redacted_because\":') = 0)"
+	" AND NOT jsonb_path_exists(CASE WHEN roomserver_event_json.event_json LIKE '%\\\\u%'" +
+	" THEN regexp_replace(roomserver_event_json.event_json, '\\\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\\\uFFFD', 'g')" +
+	" ELSE roomserver_event_json.event_json END::jsonb, '$.unsigned.redacted_because')"
 
 // overwriteEventJSONSQL is only used for redactions, which must replace an
 // event that is already stored in full.

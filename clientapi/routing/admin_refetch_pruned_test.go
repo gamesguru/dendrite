@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/require"
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
@@ -55,7 +56,7 @@ func TestAdminRefetchPrunedDryRunReportsResults(t *testing.T) {
 	require.Equal(t, 1, fake.calls)
 	require.True(t, fake.dryRun)
 	require.Len(t, fake.events, 1)
-	require.Equal(t, []string{"matrix.org"}, []string{string(fake.events[0].Servers[0])})
+	require.Equal(t, []spec.ServerName{"matrix.org"}, fake.events[0].Servers)
 	var body struct {
 		DryRun  bool              `json:"dry_run"`
 		Totals  map[string]int    `json:"totals"`

@@ -425,6 +425,11 @@ func (d *Database) addState(
 	return
 }
 
+// HasValidatedRedactionForEvent reports whether any redaction of the event is validated.
+func (d *EventDatabase) HasValidatedRedactionForEvent(ctx context.Context, eventID string) (bool, error) {
+	return d.RedactionsTable.HasValidatedRedactionForEvent(ctx, nil, eventID)
+}
+
 func (d *EventDatabase) EventNIDs(
 	ctx context.Context, eventIDs []string,
 ) (map[string]types.EventMetadata, error) {
@@ -938,7 +943,7 @@ func (d *EventDatabase) warnIfHashPruned(
 	validated, err := d.RedactionsTable.HasValidatedRedactionForEvent(ctx, txn, event.EventID())
 	if err != nil {
 		// Do not report a failed lookup as a content-hash failure.
-		logrus.WithError(err).WithField("event_id", event.EventID()).Debug("Failed to look up a redaction while classifying a redacted event")
+		logrus.WithError(err).WithField("event_id", event.EventID()).Warn("Failed to look up a redaction while classifying a redacted event")
 		return
 	}
 	if validated {

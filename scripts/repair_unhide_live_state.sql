@@ -39,18 +39,49 @@
 \set ON_ERROR_STOP on
 \set ON_ERROR_ROLLBACK off
 
-BEGIN ISOLATION LEVEL REPEATABLE READ;
+BEGIN ISOLATION LEVEL READ COMMITTED;
+
+-- Keep current-state writers out for the whole transaction. A snapshot alone
+-- does not make a candidate current at UPDATE time: a resync can commit a new
+-- current-state row after the candidate set is built and before the UPDATE.
+-- These table locks block INSERT/UPDATE/DELETE on the three tables that decide
+-- current state, so no candidate can go stale while this runs. Expect sync
+-- writes to wait until COMMIT or ROLLBACK; run this in a quiet window.
+LOCK TABLE syncapi_output_room_events,
+           syncapi_current_room_state,
+           syncapi_output_room_events_topology
+  IN SHARE ROW EXCLUSIVE MODE;
 
 -- The live start per room. Rooms without a delivered, non-create state event
 -- are absent, so no candidate is produced: this schema cannot infer a live
 -- state boundary from messages alone.
+--
+-- Top-level state_key is checked in the text, not with JSON or JSONB: both
+-- PostgreSQL JSON types reject a \u0000 or lone-surrogate escape that valid
+-- event content may contain, and one such event must not abort the repair.
+-- Canonical event JSON sorts keys, so top-level sender/signatures precede
+-- top-level state_key, which immediately precedes type; unsigned comes after
+-- type. Anchor at the last sender/signatures, then require the key immediately
+-- before the first type. Nested content is before sender, and unsigned is
+-- after type, so neither can match. This mirrors the text check used for
+-- unsigned.redacted_because.
 CREATE TEMP TABLE zz_live_start ON COMMIT DROP AS
 SELECT t.room_id, min(t.topological_position) AS live_start
 FROM syncapi_output_room_events_topology t
 JOIN syncapi_output_room_events e ON e.event_id = t.event_id
+CROSS JOIN LATERAL (
+  SELECT right(
+           e.headered_event_json,
+           LEAST(
+             NULLIF(strpos(reverse(e.headered_event_json), reverse('"signatures":')), 0),
+             NULLIF(strpos(reverse(e.headered_event_json), reverse('"sender":')), 0)
+           )
+         ) AS suffix
+) sk
 WHERE e.exclude_from_sync = FALSE
   AND e.type <> 'm.room.create'
-  AND e.headered_event_json::jsonb ? 'state_key'
+  AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
+      ~ '"state_key":"([^"\\]|\\.)*",$'
 GROUP BY t.room_id;
 
 -- Every row the repair would change. Current state is required, so a row that
@@ -109,7 +140,14 @@ UPDATE syncapi_output_room_events o
 SET exclude_from_sync = FALSE
 FROM zz_unhide_candidates c
 WHERE o.id = c.id
-  AND o.exclude_from_sync = TRUE;
+  AND o.exclude_from_sync = TRUE
+  -- Recheck currency when updating as well as relying on the table locks.
+  -- A candidate whose current-state row moved is left hidden; the post-update
+  -- count then aborts the transaction for review instead of unhiding history.
+  AND EXISTS (
+    SELECT 1 FROM syncapi_current_room_state s
+    WHERE s.room_id = c.room_id AND s.event_id = c.event_id
+  );
 
 \echo '--- post-update: candidates still excluded (expect 0) ---'
 SELECT count(*) AS remaining

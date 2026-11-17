@@ -543,13 +543,13 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// must not stop the event being stored.
 	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
-	// Retried in place, as for new events.
 	excludeFromSync, err := s.excludeOldEvent(ctx, ev)
 	if err != nil {
 		// Return before WriteEvent. onMessage will NAK this output-log message,
 		// allowing the state classification to be retried with fresh DB state.
 		return fmt.Errorf("classify old event %s for sync: %w", ev.EventID(), err)
 	}
+	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
 		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
@@ -669,9 +669,10 @@ func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstyp
 //   - m.room.create is kept out: it is the start of the room, never news.
 //   - A state event below the room's live start is history or bulk state, such
 //     as the state the room had when we joined or backfill, so it is kept out.
-//     The live start is the lowest topological position of an event sync
-//     delivers, so it is causal, not a remote timestamp. This classification
-//     is independent of whether the event arrived through gap fill or resync.
+//     The live start is the topological position of the first delivered,
+//     non-create state event, so it is causal, not a remote timestamp. This
+//     classification is independent of whether the event arrived through gap
+//     fill or resync.
 //   - Any other old state event is in the room's live DAG region, however it
 //     arrived (a gap-fill, a late parent, a resync), so it is delivered unless
 //     the current state for its key already holds an event at the same depth

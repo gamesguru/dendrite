@@ -95,6 +95,40 @@ func TestTopologyLiveStartPosition(t *testing.T) {
 			_, ok, err = topology.SelectLiveStartPosition(ctx, txn, "!other:localhost")
 			require.NoError(t, err)
 			require.False(t, ok)
+
+			// PostgreSQL rejects the \u0000 and lone-surrogate escapes that Go
+			// accepts. A delivered state event carrying one must still establish
+			// the live start instead of failing the whole query.
+			escaped := room.CreateEvent(t, alice, "m.test.state", map[string]any{"body": "before\x00after"}, test.WithStateKey(""), test.WithDepth(1))
+			pos, err = events.InsertEvent(ctx, txn, escaped, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+			_, err = topology.InsertEventInTopology(ctx, txn, escaped, pos)
+			require.NoError(t, err)
+			pos, ok, err = topology.SelectLiveStartPosition(ctx, txn, room.ID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, types.StreamPosition(escaped.Depth()), pos)
+
+			surrogateJSON := `{"content":{"body":"\ud800"},"state_key":"","type":"m.test.state"}`
+			var insertSurrogateSQL string
+			if dbType == test.DBTypePostgres {
+				insertSurrogateSQL = `INSERT INTO syncapi_output_room_events
+					(event_id, room_id, headered_event_json, type, sender, contains_url, exclude_from_sync, origin_server_ts)
+					VALUES ('$surrogate', $1, $2, 'm.test.state', $3, false, false, 1)`
+			} else {
+				insertSurrogateSQL = `INSERT INTO syncapi_output_room_events
+					(event_id, room_id, headered_event_json, type, sender, contains_url, exclude_from_sync)
+					VALUES ('$surrogate', $1, $2, 'm.test.state', $3, false, false)`
+			}
+			_, err = txn.ExecContext(ctx, insertSurrogateSQL, room.ID, surrogateJSON, alice.ID)
+			require.NoError(t, err)
+			_, err = txn.ExecContext(ctx, `INSERT INTO syncapi_output_room_events_topology
+				(event_id, topological_position, room_id, stream_position) VALUES ('$surrogate', -1, $1, 0)`, room.ID)
+			require.NoError(t, err)
+			pos, ok, err = topology.SelectLiveStartPosition(ctx, txn, room.ID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, types.StreamPosition(-1), pos)
 			return nil
 		}))
 	})

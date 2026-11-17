@@ -106,12 +106,17 @@ const selectMaxTopologyPositionSQL = "" +
 
 // The first delivered, non-create state event establishes when the room's
 // state timeline became live. Backfilled messages must not drag the boundary
-// into history.
+// into history. PostgreSQL rejects \u0000 and lone-surrogate escapes that Go
+// accepts, so replace them before parsing the JSON; only the presence of
+// state_key matters here, not the decoded value.
 const selectLiveStartPositionSQL = "" +
 	"SELECT t.topological_position FROM syncapi_output_room_events_topology t" +
 	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
 	" WHERE t.room_id = $1 AND e.exclude_from_sync = FALSE" +
-	" AND e.type <> 'm.room.create' AND e.headered_event_json::json -> 'state_key' IS NOT NULL" +
+	" AND e.type <> 'm.room.create'" +
+	" AND CASE WHEN e.headered_event_json LIKE '%\\\\u%'" +
+	" THEN regexp_replace(e.headered_event_json, '\\\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\\\uFFFD', 'g')" +
+	" ELSE e.headered_event_json END::json -> 'state_key' IS NOT NULL" +
 	" ORDER BY t.topological_position ASC LIMIT 1"
 
 const deleteEventFromTopologySQL = "" +

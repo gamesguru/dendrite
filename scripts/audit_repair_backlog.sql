@@ -31,13 +31,28 @@
 
 \echo ''
 \echo '=== 1a. hidden output rows: repair candidates vs intentionally hidden ==='
+-- Top-level state_key is detected in the text, not through JSON/JSONB: both
+-- PostgreSQL JSON types reject \u0000 and lone-surrogate escapes that valid
+-- event content may contain. Canonical JSON sorts keys, so top-level
+-- sender/signatures precede state_key, which immediately precedes type;
+-- content is before sender and unsigned after type, so neither can match.
 WITH live_start AS (
   SELECT t.room_id, min(t.topological_position) AS live_start
   FROM syncapi_output_room_events_topology t
   JOIN syncapi_output_room_events e ON e.event_id = t.event_id
+  CROSS JOIN LATERAL (
+    SELECT right(
+             e.headered_event_json,
+             LEAST(
+               NULLIF(strpos(reverse(e.headered_event_json), reverse('"signatures":')), 0),
+               NULLIF(strpos(reverse(e.headered_event_json), reverse('"sender":')), 0)
+             )
+           ) AS suffix
+  ) sk
   WHERE e.exclude_from_sync = FALSE
     AND e.type <> 'm.room.create'
-    AND e.headered_event_json::jsonb ? 'state_key'
+    AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
+        ~ '"state_key":"([^"\\]|\\.)*",$'
   GROUP BY t.room_id
 ), hidden AS (
   SELECT o.id, o.room_id, o.event_id, o.type, t.topological_position, l.live_start,
@@ -67,9 +82,19 @@ WITH live_start AS (
   SELECT t.room_id, min(t.topological_position) AS live_start
   FROM syncapi_output_room_events_topology t
   JOIN syncapi_output_room_events e ON e.event_id = t.event_id
+  CROSS JOIN LATERAL (
+    SELECT right(
+             e.headered_event_json,
+             LEAST(
+               NULLIF(strpos(reverse(e.headered_event_json), reverse('"signatures":')), 0),
+               NULLIF(strpos(reverse(e.headered_event_json), reverse('"sender":')), 0)
+             )
+           ) AS suffix
+  ) sk
   WHERE e.exclude_from_sync = FALSE
     AND e.type <> 'm.room.create'
-    AND e.headered_event_json::jsonb ? 'state_key'
+    AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
+        ~ '"state_key":"([^"\\]|\\.)*",$'
   GROUP BY t.room_id
 )
 SELECT o.room_id, o.type, count(*) AS wrongly_hidden, min(o.id) AS first_id, max(o.id) AS last_id
@@ -98,15 +123,29 @@ SELECT o.room_id, count(*) AS hidden_state_after_last_join,
        min(o.id) AS first_id, max(o.id) AS last_id
 FROM syncapi_output_room_events o
 JOIN last_join lj ON lj.room_id = o.room_id
+CROSS JOIN LATERAL (
+  SELECT right(
+           o.headered_event_json,
+           LEAST(
+             NULLIF(strpos(reverse(o.headered_event_json), reverse('"signatures":')), 0),
+             NULLIF(strpos(reverse(o.headered_event_json), reverse('"sender":')), 0)
+           )
+         ) AS suffix
+) sk
 WHERE o.exclude_from_sync = TRUE
   AND o.type <> 'm.room.member'
-  AND o.headered_event_json::jsonb ? 'state_key'
+  AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
+      ~ '"state_key":"([^"\\]|\\.)*",$'
   AND o.id > lj.join_id
 GROUP BY o.room_id
 ORDER BY hidden_state_after_last_join DESC;
 
 \echo ''
 \echo '=== 2a. content backlogs: roomserver pruned vs sync richer vs both pruned ==='
+-- An empty roomserver content object is how many event types look after a
+-- failed content-hash check. It needs verification, not an automatic refetch:
+-- an event can legitimately have empty content. These rows are counted
+-- separately and verified in 2e before they can become refetch requests.
 WITH cmp AS (
   SELECT o.event_id,
          (j.event_json::jsonb -> 'content') AS rs_content,
@@ -128,21 +167,32 @@ SELECT count(*) FILTER (
            AND NOT (sync_content @> rs_content)
        ) AS needs_review,
        count(*) FILTER (
+         WHERE rs_rb IS NULL AND sync_rb IS NULL
+           AND jsonb_typeof(rs_content) = 'object'
+           AND rs_content = '{}'::jsonb
+       ) AS empty_content_needs_verification,
+       count(*) FILTER (
          WHERE (rs_rb IS NOT NULL OR sync_rb IS NOT NULL)
            AND rs_content IS DISTINCT FROM sync_content
        ) AS genuine_redaction_mismatch
 FROM cmp;
 
 \echo ''
-\echo '=== 2b. locally repairable rows, by event type ==='
+\echo '=== 2b. content repair candidates, by event type ==='
+-- Includes empty-content copies even when both sides are empty: those are the
+-- matching copies that the plain content comparison would otherwise miss.
 SELECT o.type, count(*) AS locally_repairable
 FROM syncapi_output_room_events o
 JOIN roomserver_events e ON e.event_id = o.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
-  AND (o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content')
-  AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+WHERE j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
   AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+  AND (
+    ((j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
+      AND (o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
+    OR (jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
+      AND (j.event_json::jsonb -> 'content') = '{}'::jsonb)
+  )
 GROUP BY o.type
 ORDER BY locally_repairable DESC;
 
@@ -152,10 +202,14 @@ SELECT s.type, count(*) AS locally_repairable_current_state
 FROM syncapi_current_room_state s
 JOIN roomserver_events e ON e.event_id = s.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (s.headered_event_json::jsonb -> 'content')
-  AND (s.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content')
-  AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+WHERE j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
   AND s.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+  AND (
+    ((j.event_json::jsonb -> 'content') IS DISTINCT FROM (s.headered_event_json::jsonb -> 'content')
+      AND (s.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
+    OR (jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
+      AND (j.event_json::jsonb -> 'content') = '{}'::jsonb)
+  )
 GROUP BY s.type
 ORDER BY locally_repairable_current_state DESC;
 
@@ -165,17 +219,51 @@ SELECT o.room_id, count(*) AS affected_output_rows
 FROM syncapi_output_room_events o
 JOIN roomserver_events e ON e.event_id = o.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
-  AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+WHERE o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
   AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+  AND (
+    ((j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content'))
+    OR (jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
+      AND (j.event_json::jsonb -> 'content') = '{}'::jsonb)
+  )
 GROUP BY o.room_id
 ORDER BY affected_output_rows DESC;
 
 \echo ''
-\echo '=== 2e. event IDs for POST /_zendrite/admin/refetchPruned (batches of 100) ==='
+\echo '=== 2e. empty-content copies: verification requests (dry run) ==='
+-- These are the matching empty-content copies from 2a. SQL cannot recompute
+-- the content hash, so this batch only asks the roomserver to run its
+-- stored-copy check. Results of already_full are not pruned and must not be
+-- sent again; only would_refetch/refetched results are confirmed hash-pruned
+-- and may be repeated with dry_run false.
+WITH candidates AS (
+  SELECT o.id,
+         o.room_id,
+         o.event_id,
+         row_number() OVER (ORDER BY o.id) - 1 AS n
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+  WHERE o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+    AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+    AND jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
+    AND (j.event_json::jsonb -> 'content') = '{}'::jsonb
+)
+SELECT (n / 100) + 1 AS batch_number,
+       jsonb_build_object(
+         'dry_run', true,
+         'events', jsonb_agg(jsonb_build_object('room_id', room_id, 'event_id', event_id) ORDER BY n)
+       ) AS request_body
+FROM candidates
+GROUP BY n / 100
+ORDER BY batch_number;
+
+\echo ''
+\echo '=== 2f. event IDs for POST /_zendrite/admin/refetchPruned (batches of 100) ==='
 -- Each result is a complete request body and has at most 100 event objects.
 -- Locally repairable rows are excluded: sync content already contains the
--- roomserver content, so these do not need a federation refetch.
+-- roomserver content, so these do not need a federation refetch. Empty-content
+-- copies are excluded here too; 2e must confirm they are hash-pruned first.
 WITH candidates AS (
   SELECT o.id,
          o.room_id,
@@ -186,6 +274,7 @@ WITH candidates AS (
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
   WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
     AND NOT ((o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
+    AND (j.event_json::jsonb -> 'content') IS DISTINCT FROM '{}'::jsonb
     AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
     AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
 )

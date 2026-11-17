@@ -121,9 +121,9 @@ type Topology interface {
 	// With `includeBackfilled`, events excluded from sync (backfilled history) persisted after the position
 	// are also returned, but only strictly shallower than `maxBackfillDepth`: a backfilled event at the token's own depth was stored after it, so it is newer. Without it, such events are never returned.
 	SelectEventIDsBeforeStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos, maxBackfillDepth types.StreamPosition, limit int, includeBackfilled bool) (eventIDs []string, start, end types.TopologyToken, err error)
-	// SelectLiveStartPosition returns the lowest topological position among the
-	// room's events that are delivered to sync (not excluded from it). ok is false
-	// when the room has none. Older state events sit below this position.
+	// SelectLiveStartPosition returns the topological position of the first
+	// delivered, non-create state event (not excluded from sync). ok is false when
+	// the room has none. Older state events sit below this position.
 	SelectLiveStartPosition(ctx context.Context, txn *sql.Tx, roomID string) (pos types.StreamPosition, ok bool, err error)
 	// SelectPositionInTopology returns the depth and stream position of a given event in the topology of the room it belongs to.
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)

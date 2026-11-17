@@ -25,6 +25,8 @@ import (
 type Database interface {
 	UserRoomKeys
 	ReportedEvents
+	// HasValidatedRedactionForEvent reports whether any redaction of the event is validated.
+	HasValidatedRedactionForEvent(ctx context.Context, eventID string) (bool, error)
 	// SetUserErased marks a local user as erased (MSC4025), or clears the
 	// mark when the account is reactivated.
 	SetUserErased(ctx context.Context, userID string, erased bool) error
@@ -313,6 +315,8 @@ type UserRoomKeys interface {
 type RoomDatabase interface {
 	EventDatabase
 	UserRoomKeys
+	// HasValidatedRedactionForEvent reports whether any redaction of the event is validated.
+	HasValidatedRedactionForEvent(ctx context.Context, eventID string) (bool, error)
 	AssignRoomNID(ctx context.Context, roomID spec.RoomID, roomVersion gomatrixserverlib.RoomVersion) (roomNID types.RoomNID, err error)
 	// RoomInfo returns room information for the given room ID, or nil if there is no room.
 	RoomInfo(ctx context.Context, roomID string) (*types.RoomInfo, error)
