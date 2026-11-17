@@ -78,8 +78,9 @@ func TestTypingStreamProviderIncrementalSyncWaitsForPendingTyping(t *testing.T) 
 
 	// The interval is normally 50ms. A loaded CI machine can delay the
 	// goroutine below past that, returning before the typing update arrives.
+	// req.Timeout (1s) still bounds the wait, so match it.
 	previousInterval := typingWaitInterval
-	typingWaitInterval = 2 * time.Second
+	typingWaitInterval = time.Second
 	t.Cleanup(func() { typingWaitInterval = previousInterval })
 
 	go func() {
@@ -120,18 +121,14 @@ func TestTypingStreamProviderImmediateSyncDoesNotWait(t *testing.T) {
 }
 
 // A typing update can land between reading the stream position and reading the
-// events. The position handed back must still be newer than from.
+// events. The position handed back must not stay at the stale one.
 func TestTypingStreamProviderPositionAfterEventsAdvances(t *testing.T) {
-	cache := caching.NewTypingCache()
-	provider := &TypingStreamProvider{EDUCache: cache}
+	provider := &TypingStreamProvider{EDUCache: caching.NewTypingCache()}
 
-	stale := types.StreamPosition(cache.GetLatestSyncPosition())
-	cache.AddTypingUser("@alice:test", "!room:test", nil)
-
-	if got := provider.positionAfterEvents(stale, stale); got <= stale {
-		t.Fatalf("expected the position to advance past %d, got %d", stale, got)
+	if got := provider.positionAfterEvents(3, 5); got != 5 {
+		t.Fatalf("expected the newest event position 5, got %d", got)
 	}
 	if got := provider.positionAfterEvents(5, 3); got != 5 {
-		t.Fatalf("expected an advanced position to be kept, got %d", got)
+		t.Fatalf("expected the later read position to be kept, got %d", got)
 	}
 }

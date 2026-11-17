@@ -28,7 +28,7 @@ func (p *TypingStreamProvider) CompleteSync(
 	req *types.SyncRequest,
 ) types.StreamPosition {
 	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-	p.addTypingEvents(req, 0)
+	_, _ = p.addTypingEvents(req, 0)
 	return to
 }
 
@@ -38,7 +38,7 @@ func (p *TypingStreamProvider) IncrementalSync(
 	req *types.SyncRequest,
 	from, to types.StreamPosition,
 ) types.StreamPosition {
-	if p.addTypingEvents(req, from) {
+	if added, _ := p.addTypingEvents(req, from); added {
 		return to
 	}
 	if to > from {
@@ -54,8 +54,8 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 	allowImmediate bool,
 ) types.StreamPosition {
 	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-	if p.addTypingEvents(req, from) {
-		return p.positionAfterEvents(to, from)
+	if added, newest := p.addTypingEvents(req, from); added {
+		return p.positionAfterEvents(to, newest)
 	}
 	if allowImmediate && req.Timeout <= 0 {
 		return to
@@ -77,8 +77,8 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 			return to
 		case <-ticker.C:
 			to = types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-			if p.addTypingEvents(req, from) {
-				return p.positionAfterEvents(to, from)
+			if added, newest := p.addTypingEvents(req, from); added {
+				return p.positionAfterEvents(to, newest)
 			}
 		}
 	}
@@ -86,22 +86,24 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 
 // positionAfterEvents returns the position to report once typing events were
 // added. The position is read before the events, so a typing update that lands
-// between the two reads leaves it at or below from even though the events are
-// newer. Reporting that would hand the client a position that did not advance,
-// so read it again; the events seen are then older than the returned position.
-func (p *TypingStreamProvider) positionAfterEvents(to, from types.StreamPosition) types.StreamPosition {
-	if to > from {
-		return to
+// between the two reads leaves it below the events just returned, and the
+// client would be handed a position that did not advance. newest is the
+// position of the newest update actually included in the response, so using it
+// never skips an update the response did not contain.
+func (p *TypingStreamProvider) positionAfterEvents(to, newest types.StreamPosition) types.StreamPosition {
+	if newest > to {
+		return newest
 	}
-	return types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
+	return to
 }
 
 func (p *TypingStreamProvider) addTypingEvents(
 	req *types.SyncRequest,
 	from types.StreamPosition,
-) bool {
+) (bool, types.StreamPosition) {
 	var err error
 	added := false
+	var newest types.StreamPosition
 	for roomID, membership := range req.Rooms {
 		if membership != spec.Join {
 			continue
@@ -112,9 +114,12 @@ func (p *TypingStreamProvider) addTypingEvents(
 			jr = types.NewJoinResponse()
 		}
 
-		if users, updated := p.EDUCache.GetTypingUsersIfUpdatedAfter(
+		if users, roomPosition, updated := p.EDUCache.GetTypingUsersAndPositionIfUpdatedAfter(
 			roomID, int64(from),
 		); updated {
+			if pos := types.StreamPosition(roomPosition); pos > newest {
+				newest = pos
+			}
 			typingUsers := make([]string, 0, len(users))
 			for i := range users {
 				// skip ignored user events
@@ -130,7 +135,7 @@ func (p *TypingStreamProvider) addTypingEvents(
 			})
 			if err != nil {
 				req.Log.WithError(err).Error("json.Marshal failed")
-				return added
+				return added, newest
 			}
 
 			jr.Ephemeral.Events = append(jr.Ephemeral.Events, ev)
@@ -138,5 +143,5 @@ func (p *TypingStreamProvider) addTypingEvents(
 			added = true
 		}
 	}
-	return added
+	return added, newest
 }

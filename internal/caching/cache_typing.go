@@ -77,12 +77,23 @@ func (t *EDUCache) GetTypingUsers(roomID string) []string {
 func (t *EDUCache) GetTypingUsersIfUpdatedAfter(
 	roomID string, position int64,
 ) (users []string, updated bool) {
+	users, _, updated = t.GetTypingUsersAndPositionIfUpdatedAfter(roomID, position)
+	return users, updated
+}
+
+// GetTypingUsersAndPositionIfUpdatedAfter is GetTypingUsersIfUpdatedAfter that
+// also returns the room's typing sync position read in the same critical
+// section as the users, so the position is never older than the users returned.
+func (t *EDUCache) GetTypingUsersAndPositionIfUpdatedAfter(
+	roomID string, position int64,
+) (users []string, roomPosition int64, updated bool) {
 	t.RLock()
 	defer t.RUnlock()
 
 	roomData, ok := t.data[roomID]
 	if ok && roomData.syncPosition > position {
 		updated = true
+		roomPosition = roomData.syncPosition
 		userSet := roomData.userSet
 		users = make([]string, 0, len(userSet))
 		for userID := range userSet {

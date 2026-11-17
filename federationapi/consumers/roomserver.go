@@ -621,9 +621,9 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 		return
 	}
 	log.WithFields(log.Fields{
-		"room_id":      roomID,
-		"users":        len(content.Push),
-		"destinations": len(joined),
+		"room_id":                roomID,
+		"users":                  len(content.Push),
+		"requested_destinations": len(joined),
 	}).Info("Queued room-join presence EDU")
 }
 

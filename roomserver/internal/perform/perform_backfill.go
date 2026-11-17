@@ -689,55 +689,29 @@ func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
 	if b.partialStateChecked {
 		return !b.partialState
 	}
+	return b.recheckLocalStateUsable(ctx)
+}
+
+// recheckLocalStateUsable bypasses the requester-lifetime cache and refreshes
+// it. Stored snapshots must still be complete at the point they are consumed.
+// Being unable to prove the snapshot complete is enough to distrust it;
+// federation is the safe answer.
+func (b *backfillRequester) recheckLocalStateUsable(ctx context.Context) bool {
 	b.partialStateChecked = true
 	if b.roomNID == 0 {
 		// Only requesters built directly by tests leave this unset.
+		b.partialState = false
 		return true
 	}
 	partial, err := b.db.IsRoomPartialState(ctx, b.roomNID)
-	if err != nil {
-		// Being unable to prove the snapshot complete is enough to distrust
-		// it; federation is the safe answer.
-		b.partialState = true
-		return false
-	}
-	if partial {
+	if err != nil || partial {
 		b.partialState = true
 		return false
 	}
 	incomplete, err := b.db.StateSnapshotsIncomplete(ctx, b.roomNID)
 	if err != nil {
-		b.partialState = true
-		return false
+		incomplete = true
 	}
-	b.partialState = incomplete
-	return !b.partialState
-}
-
-// recheckLocalStateUsable bypasses the requester-lifetime cache. Stored
-// snapshots must still be complete at the point they are consumed.
-func (b *backfillRequester) recheckLocalStateUsable(ctx context.Context) bool {
-	if b.roomNID == 0 {
-		return true
-	}
-	partial, err := b.db.IsRoomPartialState(ctx, b.roomNID)
-	if err != nil {
-		b.partialStateChecked = true
-		b.partialState = true
-		return false
-	}
-	if partial {
-		b.partialStateChecked = true
-		b.partialState = true
-		return false
-	}
-	incomplete, err := b.db.StateSnapshotsIncomplete(ctx, b.roomNID)
-	if err != nil {
-		b.partialStateChecked = true
-		b.partialState = true
-		return false
-	}
-	b.partialStateChecked = true
 	b.partialState = incomplete
 	return !incomplete
 }
