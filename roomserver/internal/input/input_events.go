@@ -237,8 +237,26 @@ func (r *Inputer) processRoomEvent(
 			logger.WithError(werr).Errorf("Failed to check if event %q is already seen", event.EventID())
 			return werr
 		case !wasRejected:
-			// We've seen this event before and it wasn't rejected so we
-			// should ignore it.
+			// A hash-pruned outlier can be received before a complete copy.
+			// Ignore duplicates as usual, but allow a complete copy through so
+			// StoreEvent can upgrade the stored JSON. A genuine redaction is
+			// identified by redacted_because and must remain authoritative.
+			if !event.Redacted() {
+				metadata, lookupErr := r.DB.EventNIDs(ctx, []string{event.EventID()})
+				if lookupErr != nil {
+					return fmt.Errorf("r.DB.EventNIDs: %w", lookupErr)
+				}
+				if stored, ok := metadata[event.EventID()]; ok {
+					events, eventsErr := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
+					if eventsErr != nil {
+						return fmt.Errorf("r.DB.Events: %w", eventsErr)
+					}
+					if len(events) == 1 && events[0].Redacted() &&
+						!gjson.GetBytes(events[0].JSON(), "unsigned.redacted_because").Exists() {
+						break
+					}
+				}
+			}
 			logger.Debugf("Already processed event %q, ignoring", event.EventID())
 			return nil
 		}

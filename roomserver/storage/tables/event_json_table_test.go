@@ -48,7 +48,7 @@ func Test_EventJSONTable(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			err := tab.InsertEventJSON(
 				context.Background(), nil, types.EventNID(i),
-				[]byte(fmt.Sprintf(`{"value":%d"}`, i)),
+				[]byte(fmt.Sprintf(`{"value":%d"}`, i)), false,
 			)
 			assert.NoError(t, err)
 		}

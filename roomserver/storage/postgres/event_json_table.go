@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS roomserver_event_json (
 
 const insertEventJSONSQL = "" +
 	"INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)" +
+	" ON CONFLICT (event_nid) DO UPDATE SET event_json = EXCLUDED.event_json" +
+	" WHERE NOT $3::boolean" +
+	" AND roomserver_event_json.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL"
+
+// overwriteEventJSONSQL is only used for redactions, which must replace an
+// event that is already stored in full.
+const overwriteEventJSONSQL = "" +
+	"INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)" +
 	" ON CONFLICT (event_nid) DO UPDATE SET event_json=$2"
 
 // Bulk event JSON lookup by numeric event ID.
@@ -48,6 +56,7 @@ const bulkSelectEventJSONSQL = "" +
 
 type eventJSONStatements struct {
 	insertEventJSONStmt     *sql.Stmt
+	overwriteEventJSONStmt  *sql.Stmt
 	bulkSelectEventJSONStmt *sql.Stmt
 }
 
@@ -61,14 +70,23 @@ func PrepareEventJSONTable(db *sql.DB) (tables.EventJSON, error) {
 
 	return s, sqlutil.StatementList{
 		{&s.insertEventJSONStmt, insertEventJSONSQL},
+		{&s.overwriteEventJSONStmt, overwriteEventJSONSQL},
 		{&s.bulkSelectEventJSONStmt, bulkSelectEventJSONSQL},
 	}.Prepare(db)
 }
 
 func (s *eventJSONStatements) InsertEventJSON(
-	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte, redacted bool,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertEventJSONStmt)
+	_, err := stmt.ExecContext(ctx, int64(eventNID), eventJSON, redacted)
+	return err
+}
+
+func (s *eventJSONStatements) OverwriteEventJSON(
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.overwriteEventJSONStmt)
 	_, err := stmt.ExecContext(ctx, int64(eventNID), eventJSON)
 	return err
 }

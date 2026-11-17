@@ -954,7 +954,7 @@ func (d *EventDatabase) storeEvent(
 			}
 		}
 
-		if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON()); err != nil {
+		if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
 			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
 		}
 
@@ -978,6 +978,9 @@ func (d *EventDatabase) storeEvent(
 	if err != nil {
 		return 0, types.StateAtEvent{}, fmt.Errorf("d.Writer.Do: %w", err)
 	}
+	// A duplicate may have upgraded a cached hash-pruned event to its complete
+	// JSON, so don't let readers keep serving the old copy.
+	d.Cache.InvalidateRoomServerEvent(eventNID)
 
 	// We should attempt to update the previous events table with any
 	// references that this new event makes. We do this using a latest
@@ -1279,9 +1282,9 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("redactedEvent.SetUnsignedField: %w", err)
 		}
 		// overwrite the eventJSON table
-		err = d.EventJSONTable.InsertEventJSON(ctx, txn, redactedEvent.EventNID, redactedEvent.JSON())
+		err = d.EventJSONTable.OverwriteEventJSON(ctx, txn, redactedEvent.EventNID, redactedEvent.JSON())
 		if err != nil {
-			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
+			return fmt.Errorf("d.EventJSONTable.OverwriteEventJSON: %w", err)
 		}
 
 		err = d.RedactionsTable.MarkRedactionValidated(ctx, txn, redactionEvent.EventID(), true)

@@ -22,8 +22,16 @@ type EventJSONPair struct {
 }
 
 type EventJSON interface {
-	// Insert the event JSON. On conflict, replace the event JSON with the new value (for redactions).
-	InsertEventJSON(ctx context.Context, tx *sql.Tx, eventNID types.EventNID, eventJSON []byte) error
+	// InsertEventJSON stores the JSON for a new event. If the event is already
+	// stored, redacted is true means the incoming copy was pruned (a failed
+	// content hash or a redacted event) and it must not replace the stored one;
+	// a full copy replaces the stored one unless that copy is itself the result
+	// of a redaction. Genuine redactions use OverwriteEventJSON.
+	InsertEventJSON(ctx context.Context, tx *sql.Tx, eventNID types.EventNID, eventJSON []byte, redacted bool) error
+	// OverwriteEventJSON unconditionally replaces the stored JSON. It is only
+	// for redactions, which must be able to prune an event already stored in
+	// full.
+	OverwriteEventJSON(ctx context.Context, tx *sql.Tx, eventNID types.EventNID, eventJSON []byte) error
 	BulkSelectEventJSON(ctx context.Context, tx *sql.Tx, eventNIDs []types.EventNID) ([]EventJSONPair, error)
 }
 
