@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/storage/postgres"
@@ -92,5 +93,34 @@ func Test_EventJSONTable(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+// A valid event can carry an escaped NUL in its content. Postgres cannot cast such JSON to
+// JSONB, so the duplicate-insert guard must not depend on parsing the stored payload.
+func Test_EventJSONTable_DuplicateInsertWithEscapedNUL(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		tab, close := mustCreateEventJSONTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+
+		nul := []byte(`{"content":{"body":"a\u0000b"},"type":"m.room.message"}`)
+		require.NoError(t, tab.InsertEventJSON(ctx, nil, 1, nul, false))
+		require.NoError(t, tab.InsertEventJSON(ctx, nil, 1, nul, false), "duplicate insert must not fail")
+
+		// A genuine redaction stays authoritative over a later complete copy.
+		redacted := []byte(`{"content":{},"unsigned":{"redacted_because":{"type":"m.room.redaction"}}}`)
+		require.NoError(t, tab.InsertEventJSON(ctx, nil, 2, redacted, false))
+		require.NoError(t, tab.InsertEventJSON(ctx, nil, 2, nul, false))
+		// A pruned copy is replaced by a complete one.
+		pruned := []byte(`{"content":{}}`)
+		require.NoError(t, tab.InsertEventJSON(ctx, nil, 3, pruned, false))
+		require.NoError(t, tab.InsertEventJSON(ctx, nil, 3, nul, false))
+
+		got, err := tab.BulkSelectEventJSON(ctx, nil, []types.EventNID{2, 3})
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		require.Equal(t, redacted, got[0].EventJSON)
+		require.Equal(t, nul, got[1].EventJSON)
 	})
 }

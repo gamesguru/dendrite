@@ -325,6 +325,11 @@ type Redactions interface {
 	SelectRedactionInfoByRedactionEventID(ctx context.Context, txn *sql.Tx, redactionEventID string) (*RedactionInfo, error)
 	// SelectRedactionInfoByEventBeingRedacted returns the redaction info for the given redacted event ID, or nil if there is no match.
 	SelectRedactionInfoByEventBeingRedacted(ctx context.Context, txn *sql.Tx, eventID string) (*RedactionInfo, error)
+	// HasValidatedRedactionForEvent reports whether any redaction of the given
+	// event has been validated. A redacted event may have more than one
+	// redaction row, so asking "is there one?" is not the same as reading the
+	// first row.
+	HasValidatedRedactionForEvent(ctx context.Context, txn *sql.Tx, eventID string) (bool, error)
 	// Mark this redaction event as having been validated. This means we have both sides of the redaction and have
 	// successfully redacted the event JSON.
 	MarkRedactionValidated(ctx context.Context, txn *sql.Tx, redactionEventID string, validated bool) error

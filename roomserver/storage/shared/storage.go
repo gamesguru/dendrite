@@ -921,7 +921,7 @@ func (d *EventDatabase) StoreOutlierEvent(
 }
 
 // warnIfHashPruned logs an event that arrives in redacted form with no recorded
-// redaction, which is the signature of a content-hash failure. It only records
+// redaction, which is one signature of a content-hash failure. It only records
 // receipt-time evidence: the event is still stored, and nothing here touches the
 // network because this runs inside a database transaction.
 func (d *EventDatabase) warnIfHashPruned(
@@ -933,9 +933,19 @@ func (d *EventDatabase) warnIfHashPruned(
 		return
 	}
 	// A genuine redaction we already know about explains the redacted form.
-	if info, err := d.RedactionsTable.SelectRedactionInfoByEventBeingRedacted(ctx, txn, event.EventID()); err == nil && info != nil && info.Validated {
+	// A redacted event can have several redaction rows, so ask whether any of
+	// them is validated rather than reading an arbitrary one.
+	validated, err := d.RedactionsTable.HasValidatedRedactionForEvent(ctx, txn, event.EventID())
+	if err != nil {
+		// Do not report a failed lookup as a content-hash failure.
+		logrus.WithError(err).WithField("event_id", event.EventID()).Debug("Failed to look up a redaction while classifying a redacted event")
 		return
 	}
+	if validated {
+		return
+	}
+	// A redaction we do not know about, or a content-hash failure: both leave a
+	// redacted event with no explanation. This is receipt-time evidence only.
 	logrus.WithFields(logrus.Fields{
 		"room_id":            event.RoomID().String(),
 		"event_id":           event.EventID(),
@@ -943,7 +953,7 @@ func (d *EventDatabase) warnIfHashPruned(
 		"room_version":       roomInfo.RoomVersion,
 		"is_outlier":         isOutlier,
 		"record_prev_events": recordPrevEvents,
-	}).Warn("Storing an event that failed its content hash and has no recorded redaction")
+	}).Warn("Storing a redacted event with no recorded redaction (possibly a content-hash failure)")
 }
 
 func (d *EventDatabase) storeEvent(

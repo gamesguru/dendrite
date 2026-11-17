@@ -88,3 +88,39 @@ func TestRedactionsTable(t *testing.T) {
 		assert.Nil(t, redactionInfo)
 	})
 }
+
+func TestHasValidatedRedactionForEventChecksAllRows(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		tab, close := mustCreateRedactionsTable(t, dbType)
+		defer close()
+
+		redactsEventID := "event-being-redacted"
+		unvalidated := tables.RedactionInfo{
+			RedactionEventID: "redaction-unvalidated",
+			RedactsEventID:   redactsEventID,
+			Validated:        false,
+		}
+		validated := tables.RedactionInfo{
+			RedactionEventID: "redaction-validated",
+			RedactsEventID:   redactsEventID,
+			Validated:        true,
+		}
+		assert.NoError(t, tab.InsertRedaction(ctx, nil, unvalidated))
+		assert.NoError(t, tab.InsertRedaction(ctx, nil, validated))
+
+		got, err := tab.HasValidatedRedactionForEvent(ctx, nil, redactsEventID)
+		assert.NoError(t, err)
+		assert.True(t, got, "a later validated redaction must count even if an unvalidated row was inserted first")
+
+		onlyUnvalidated := tables.RedactionInfo{
+			RedactionEventID: "only-unvalidated-redaction",
+			RedactsEventID:   "only-unvalidated-event",
+			Validated:        false,
+		}
+		assert.NoError(t, tab.InsertRedaction(ctx, nil, onlyUnvalidated))
+		got, err = tab.HasValidatedRedactionForEvent(ctx, nil, onlyUnvalidated.RedactsEventID)
+		assert.NoError(t, err)
+		assert.False(t, got, "an unvalidated row alone must not explain a redacted event")
+	})
+}

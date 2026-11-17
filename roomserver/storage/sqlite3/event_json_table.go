@@ -29,7 +29,7 @@ const insertEventJSONSQL = `
 	INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)
 	ON CONFLICT (event_nid) DO UPDATE SET event_json = excluded.event_json
 	WHERE $3 = 0
-	  AND json_extract(roomserver_event_json.event_json, '$.unsigned.redacted_because') IS NULL
+	  AND instr(roomserver_event_json.event_json, '"redacted_because":') = 0
 `
 
 // overwriteEventJSONSQL is only used for redactions, which must replace an

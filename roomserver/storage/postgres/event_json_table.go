@@ -34,11 +34,16 @@ CREATE TABLE IF NOT EXISTS roomserver_event_json (
 );
 `
 
+// The stored copy is only replaced when it carries no `unsigned.redacted_because`. A text
+// check is necessary because PostgreSQL's JSON types reject an escaped NUL (`\u0000`) in valid
+// event content. Unsigned is the last top-level key in canonical event JSON, so search only
+// that suffix and avoid matching arbitrary content fields with the same name.
 const insertEventJSONSQL = "" +
 	"INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)" +
 	" ON CONFLICT (event_nid) DO UPDATE SET event_json = EXCLUDED.event_json" +
 	" WHERE NOT $3::boolean" +
-	" AND roomserver_event_json.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL"
+	" AND (strpos(roomserver_event_json.event_json, '\"unsigned\":') = 0" +
+	" OR strpos(substring(roomserver_event_json.event_json FROM strpos(roomserver_event_json.event_json, '\"unsigned\":')), '\"redacted_because\":') = 0)"
 
 // overwriteEventJSONSQL is only used for redactions, which must replace an
 // event that is already stored in full.
