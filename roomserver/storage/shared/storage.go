@@ -920,6 +920,32 @@ func (d *EventDatabase) StoreOutlierEvent(
 	return d.storeEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected, false)
 }
 
+// warnIfHashPruned logs an event that arrives in redacted form with no recorded
+// redaction, which is the signature of a content-hash failure. It only records
+// receipt-time evidence: the event is still stored, and nothing here touches the
+// network because this runs inside a database transaction.
+func (d *EventDatabase) warnIfHashPruned(
+	ctx context.Context, txn *sql.Tx, event gomatrixserverlib.PDU,
+	roomInfo *types.RoomInfo, isOutlier, recordPrevEvents bool,
+) {
+	// Parsing discarded `unsigned`, so only the redactions table can explain this.
+	if !event.Redacted() {
+		return
+	}
+	// A genuine redaction we already know about explains the redacted form.
+	if info, err := d.RedactionsTable.SelectRedactionInfoByEventBeingRedacted(ctx, txn, event.EventID()); err == nil && info != nil {
+		return
+	}
+	logrus.WithFields(logrus.Fields{
+		"room_id":            event.RoomID().String(),
+		"event_id":           event.EventID(),
+		"sender":             event.SenderID(),
+		"room_version":       roomInfo.RoomVersion,
+		"is_outlier":         isOutlier,
+		"record_prev_events": recordPrevEvents,
+	}).Warn("Storing an event that failed its content hash and has no recorded redaction")
+}
+
 func (d *EventDatabase) storeEvent(
 	ctx context.Context, event gomatrixserverlib.PDU,
 	roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID,
@@ -953,6 +979,8 @@ func (d *EventDatabase) storeEvent(
 				return fmt.Errorf("d.EventsTable.SelectEvent: %w", err)
 			}
 		}
+
+		d.warnIfHashPruned(ctx, txn, event, roomInfo, isRejected, recordPrevEvents)
 
 		if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
 			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)

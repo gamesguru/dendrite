@@ -17,6 +17,7 @@ import (
 
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
@@ -1328,6 +1329,9 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	var event gomatrixserverlib.PDU
 	found := false
 	var validationError error
+	// A copy that looks hash-pruned is only used if no server has a full one.
+	var prunedEvent gomatrixserverlib.PDU
+	var prunedValidationError error
 	// Cap the number of servers to try per event to avoid exhaustively
 	// iterating hundreds of servers that don't have the event.
 	serversToTry := t.servers
@@ -1363,6 +1367,17 @@ serverLoop:
 				}
 				break serverLoop
 			case err == nil:
+				if eventutil.LooksHashPruned(txn.PDUs[0], event) {
+					// Prefer another server's copy; keep this one as a fallback.
+					t.log.WithFields(logrus.Fields{
+						"missing_event_id": missingEventID,
+						"server_name":      serverName,
+					}).Warn("Event from /event failed its content hash, trying another server")
+					if prunedEvent == nil {
+						prunedEvent = event
+					}
+					continue
+				}
 				found = true
 				break serverLoop
 			default:
@@ -1370,6 +1385,11 @@ serverLoop:
 				continue
 			}
 		}
+	}
+	if !found && prunedEvent != nil {
+		// Every server returned a pruned copy: store it rather than leave a hole in the DAG.
+		event, validationError = prunedEvent, prunedValidationError
+		found = true
 	}
 	if !found {
 		// Remember that this event is unfindable so we don't retry it

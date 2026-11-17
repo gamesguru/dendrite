@@ -23,6 +23,7 @@ import (
 
 	federationTypes "codefloe.com/pat-s/zendrite/federationapi/types"
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -795,7 +796,7 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 			if verErr != nil {
 				return nil, nil, verErr
 			}
-			ev = w.fetchSingleEvent(ctx, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
+			ev = w.fetchSingleEvent(ctx, logger, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
 			if ev == nil {
 				return nil, nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
 			}
@@ -1373,7 +1374,7 @@ func (w *PartialStateWorker) fetchMissingEventsParallel(
 			go func() {
 				defer wg.Done()
 				for eventID := range pending {
-					ev := w.fetchSingleEvent(ctx, origin, roomID, eventID, verImpl, primaryBypassBackoff, primaryServer, allServers)
+					ev := w.fetchSingleEvent(ctx, logger, origin, roomID, eventID, verImpl, primaryBypassBackoff, primaryServer, allServers)
 					if ev != nil {
 						mu.Lock()
 						batchEvents = append(batchEvents, ev)
@@ -1411,6 +1412,7 @@ func (w *PartialStateWorker) fetchMissingEventsParallel(
 // server failures gracefully.
 func (w *PartialStateWorker) fetchSingleEvent(
 	ctx context.Context,
+	logger *logrus.Entry,
 	origin spec.ServerName,
 	_ /* roomID */, eventID string,
 	verImpl gomatrixserverlib.IRoomVersion,
@@ -1418,9 +1420,25 @@ func (w *PartialStateWorker) fetchSingleEvent(
 	primaryServer spec.ServerName,
 	allServers []serverEntry,
 ) gomatrixserverlib.PDU {
+	// A copy that looks hash-pruned is only used if no server has a full one.
+	var pruned gomatrixserverlib.PDU
+	try := func(serverName spec.ServerName, bypassBackoff bool) gomatrixserverlib.PDU {
+		ev, hashPruned, err := w.getEventFromServer(ctx, origin, serverName, eventID, verImpl, bypassBackoff)
+		if err != nil {
+			return nil
+		}
+		if hashPruned {
+			logger.Warnf("Event %q from %q failed its content hash, trying another server", eventID, serverName)
+			if pruned == nil {
+				pruned = ev
+			}
+			return nil
+		}
+		return ev
+	}
+
 	// Try the primary server first.
-	ev, err := w.getEventFromServer(ctx, origin, primaryServer, eventID, verImpl, primaryBypassBackoff)
-	if err == nil {
+	if ev := try(primaryServer, primaryBypassBackoff); ev != nil {
 		return ev
 	}
 
@@ -1435,13 +1453,12 @@ func (w *PartialStateWorker) fetchSingleEvent(
 			break
 		}
 		tried++
-		ev, err = w.getEventFromServer(ctx, origin, entry.name, eventID, verImpl, entry.bypassBackoff)
-		if err == nil {
+		if ev := try(entry.name, entry.bypassBackoff); ev != nil {
 			return ev
 		}
 	}
 
-	return nil
+	return pruned
 }
 
 const eventFetchTimeout = 30 * time.Second
@@ -1452,7 +1469,7 @@ func (w *PartialStateWorker) getEventFromServer(
 	eventID string,
 	verImpl gomatrixserverlib.IRoomVersion,
 	bypassBackoff bool,
-) (gomatrixserverlib.PDU, error) {
+) (gomatrixserverlib.PDU, bool, error) {
 	reqctx, cancel := context.WithTimeout(ctx, eventFetchTimeout)
 	defer cancel()
 
@@ -1464,17 +1481,17 @@ func (w *PartialStateWorker) getEventFromServer(
 		txn, err = w.fedAPI.GetEvent(reqctx, origin, serverName, eventID)
 	}
 	if err != nil || len(txn.PDUs) == 0 {
-		return nil, fmt.Errorf("GetEvent %s from %s: %w", eventID, serverName, err)
+		return nil, false, fmt.Errorf("GetEvent %s from %s: %w", eventID, serverName, err)
 	}
 
 	ev, err := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
 	if err != nil {
-		return nil, fmt.Errorf("parse event %s from %s: %w", eventID, serverName, err)
+		return nil, false, fmt.Errorf("parse event %s from %s: %w", eventID, serverName, err)
 	}
 	if ev.EventID() != eventID {
-		return nil, fmt.Errorf("server %s returned event %s when %s was requested", serverName, ev.EventID(), eventID)
+		return nil, false, fmt.Errorf("server %s returned event %s when %s was requested", serverName, ev.EventID(), eventID)
 	}
-	return ev, nil
+	return ev, eventutil.LooksHashPruned(txn.PDUs[0], ev), nil
 }
 
 // applyState stores the fetched state and updates the room's current state.

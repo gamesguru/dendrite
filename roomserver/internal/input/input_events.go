@@ -1210,6 +1210,7 @@ func (r *Inputer) fetchAuthEvents(
 			}
 			requested[authEventID] = struct{}{}
 			var fetched gomatrixserverlib.PDU
+			var fetchedRaw []byte
 			for _, serverName := range servers {
 				txn, getErr := r.FSAPI.GetEvent(ctx, virtualHost, serverName, authEventID)
 				if getErr != nil || len(txn.PDUs) == 0 {
@@ -1222,14 +1223,24 @@ func (r *Inputer) fetchAuthEvents(
 					if parseErr != nil || parsed.EventID() != authEventID {
 						continue
 					}
-					res.AuthEvents = append(res.AuthEvents, spec.RawJSON(pdu))
-					fetched = parsed
+					if eventutil.LooksHashPruned(pdu, parsed) {
+						// Prefer another server's copy; keep the first as a fallback.
+						logger.Warnf("Auth event %q from %q failed its content hash, trying another server", authEventID, serverName)
+						if fetched == nil {
+							fetched, fetchedRaw = parsed, pdu
+						}
+						continue
+					}
+					fetched, fetchedRaw = parsed, pdu
 					foundRequestedEvent = true
 					break
 				}
 				if foundRequestedEvent {
 					break
 				}
+			}
+			if fetched != nil {
+				res.AuthEvents = append(res.AuthEvents, spec.RawJSON(fetchedRaw))
 			}
 			if fetched == nil {
 				unresolved[authEventID] = struct{}{}
