@@ -54,7 +54,7 @@ func KeepAliveDelivery(ctx context.Context, owner Ownership, msgs []*nats.Msg) f
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(DeferredProgressInterval)
+		ticker := time.NewTicker(KeepAliveInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -149,6 +149,9 @@ func ProgressOwned(owner Ownership, msg *nats.Msg) error {
 	}
 	return msg.InProgress()
 }
+
+// KeepAliveInterval is how often active handlers extend their deliveries.
+const KeepAliveInterval = HAConsumerAckWait / 5
 
 // DeferredProgressInterval is how often deferred deliveries are extended. It
 // is well inside HAConsumerAckWait so one lost ping cannot cause redelivery.

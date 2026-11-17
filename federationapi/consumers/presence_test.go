@@ -28,7 +28,7 @@ type stubPresenceStore struct {
 func (s *stubPresenceStore) GetJoinedHostsForRooms(
 	_ context.Context, _ []string, _, _ bool,
 ) ([]spec.ServerName, error) {
-	return s.hosts, s.err
+	return append([]spec.ServerName(nil), s.hosts...), s.err
 }
 
 type stubPresenceRSAPI struct {
@@ -358,8 +358,12 @@ func TestPresenceDropsSupersededAckThatFailedButKeepsWatermark(t *testing.T) {
 	consumer.ackPresence = func(*nats.Msg) error { return errors.New("ack failed") }
 
 	for i := 1; i <= 2; i++ {
+		presence := "online"
+		if i == 2 {
+			presence = "unavailable"
+		}
 		require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{
-			presenceSeqMessage("@alice:test", "online", int64(1000+i), uint64(i)),
+			presenceSeqMessage("@alice:test", presence, int64(1000+i), uint64(i)),
 		}))
 	}
 	// The failed superseded acknowledgement is left for JetStream redelivery,
@@ -367,6 +371,23 @@ func TestPresenceDropsSupersededAckThatFailedButKeepsWatermark(t *testing.T) {
 	update := consumer.pending["@alice:test"]
 	require.Len(t, update.acks, 1)
 	require.Equal(t, uint64(2), consumer.recentSequences["@alice:test"].sequence)
+
+	// A failed JetStream ack has no finite redelivery deadline. Even after the
+	// ordinary watermark TTL, pruning must not allow the old update back in.
+	watermark := consumer.recentSequences["@alice:test"]
+	watermark.expiresAt = time.Now().Add(-time.Second)
+	consumer.recentSequences["@alice:test"] = watermark
+	consumer.lastSequencePrune = time.Time{}
+	consumer.pendingMu.Lock()
+	consumer.pruneRecentPresenceSequences(time.Now())
+	consumer.pendingMu.Unlock()
+	require.Contains(t, consumer.recentSequences, "@alice:test")
+	consumer.ackPresence = func(*nats.Msg) error { return nil }
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{
+		presenceSeqMessage("@alice:test", "online", 1001, 1),
+	}))
+	require.Equal(t, "unavailable", consumer.pending["@alice:test"].presence)
+	require.NotContains(t, consumer.failedSuperseded, "@alice:test")
 }
 
 func TestPresenceIgnoresStaleRedelivery(t *testing.T) {
@@ -403,8 +424,10 @@ func TestPresenceIgnoresStaleRedeliveryAfterFlush(t *testing.T) {
 	require.Empty(t, consumer.pending)
 
 	staleRedelivery := presenceSeqMessage("@alice:test", "online", 1000, 3)
-	require.Equal(t, jetstream.AckActionAck, consumer.onMessage(t.Context(), []*nats.Msg{staleRedelivery}))
+	// The failed ack is retried directly and deferred from the worker's ack path.
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{staleRedelivery}))
 	require.Empty(t, consumer.pending, "a stale redelivery after flush must not restore old presence")
+	require.NotContains(t, consumer.failedSuperseded, "@alice:test")
 }
 
 func TestPresenceDefersRedeliveryOfCurrentPendingMessage(t *testing.T) {

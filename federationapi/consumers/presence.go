@@ -54,6 +54,7 @@ type OutputPresenceConsumer struct {
 	pendingMu               sync.Mutex
 	pending                 map[string]pendingPresence
 	recentSequences         map[string]recentPresenceSequence
+	failedSuperseded        map[string]map[uint64]struct{}
 	lastSequencePrune       time.Time
 	nextGeneration          uint64
 	nextOrder               uint64
@@ -78,6 +79,9 @@ type pendingPresence struct {
 type recentPresenceSequence struct {
 	sequence  uint64
 	expiresAt time.Time
+	// Retain a watermark while a superseded message is still unacknowledged.
+	// JetStream can redeliver it after an arbitrarily long outage.
+	retain bool
 }
 
 type pendingPresenceAck struct {
@@ -227,7 +231,7 @@ func (t *OutputPresenceConsumer) pruneRecentPresenceSequences(now time.Time) {
 		return
 	}
 	for userID, sequence := range t.recentSequences {
-		if !sequence.expiresAt.After(now) {
+		if !sequence.retain && !sequence.expiresAt.After(now) {
 			delete(t.recentSequences, userID)
 		}
 	}
@@ -517,7 +521,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	t.pendingMu.Lock()
 	now := time.Now()
 	t.pruneRecentPresenceSequences(now)
-	if recent, ok := t.recentSequences[userID]; ok && !recent.expiresAt.After(now) {
+	if recent, ok := t.recentSequences[userID]; ok && !recent.retain && !recent.expiresAt.After(now) {
 		delete(t.recentSequences, userID)
 	}
 	recent, hasRecent := t.recentSequences[userID]
@@ -537,6 +541,28 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 				return jetstream.AckActionDefer
 			}
 		}
+		if _, failedAck := t.failedSuperseded[userID][streamSeq]; failedAck {
+			// Retry this exact acknowledgement ourselves so we can keep the
+			// watermark until JetStream confirms the formerly failed ack.
+			t.pendingMu.Unlock()
+			ackErr := t.ackPendingPresence(&pendingPresenceAck{msg: msg})
+			if ackErr == nil {
+				t.pendingMu.Lock()
+				delete(t.failedSuperseded[userID], streamSeq)
+				if len(t.failedSuperseded[userID]) == 0 {
+					delete(t.failedSuperseded, userID)
+					if r, ok := t.recentSequences[userID]; ok {
+						r.retain = false
+						r.expiresAt = time.Now().Add(t.sequenceWatermarkRetention())
+						t.recentSequences[userID] = r
+					}
+				}
+				t.pendingMu.Unlock()
+			} else {
+				log.WithError(ackErr).WithField("user_id", userID).Warn("failed to acknowledge redelivered superseded presence update")
+			}
+			return jetstream.AckActionDefer
+		}
 		t.pendingMu.Unlock()
 		return jetstream.AckActionAck
 	}
@@ -544,8 +570,9 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 		if t.recentSequences == nil {
 			t.recentSequences = make(map[string]recentPresenceSequence)
 		}
+		retain := hasRecent && recent.retain
 		t.recentSequences[userID] = recentPresenceSequence{
-			sequence: streamSeq, expiresAt: now.Add(t.sequenceWatermarkRetention()),
+			sequence: streamSeq, expiresAt: now.Add(t.sequenceWatermarkRetention()), retain: retain,
 		}
 	}
 	t.nextGeneration++
@@ -567,6 +594,24 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	for _, old := range superseded {
 		if err := t.ackPendingPresence(old); err != nil {
 			log.WithError(err).WithField("user_id", userID).Warn("failed to acknowledge superseded presence update; leaving it for redelivery")
+			// Keep an exact record until that message's redelivery is successfully
+			// acknowledged; otherwise a long broker outage could outlive the TTL.
+			t.pendingMu.Lock()
+			seq := t.streamSequence(old.msg)
+			if seq != 0 {
+				if t.failedSuperseded == nil {
+					t.failedSuperseded = make(map[string]map[uint64]struct{})
+				}
+				if t.failedSuperseded[userID] == nil {
+					t.failedSuperseded[userID] = make(map[uint64]struct{})
+				}
+				t.failedSuperseded[userID][seq] = struct{}{}
+			}
+			if r, ok := t.recentSequences[userID]; ok && seq != 0 {
+				r.retain = true
+				t.recentSequences[userID] = r
+			}
+			t.pendingMu.Unlock()
 		}
 	}
 

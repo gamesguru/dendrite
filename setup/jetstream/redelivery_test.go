@@ -202,7 +202,7 @@ func TestDeferredMessageIsNeitherAckedNorNaked(t *testing.T) {
 		t.Fatal("message was never delivered")
 	}
 
-	// A Nak would redeliver within redeliveryMaxDelay and an Ack would clear
+	// A Nak would redeliver within redeliveryBaseDelay and an Ack would clear
 	// the pending count, so check both after a settle period.
 	time.Sleep(3 * time.Second)
 	mu.Lock()
