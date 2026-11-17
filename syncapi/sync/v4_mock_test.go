@@ -196,6 +196,9 @@ func (m *mockSnapshot) RecentEvents(ctx context.Context, roomIDs []string, r typ
 
 		filtered := make([]types.StreamEvent, 0, len(all.Events))
 		for _, ev := range all.Events {
+			if onlySyncEvents && ev.ExcludeFromSync {
+				continue
+			}
 			if ev.StreamPosition > lo && ev.StreamPosition <= hi {
 				filtered = append(filtered, ev)
 			}
