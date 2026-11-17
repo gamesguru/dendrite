@@ -27,9 +27,8 @@ func (p *TypingStreamProvider) CompleteSync(
 	snapshot storage.DatabaseTransaction,
 	req *types.SyncRequest,
 ) types.StreamPosition {
-	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-	_, _ = p.addTypingEvents(req, 0)
-	return to
+	_, position := p.addTypingEvents(req, 0)
+	return position
 }
 
 func (p *TypingStreamProvider) IncrementalSync(
@@ -38,8 +37,8 @@ func (p *TypingStreamProvider) IncrementalSync(
 	req *types.SyncRequest,
 	from, to types.StreamPosition,
 ) types.StreamPosition {
-	if added, _ := p.addTypingEvents(req, from); added {
-		return to
+	if added, latest := p.addTypingEvents(req, from); added {
+		return latest
 	}
 	if to > from {
 		return to
@@ -54,8 +53,8 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 	allowImmediate bool,
 ) types.StreamPosition {
 	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-	if added, oldest := p.addTypingEvents(req, from); added {
-		return p.positionAfterEvents(to, from, oldest)
+	if added, latest := p.addTypingEvents(req, from); added {
+		return latest
 	}
 	if allowImmediate && req.Timeout <= 0 {
 		return to
@@ -77,37 +76,36 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 			return to
 		case <-ticker.C:
 			to = types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-			if added, oldest := p.addTypingEvents(req, from); added {
-				return p.positionAfterEvents(to, from, oldest)
+			if added, latest := p.addTypingEvents(req, from); added {
+				return latest
 			}
 		}
 	}
-}
-
-// positionAfterEvents returns the position to report once typing events were
-// added. The position read before the events is safe to report: every update
-// the response lacks happened after it. It can sit at or below from when an
-// update landed between the two reads, and the client would then be handed a
-// position that did not advance. In that case use oldest, the lowest room
-// position among the events returned. It is above from, and a lower value only
-// redelivers an event, which is harmless for ephemeral typing; the highest
-// position could skip an update in another room.
-func (p *TypingStreamProvider) positionAfterEvents(to, from, oldest types.StreamPosition) types.StreamPosition {
-	if to > from {
-		return to
-	}
-	return oldest
 }
 
 func (p *TypingStreamProvider) addTypingEvents(
 	req *types.SyncRequest,
 	from types.StreamPosition,
 ) (bool, types.StreamPosition) {
-	var err error
-	added := false
-	var oldest types.StreamPosition
+	roomIDs := make([]string, 0, len(req.Rooms))
 	for roomID, membership := range req.Rooms {
-		if membership != spec.Join {
+		if membership == spec.Join {
+			roomIDs = append(roomIDs, roomID)
+		}
+	}
+
+	// Snapshot the typing state and its latest position together. A per-room
+	// scan could miss an update to a room it already visited while still seeing
+	// a later update in another room; reporting any position from that scan
+	// would then skip the missed room. The snapshot's latest position is safe:
+	// every update above it landed after the snapshot.
+	typing, latest := p.EDUCache.TypingSnapshot(roomIDs, int64(from))
+	latestPosition := types.StreamPosition(latest)
+
+	added := false
+	for _, roomID := range roomIDs {
+		users, ok := typing[roomID]
+		if !ok {
 			continue
 		}
 
@@ -116,34 +114,28 @@ func (p *TypingStreamProvider) addTypingEvents(
 			jr = types.NewJoinResponse()
 		}
 
-		if users, roomPosition, updated := p.EDUCache.GetTypingUsersAndPositionIfUpdatedAfter(
-			roomID, int64(from),
-		); updated {
-			if pos := types.StreamPosition(roomPosition); oldest == 0 || pos < oldest {
-				oldest = pos
+		typingUsers := make([]string, 0, len(users))
+		for _, userID := range users {
+			// skip ignored user events
+			if _, ok := req.IgnoredUsers.List[userID]; !ok {
+				typingUsers = append(typingUsers, userID)
 			}
-			typingUsers := make([]string, 0, len(users))
-			for i := range users {
-				// skip ignored user events
-				if _, ok := req.IgnoredUsers.List[users[i]]; !ok {
-					typingUsers = append(typingUsers, users[i])
-				}
-			}
-			ev := synctypes.ClientEvent{
-				Type: spec.MTyping,
-			}
-			ev.Content, err = json.Marshal(map[string]any{
-				"user_ids": typingUsers,
-			})
-			if err != nil {
-				req.Log.WithError(err).Error("json.Marshal failed")
-				return added, oldest
-			}
-
-			jr.Ephemeral.Events = append(jr.Ephemeral.Events, ev)
-			req.Response.Rooms.Join[roomID] = jr
-			added = true
 		}
+		ev := synctypes.ClientEvent{
+			Type: spec.MTyping,
+		}
+		var err error
+		ev.Content, err = json.Marshal(map[string]any{
+			"user_ids": typingUsers,
+		})
+		if err != nil {
+			req.Log.WithError(err).Error("json.Marshal failed")
+			return added, latestPosition
+		}
+
+		jr.Ephemeral.Events = append(jr.Ephemeral.Events, ev)
+		req.Response.Rooms.Join[roomID] = jr
+		added = true
 	}
-	return added, oldest
+	return added, latestPosition
 }

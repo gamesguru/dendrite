@@ -104,6 +104,32 @@ func (t *EDUCache) GetTypingUsersAndPositionIfUpdatedAfter(
 	return
 }
 
+// TypingSnapshot returns the typing users in the given rooms whose position is
+// after position, plus the cache's latest position. Everything is read under
+// one lock, so the cursor and the users describe the same point in time: an
+// update that is missing from the snapshot always has a position above the
+// returned latest. A cursor at latest therefore cannot skip it, even when the
+// update lands in a room that a per-room scan would already have passed.
+func (t *EDUCache) TypingSnapshot(roomIDs []string, position int64) (map[string][]string, int64) {
+	t.RLock()
+	defer t.RUnlock()
+
+	latest := t.latestSyncPosition
+	users := make(map[string][]string, len(roomIDs))
+	for _, roomID := range roomIDs {
+		roomData, ok := t.data[roomID]
+		if !ok || roomData.syncPosition <= position {
+			continue
+		}
+		list := make([]string, 0, len(roomData.userSet))
+		for userID := range roomData.userSet {
+			list = append(list, userID)
+		}
+		users[roomID] = list
+	}
+	return users, latest
+}
+
 // AddTypingUser sets an user as typing in a room.
 // Expire is the time when the user typing should time out.
 // If expire is nil, defaultTypingTimeout is assumed.

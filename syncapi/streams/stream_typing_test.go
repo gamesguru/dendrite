@@ -120,19 +120,8 @@ func TestTypingStreamProviderImmediateSyncDoesNotWait(t *testing.T) {
 	}
 }
 
-// A typing update can land between reading the stream position and reading the
-// events. The position handed back must not stay at the stale one.
-func TestTypingStreamProviderPositionAfterEventsAdvances(t *testing.T) {
-	provider := &TypingStreamProvider{EDUCache: caching.NewTypingCache()}
-
-	if got := provider.positionAfterEvents(3, 3, 4); got != 4 {
-		t.Fatalf("expected the oldest event position 4 when the read position did not advance, got %d", got)
-	}
-	if got := provider.positionAfterEvents(5, 3, 7); got != 5 {
-		t.Fatalf("expected the earlier read position to be kept, got %d", got)
-	}
-}
-
+// A typing update that lands after the cursor was read is still included in
+// the snapshot, and the returned cursor covers it.
 func TestTypingStreamProviderPositionIncludesInterleavedTypingUpdate(t *testing.T) {
 	const roomID = "!room:test"
 	const userID = "@alice:test"
@@ -147,44 +136,93 @@ func TestTypingStreamProviderPositionIncludesInterleavedTypingUpdate(t *testing.
 	}
 
 	// Reproduce waitForTypingEvents' read order: the global position is read,
-	// then a typing update lands before the room snapshot is read.
-	to := types.StreamPosition(cache.GetLatestSyncPosition())
+	// then a typing update lands before the snapshot is taken.
+	_ = cache.GetLatestSyncPosition()
 	updatePosition := cache.AddTypingUser(userID, roomID, nil)
-	added, oldest := provider.addTypingEvents(req, from)
+	added, latest := provider.addTypingEvents(req, from)
 	if !added {
 		t.Fatal("expected the interleaved typing update in the response")
 	}
-	if got := provider.positionAfterEvents(to, from, oldest); got != types.StreamPosition(updatePosition) {
-		t.Fatalf("expected returned position %d to cover the included update, got %d", updatePosition, got)
+	if latest != types.StreamPosition(updatePosition) {
+		t.Fatalf("expected returned position %d to cover the included update, got %d", updatePosition, latest)
 	}
 	if got := req.Response.Rooms.Join[roomID].Ephemeral.Events; len(got) != 1 {
 		t.Fatalf("expected one typing event, got %d", len(got))
 	}
 }
 
-// With typing updates in several rooms, the fallback position is the lowest
-// room position that produced an event, so no other room's update is skipped.
-func TestTypingStreamProviderAddTypingEventsReportsOldestPosition(t *testing.T) {
+// Updates to two joined rooms after one sync's snapshot must both be delivered
+// on the next sync. The earlier room's update must not be skipped when the
+// later room's position advances the shared cursor.
+func TestTypingStreamProviderDoesNotSkipEarlierRoomUpdate(t *testing.T) {
 	const roomA, roomB = "!a:test", "!b:test"
 
 	cache := caching.NewTypingCache()
 	provider := &TypingStreamProvider{EDUCache: cache}
+	rooms := map[string]string{roomA: spec.Join, roomB: spec.Join}
+	firstReq := &types.SyncRequest{
+		Context:  context.Background(),
+		Response: types.NewResponse(),
+		Rooms:    rooms,
+	}
+	added, cursor := provider.addTypingEvents(firstReq, 0)
+	if added || cursor != 0 {
+		t.Fatalf("expected an empty initial snapshot at 0, got added=%v cursor=%d", added, cursor)
+	}
+
 	posA := cache.AddTypingUser("@alice:test", roomA, nil)
 	posB := cache.AddTypingUser("@bob:test", roomB, nil)
 	if posA >= posB {
 		t.Fatalf("expected increasing positions, got %d then %d", posA, posB)
 	}
+	if int64(cursor) >= posA {
+		t.Fatalf("pre-update cursor %d must not cover room A's update at %d", cursor, posA)
+	}
+
+	secondReq := &types.SyncRequest{
+		Context:  context.Background(),
+		Response: types.NewResponse(),
+		Rooms:    rooms,
+	}
+	added, next := provider.addTypingEvents(secondReq, cursor)
+	if !added {
+		t.Fatal("expected the next sync to include typing updates")
+	}
+	if next != types.StreamPosition(posB) {
+		t.Fatalf("expected next cursor %d, got %d", posB, next)
+	}
+	for _, roomID := range []string{roomA, roomB} {
+		if got := secondReq.Response.Rooms.Join[roomID].Ephemeral.Events; len(got) != 1 {
+			t.Fatalf("%s: expected its typing update in the next sync, got %d events", roomID, len(got))
+		}
+	}
+}
+
+// With typing updates in several rooms, the cursor is the snapshot's latest
+// position and both rooms are delivered.
+func TestTypingStreamProviderAddTypingEventsCoversAllRooms(t *testing.T) {
+	const roomA, roomB = "!a:test", "!b:test"
+
+	cache := caching.NewTypingCache()
+	provider := &TypingStreamProvider{EDUCache: cache}
+	cache.AddTypingUser("@alice:test", roomA, nil)
+	posB := cache.AddTypingUser("@bob:test", roomB, nil)
 
 	req := &types.SyncRequest{
 		Context:  context.Background(),
 		Response: types.NewResponse(),
 		Rooms:    map[string]string{roomA: spec.Join, roomB: spec.Join},
 	}
-	added, oldest := provider.addTypingEvents(req, 0)
+	added, latest := provider.addTypingEvents(req, 0)
 	if !added {
 		t.Fatal("expected typing events to be added")
 	}
-	if int64(oldest) != posA {
-		t.Fatalf("expected the oldest position %d, got %d", posA, oldest)
+	if int64(latest) != posB {
+		t.Fatalf("expected the snapshot position %d, got %d", posB, latest)
+	}
+	for _, roomID := range []string{roomA, roomB} {
+		if got := req.Response.Rooms.Join[roomID].Ephemeral.Events; len(got) != 1 {
+			t.Fatalf("%s: expected one typing event, got %d", roomID, len(got))
+		}
 	}
 }
