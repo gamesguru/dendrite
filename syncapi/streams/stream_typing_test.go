@@ -73,7 +73,7 @@ func TestTypingStreamProviderIncrementalSyncWaitsForPendingTyping(t *testing.T) 
 		Context:  context.Background(),
 		Response: types.NewResponse(),
 		Rooms:    map[string]string{roomID: spec.Join},
-		Timeout:  time.Second,
+		Timeout:  3 * time.Second,
 	}
 
 	// The interval is normally 50ms. A loaded CI machine can delay the
