@@ -1133,27 +1133,30 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			lastErr = fmt.Errorf("signature check from %s failed: %w", server, err)
 			continue
 		}
-		if !gjson.GetBytes(ev.JSON(), "signatures").IsObject() || len(gjson.GetBytes(ev.JSON(), "signatures").Map()) == 0 {
-			lastErr = fmt.Errorf("%s returned a copy without signatures", server)
+		// Content comes from the fetched copy. unsigned and signatures are not
+		// part of the event's identity: keep this store's own. Redaction keeps
+		// the original signatures, so the local ones sign the restored content.
+		merged := ev.JSON()
+		var merr error
+		for _, key := range []string{"unsigned", "signatures"} {
+			if local := gjson.GetBytes(have[0].JSON(), key); local.Exists() {
+				merged, merr = sjson.SetRawBytes(merged, key, []byte(local.Raw))
+			} else if key == "unsigned" {
+				merged, merr = sjson.DeleteBytes(merged, key)
+			}
+			if merr != nil {
+				return "", fmt.Errorf("merging %s: %w", key, merr)
+			}
+		}
+		if !gjson.GetBytes(merged, "signatures").IsObject() {
+			lastErr = fmt.Errorf("neither the stored nor the fetched copy has signatures")
 			continue
-		}
-		// unsigned is not part of the event's identity and differs per server:
-		// keep this store's own and drop the remote's.
-		merged, merr := sjson.DeleteBytes(ev.JSON(), "unsigned")
-		if local := gjson.GetBytes(have[0].JSON(), "unsigned"); merr == nil && local.Exists() {
-			merged, merr = sjson.SetRawBytes(merged, "unsigned", []byte(local.Raw))
-		}
-		if merr != nil {
-			return "", fmt.Errorf("merging unsigned: %w", merr)
 		}
 		if ev, perr = verImpl.NewEventFromUntrustedJSON(merged); perr != nil || ev.Redacted() {
 			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %v", server, perr)
 			continue
 		}
 		signed := RefetchOutcomeRefetched
-		if verr := r.verifyAdminEventSignatures(ctx, ev); verr != nil {
-			signed = RefetchOutcomeSigUnverified
-		}
 		if dryRun {
 			return "would_" + signed, nil
 		}
