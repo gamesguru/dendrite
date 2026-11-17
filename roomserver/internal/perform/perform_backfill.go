@@ -655,6 +655,11 @@ func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID
 	if err != nil {
 		return nil, false
 	}
+	// The room may have entered partial state while the snapshot was loading.
+	// Re-read the durable flags before trusting entries from the snapshot.
+	if !b.recheckLocalStateUsable(ctx) {
+		return nil, false
+	}
 
 	eventNIDs := make([]types.EventNID, 0, len(entries))
 	for _, entry := range entries {
@@ -707,6 +712,34 @@ func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
 	}
 	b.partialState = incomplete
 	return !b.partialState
+}
+
+// recheckLocalStateUsable bypasses the requester-lifetime cache. Stored
+// snapshots must still be complete at the point they are consumed.
+func (b *backfillRequester) recheckLocalStateUsable(ctx context.Context) bool {
+	if b.roomNID == 0 {
+		return true
+	}
+	partial, err := b.db.IsRoomPartialState(ctx, b.roomNID)
+	if err != nil {
+		b.partialStateChecked = true
+		b.partialState = true
+		return false
+	}
+	if partial {
+		b.partialStateChecked = true
+		b.partialState = true
+		return false
+	}
+	incomplete, err := b.db.StateSnapshotsIncomplete(ctx, b.roomNID)
+	if err != nil {
+		b.partialStateChecked = true
+		b.partialState = true
+		return false
+	}
+	b.partialStateChecked = true
+	b.partialState = incomplete
+	return !incomplete
 }
 
 // hydrateStateEvents loads the events for ids that are not already known to

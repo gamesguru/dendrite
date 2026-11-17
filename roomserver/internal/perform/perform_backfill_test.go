@@ -252,7 +252,9 @@ type storedEventsDB struct {
 	partial bool
 	// incomplete is the durable marker left behind when a room leaves partial
 	// state, whether by resync or by an abandoned join.
-	incomplete bool
+	incomplete                bool
+	incompleteChecks          int
+	incompleteAfterFirstCheck bool
 }
 
 func (d *storedEventsDB) IsRoomPartialState(context.Context, types.RoomNID) (bool, error) {
@@ -260,7 +262,8 @@ func (d *storedEventsDB) IsRoomPartialState(context.Context, types.RoomNID) (boo
 }
 
 func (d *storedEventsDB) StateSnapshotsIncomplete(context.Context, types.RoomNID) (bool, error) {
-	return d.incomplete, nil
+	d.incompleteChecks++
+	return d.incomplete || (d.incompleteAfterFirstCheck && d.incompleteChecks > 1), nil
 }
 
 func newStoredEventsDB(events ...gomatrixserverlib.PDU) *storedEventsDB {
@@ -427,6 +430,39 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, got)
 	require.Equal(t, 1, fed.stateIDLookups)
+}
+
+func TestStateIDsBeforeEventRechecksSnapshotCompletenessBeforeReuse(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	member := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["$unknown1","$unknown2"],"auth_events":[]}`)
+
+	db := newStoredEventsDB(member, target)
+	db.beforeState = map[string]types.StateSnapshotNID{target.EventID(): 7}
+	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
+	db.incompleteAfterFirstCheck = true
+	fed := &countingFedClient{}
+	requester := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
+		db:                      db,
+		roomNID:                 1,
+		roomVersion:             gomatrixserverlib.RoomVersionV10,
+		eventIDToBeforeStateIDs: map[string][]string{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{},
+	}
+
+	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
+	require.Error(t, err)
+	require.Nil(t, got, "a snapshot must not be reused if it becomes incomplete while loading")
+	require.Equal(t, 1, fed.stateIDLookups, "unsafe local state must fall back to federation")
 }
 
 // An event whose single parent is stored, with a before-state snapshot, from an

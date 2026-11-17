@@ -379,10 +379,10 @@ func (t *OutputPresenceConsumer) flushPending() {
 	}
 
 	log.WithFields(log.Fields{
-		"users":        len(snapshot),
-		"destinations": queued,
-		"attempted":    len(keys),
-	}).Debug("Queued presence EDUs")
+		"users":     len(snapshot),
+		"queued":    queued,
+		"attempted": len(keys),
+	}).Debug("Presence EDU flush complete")
 
 	acked := make(map[*nats.Msg]struct{})
 	ackFailed := make(map[string]bool)

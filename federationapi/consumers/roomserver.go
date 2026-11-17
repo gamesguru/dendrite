@@ -618,7 +618,13 @@ func (s *OutputRoomEventConsumer) sendPresence(roomID string, addedJoined []type
 	}
 	if err := s.queues.SendEDU(edu, s.cfg.Matrix.ServerName, joined); err != nil {
 		log.WithError(err).Error("failed to send EDU")
+		return
 	}
+	log.WithFields(log.Fields{
+		"room_id":      roomID,
+		"users":        len(content.Push),
+		"destinations": len(joined),
+	}).Info("Queued room-join presence EDU")
 }
 
 // roomPurged reports whether the roomserver no longer knows about roomID, which

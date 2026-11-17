@@ -296,11 +296,7 @@ func (oqs *OutgoingQueues) SendEDU(
 			eduLog = eduLog.WithField("destination", destination)
 		}
 	}
-	if e.Type == spec.MPresence {
-		// Presence is flushed in a burst of one EDU per destination, and the
-		// presence consumer logs one summary for the burst.
-		eduLog.Debug("Sending EDU event")
-	} else {
+	if e.Type != spec.MPresence {
 		eduLog.Info("Sending EDU event")
 	}
 
