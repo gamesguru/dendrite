@@ -106,10 +106,14 @@ func (t *EDUCache) GetTypingUsersAndPositionIfUpdatedAfter(
 
 // TypingSnapshot returns the typing users in the given rooms whose position is
 // after position, plus the cache's latest position. Everything is read under
-// one lock, so the cursor and the users describe the same point in time: an
-// update that is missing from the snapshot always has a position above the
-// returned latest. A cursor at latest therefore cannot skip it, even when the
-// update lands in a room that a per-room scan would already have passed.
+// one lock, so the cursor and the users describe the same point in time.
+//
+// Every update after position in the requested rooms is included. Any update
+// made after the snapshot has a position above the returned latest, so a
+// cursor at latest cannot skip it, even when it lands in a room that a
+// per-room scan would already have passed. Updates at or below position, which
+// the caller has already seen, and updates in rooms not in roomIDs are not
+// included, though their positions may be at or below latest.
 func (t *EDUCache) TypingSnapshot(roomIDs []string, position int64) (map[string][]string, int64) {
 	t.RLock()
 	defer t.RUnlock()
