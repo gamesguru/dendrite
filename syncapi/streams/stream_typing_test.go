@@ -125,10 +125,10 @@ func TestTypingStreamProviderImmediateSyncDoesNotWait(t *testing.T) {
 func TestTypingStreamProviderPositionAfterEventsAdvances(t *testing.T) {
 	provider := &TypingStreamProvider{EDUCache: caching.NewTypingCache()}
 
-	if got := provider.positionAfterEvents(3, 5); got != 5 {
-		t.Fatalf("expected the newest event position 5, got %d", got)
+	if got := provider.positionAfterEvents(3, 3, 4); got != 4 {
+		t.Fatalf("expected the oldest event position 4 when the read position did not advance, got %d", got)
 	}
-	if got := provider.positionAfterEvents(5, 3); got != 5 {
-		t.Fatalf("expected the later read position to be kept, got %d", got)
+	if got := provider.positionAfterEvents(5, 3, 7); got != 5 {
+		t.Fatalf("expected the earlier read position to be kept, got %d", got)
 	}
 }

@@ -54,8 +54,8 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 	allowImmediate bool,
 ) types.StreamPosition {
 	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-	if added, newest := p.addTypingEvents(req, from); added {
-		return p.positionAfterEvents(to, newest)
+	if added, oldest := p.addTypingEvents(req, from); added {
+		return p.positionAfterEvents(to, from, oldest)
 	}
 	if allowImmediate && req.Timeout <= 0 {
 		return to
@@ -77,24 +77,26 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 			return to
 		case <-ticker.C:
 			to = types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
-			if added, newest := p.addTypingEvents(req, from); added {
-				return p.positionAfterEvents(to, newest)
+			if added, oldest := p.addTypingEvents(req, from); added {
+				return p.positionAfterEvents(to, from, oldest)
 			}
 		}
 	}
 }
 
 // positionAfterEvents returns the position to report once typing events were
-// added. The position is read before the events, so a typing update that lands
-// between the two reads leaves it below the events just returned, and the
-// client would be handed a position that did not advance. newest is the
-// position of the newest update actually included in the response, so using it
-// never skips an update the response did not contain.
-func (p *TypingStreamProvider) positionAfterEvents(to, newest types.StreamPosition) types.StreamPosition {
-	if newest > to {
-		return newest
+// added. The position read before the events is safe to report: every update
+// the response lacks happened after it. It can sit at or below from when an
+// update landed between the two reads, and the client would then be handed a
+// position that did not advance. In that case use oldest, the lowest room
+// position among the events returned. It is above from, and a lower value only
+// redelivers an event, which is harmless for ephemeral typing; the highest
+// position could skip an update in another room.
+func (p *TypingStreamProvider) positionAfterEvents(to, from, oldest types.StreamPosition) types.StreamPosition {
+	if to > from {
+		return to
 	}
-	return to
+	return oldest
 }
 
 func (p *TypingStreamProvider) addTypingEvents(
@@ -103,7 +105,7 @@ func (p *TypingStreamProvider) addTypingEvents(
 ) (bool, types.StreamPosition) {
 	var err error
 	added := false
-	var newest types.StreamPosition
+	var oldest types.StreamPosition
 	for roomID, membership := range req.Rooms {
 		if membership != spec.Join {
 			continue
@@ -117,8 +119,8 @@ func (p *TypingStreamProvider) addTypingEvents(
 		if users, roomPosition, updated := p.EDUCache.GetTypingUsersAndPositionIfUpdatedAfter(
 			roomID, int64(from),
 		); updated {
-			if pos := types.StreamPosition(roomPosition); pos > newest {
-				newest = pos
+			if pos := types.StreamPosition(roomPosition); oldest == 0 || pos < oldest {
+				oldest = pos
 			}
 			typingUsers := make([]string, 0, len(users))
 			for i := range users {
@@ -135,7 +137,7 @@ func (p *TypingStreamProvider) addTypingEvents(
 			})
 			if err != nil {
 				req.Log.WithError(err).Error("json.Marshal failed")
-				return added, newest
+				return added, oldest
 			}
 
 			jr.Ephemeral.Events = append(jr.Ephemeral.Events, ev)
@@ -143,5 +145,5 @@ func (p *TypingStreamProvider) addTypingEvents(
 			added = true
 		}
 	}
-	return added, newest
+	return added, oldest
 }
