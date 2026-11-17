@@ -89,9 +89,12 @@ type DeviceListUpdater struct {
 	// TODO: Put in an LRU cache to bound growth
 	userIDToMutex map[string]*sync.Mutex
 	mu            *sync.Mutex // protects UserIDToMutex
-	// updateGeneration is guarded by the corresponding per-user mutex. A full
-	// device-list fetch may only replace keys and mark the list fresh if no newer
-	// update or invalidation arrived while the fetch was in flight.
+	// updateGeneration counts the updates and invalidations seen for each user. A
+	// full device-list fetch may only replace keys and mark the list fresh if the
+	// count is unchanged since it began. The map is shared by all users, so every
+	// access goes through generationMu; the per-user mutex is what orders a bump
+	// against the fetch's check-and-store for that one user.
+	generationMu     sync.Mutex
 	updateGeneration map[string]uint64
 
 	db          DeviceListUpdaterDatabase
@@ -270,6 +273,8 @@ func (u *DeviceListUpdater) mutex(userID string) *sync.Mutex {
 // bumpUpdateGenerationLocked invalidates any full device-list fetch that began
 // before the current update. The caller must hold the user's mutex.
 func (u *DeviceListUpdater) bumpUpdateGenerationLocked(userID string) {
+	u.generationMu.Lock()
+	defer u.generationMu.Unlock()
 	if u.updateGeneration == nil {
 		u.updateGeneration = make(map[string]uint64)
 	}
@@ -898,7 +903,7 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 	userMu := u.mutex(userID)
 	userMu.Lock()
 	defer userMu.Unlock()
-	if u.updateGeneration[userID] != updateGeneration {
+	if u.generation(userID) != updateGeneration {
 		logger.Debug("Discarded device list fetch superseded by a newer update")
 		return defaultWaitTime, errDeviceListFetchSuperseded
 	}
@@ -935,6 +940,14 @@ func (u *DeviceListUpdater) currentUpdateGeneration(userID string) uint64 {
 	mu := u.mutex(userID)
 	mu.Lock()
 	defer mu.Unlock()
+	return u.generation(userID)
+}
+
+// generation returns the user's update count. Callers also hold the user's
+// mutex when the value must stay valid across a check-and-store.
+func (u *DeviceListUpdater) generation(userID string) uint64 {
+	u.generationMu.Lock()
+	defer u.generationMu.Unlock()
 	return u.updateGeneration[userID]
 }
 
