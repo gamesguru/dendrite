@@ -429,6 +429,61 @@ func TestStateIDsBeforeEventReusesStoredSnapshot(t *testing.T) {
 	require.Equal(t, 1, fed.stateIDLookups)
 }
 
+// An event whose single parent is stored, with a before-state snapshot, from an
+// earlier page or request has its state computed locally from that parent. The
+// parent is not part of this requester's own maps.
+func TestStateIDsBeforeEventRollsForwardFromStoredParent(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	member := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	parent := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":2,"depth":2,"prev_events":["$older"],"auth_events":[]}`)
+	target := newEvent(`{"type":"m.room.message","room_id":"!r:test","sender":"@b:test",` +
+		`"content":{},"origin_server_ts":3,"depth":3,"prev_events":["` + parent.EventID() + `"],"auth_events":[]}`)
+
+	db := newStoredEventsDB(member, parent)
+	db.beforeState = map[string]types.StateSnapshotNID{parent.EventID(): 7}
+	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
+
+	fed := &countingFedClient{}
+	build := func() *backfillRequester {
+		return &backfillRequester{
+			fsAPI:                   fed,
+			servers:                 []spec.ServerName{"remote.test"},
+			db:                      db,
+			roomVersion:             gomatrixserverlib.RoomVersionV10,
+			roomNID:                 1,
+			eventIDToBeforeStateIDs: map[string][]string{},
+			eventIDMap:              map[string]gomatrixserverlib.PDU{},
+		}
+	}
+	got, err := build().StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, []string{member.EventID()}, got,
+		"a message does not change state, so the target has its parent's before-state")
+	require.Zero(t, fed.stateIDLookups, "a stored parent must not trigger /state_ids")
+
+	// Without a snapshot for the parent the state is unknown, so federation is asked.
+	db.beforeState = nil
+	got, err = build().StateIDsBeforeEvent(context.Background(), target)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, 1, fed.stateIDLookups)
+
+	// A room whose snapshots cannot be trusted never reuses the parent's.
+	db.beforeState = map[string]types.StateSnapshotNID{parent.EventID(): 7}
+	db.incomplete = true
+	got, err = build().StateIDsBeforeEvent(context.Background(), target)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Equal(t, 2, fed.stateIDLookups)
+}
+
 // A room with partial state (MSC3706) can hold incomplete before-state
 // snapshots, so they must not be reused: backfill asks federation instead.
 func TestStateIDsBeforeEventIgnoresSnapshotForPartialRoom(t *testing.T) {

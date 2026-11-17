@@ -547,14 +547,39 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 	// if we have exactly 1 prev event and we know the state of the room at that prev event, then just roll forward the prev event.
 	// Else, we have to hit /state_ids because either we don't know the state at all at this event (new backwards extremity) or
 	// we don't know the result of state res to merge forks (2 or more prev_events)
-	if len(targetEvent.PrevEventIDs()) == 1 {
+	//
+	// reason records why federation is needed, for the log: it shows which of
+	// these cases dominate, so that the right ones are computed locally.
+	var reason string
+	switch len(targetEvent.PrevEventIDs()) {
+	case 0:
+		reason = "no-prev-events"
+	case 1:
 		prevEventID := targetEvent.PrevEventIDs()[0]
+		// The parent may come from an earlier page or an earlier request rather
+		// than this batch. Both its event and its before-state are stored then,
+		// and are as trustworthy as the stored state reused for the event itself.
 		prevEvent, ok := b.eventIDMap[prevEventID]
 		if !ok {
+			b.hydrateStateEvents(ctx, []string{prevEventID})
+			prevEvent, ok = b.eventIDMap[prevEventID]
+		}
+		if !ok {
+			reason = "unknown-parent"
 			goto FederationHit
 		}
 		prevEventStateIDs, ok := b.eventIDToBeforeStateIDs[prevEventID]
 		if !ok {
+			if prevEventStateIDs, ok = b.stateIDsFromStoredEvent(ctx, prevEventID); ok {
+				b.eventIDToBeforeStateIDs[prevEventID] = prevEventStateIDs
+			}
+		}
+		if !ok {
+			if b.localStateUsable(ctx) {
+				reason = "parent-has-no-state"
+			} else {
+				reason = "local-state-unusable"
+			}
 			goto FederationHit
 		}
 		if prevEvent.StateKey() != nil {
@@ -570,11 +595,18 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 			return newStateIDs, nil
 		}
 		// else we failed to calculate the new state, so fallthrough
+		reason = "state-event-missing-locally"
+	default:
+		reason = "fork"
 	}
 
 FederationHit:
 	var lastErr error
-	logrus.WithField("event_id", targetEvent.EventID()).Info("Requesting /state_ids at event")
+	logrus.WithFields(logrus.Fields{
+		"event_id": targetEvent.EventID(),
+		"reason":   reason,
+		"prevs":    len(targetEvent.PrevEventIDs()),
+	}).Info("Requesting /state_ids at event")
 	for _, srv := range b.servers { // hit any valid server
 		c := gomatrixserverlib.FederatedStateProvider{
 			FedClient:          b.fsAPI,
