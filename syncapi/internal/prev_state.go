@@ -28,9 +28,10 @@ const (
 	// the roomserver could not load: the query reports the two identically, so
 	// callers must not write anything.
 	PrevStateNone
-	// PrevStateUnavailable means the roomserver does not know the room or does
-	// not hold the event's prev events, so nothing can be said about the state
-	// before the event.
+	// PrevStateUnavailable means the roomserver does not know the room, does
+	// not hold the event's prev events, or reports the room's state snapshots
+	// as incomplete (they may have been built during a partial-state join). In
+	// every case nothing reliable can be said about the state before the event.
 	PrevStateUnavailable
 )
 
