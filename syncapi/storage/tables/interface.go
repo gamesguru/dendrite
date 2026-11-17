@@ -145,6 +145,8 @@ type CurrentRoomState interface {
 	// Pairs with no current state are absent from the result.
 	SelectStateEvents(ctx context.Context, txn *sql.Tx, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error)
 	SelectEventsWithEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) ([]types.StreamEvent, error)
+	// UpdateEventJSON updates the JSON for a row only while eventID remains current.
+	UpdateEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) (bool, error)
 	UpsertRoomState(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, membership *string, addedAt types.StreamPosition) error
 	// UpsertRoomStates writes many state events in as few statements as the
 	// backend allows. When two upserts share a type and state key, the later

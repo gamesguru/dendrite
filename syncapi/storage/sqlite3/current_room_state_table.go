@@ -489,6 +489,30 @@ func (s *currentRoomStateStatements) SelectEventsWithEventIDs(
 	return res, nil
 }
 
+func (s *currentRoomStateStatements) UpdateEventJSON(
+	ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent,
+) (bool, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	data, err = restoreEventID(data, eventID)
+	if err != nil {
+		return false, err
+	}
+	var res sql.Result
+	if txn == nil {
+		res, err = s.db.ExecContext(ctx, "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2", data, eventID)
+	} else {
+		res, err = txn.ExecContext(ctx, "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2", data, eventID)
+	}
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func currentRoomStateRowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {
 	var events []types.StreamEvent
 	for rows.Next() {

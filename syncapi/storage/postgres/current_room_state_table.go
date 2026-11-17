@@ -90,6 +90,9 @@ const upsertRoomStatesSQL = "" +
 const deleteRoomStateByEventIDSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE event_id = $1"
 
+const updateCurrentRoomStateEventJSONSQL = "" +
+	"UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2"
+
 const deleteRoomStateByEventIDsSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE event_id = ANY($1)"
 
@@ -163,6 +166,7 @@ type currentRoomStateStatements struct {
 	selectJoinedUsersStmt              *sql.Stmt
 	selectJoinedUsersInRoomStmt        *sql.Stmt
 	selectEventsWithEventIDsStmt       *sql.Stmt
+	updateEventJSONStmt                *sql.Stmt
 	selectStateEventStmt               *sql.Stmt
 	selectStateEventsStmt              *sql.Stmt
 	selectSharedUsersStmt              *sql.Stmt
@@ -201,6 +205,7 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 		{&s.selectJoinedUsersStmt, selectJoinedUsersSQL},
 		{&s.selectJoinedUsersInRoomStmt, selectJoinedUsersInRoomSQL},
 		{&s.selectEventsWithEventIDsStmt, selectEventsWithEventIDsSQL},
+		{&s.updateEventJSONStmt, updateCurrentRoomStateEventJSONSQL},
 		{&s.selectStateEventStmt, selectStateEventSQL},
 		{&s.selectStateEventsStmt, selectStateEventsSQL},
 		{&s.selectSharedUsersStmt, selectSharedUsersSQL},
@@ -555,6 +560,25 @@ func (s *currentRoomStateStatements) SelectEventsWithEventIDs(
 	}
 	defer internal.CloseAndLogIfError(ctx, rows, "selectEventsWithEventIDs: rows.close() failed")
 	return currentRoomStateRowsToStreamEvents(rows)
+}
+
+func (s *currentRoomStateStatements) UpdateEventJSON(
+	ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent,
+) (bool, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	data, err = restoreEventID(data, eventID)
+	if err != nil {
+		return false, err
+	}
+	res, err := sqlutil.TxStmt(txn, s.updateEventJSONStmt).ExecContext(ctx, data, eventID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func currentRoomStateRowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {

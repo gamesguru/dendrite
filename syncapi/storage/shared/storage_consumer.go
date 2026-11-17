@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"bytes"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -19,6 +20,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"codefloe.com/pat-s/zendrite/internal/depth"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -510,6 +512,74 @@ func (d *Database) UpdateEventJSON(ctx context.Context, eventID string, event *r
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.OutputEvents.UpdateEventJSON(ctx, txn, eventID, event)
 	})
+}
+
+// ReplaceEventJSON copies verified event fields into the existing sync API
+// rows while retaining the unsigned metadata local to each row. Current state
+// is updated only if the event is still current when this transaction runs.
+func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched *rstypes.HeaderedEvent) (outputUpdated, stateUpdated bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		outputRows, err := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
+		if err != nil {
+			return err
+		}
+		if len(outputRows) > 0 {
+			merged, err := mergeFetchedEventWithLocalUnsigned(fetched, outputRows[0].HeaderedEvent)
+			if err != nil {
+				return fmt.Errorf("merge output event unsigned: %w", err)
+			}
+			if err = d.OutputEvents.UpdateEventJSON(ctx, txn, eventID, merged); err != nil {
+				return err
+			}
+			outputUpdated = true
+		}
+
+		stateRows, err := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
+		if err != nil {
+			return err
+		}
+		if len(stateRows) > 0 && stateRows[0].EventID() == eventID {
+			merged, err := mergeFetchedEventWithLocalUnsigned(fetched, stateRows[0].HeaderedEvent)
+			if err != nil {
+				return fmt.Errorf("merge current-state event unsigned: %w", err)
+			}
+			stateUpdated, err = d.CurrentRoomState.UpdateEventJSON(ctx, txn, eventID, merged)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, false, err
+	}
+	return outputUpdated, stateUpdated, nil
+}
+
+func mergeFetchedEventWithLocalUnsigned(fetched, local *rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
+	data := fetched.JSON()
+	unsigned := gjson.GetBytes(local.JSON(), "unsigned")
+	var err error
+	if unsigned.Exists() {
+		data, err = sjson.SetRawBytes(data, "unsigned", []byte(unsigned.Raw))
+	} else {
+		data, err = sjson.DeleteBytes(data, "unsigned")
+	}
+	if err != nil {
+		return nil, err
+	}
+	version, err := gomatrixserverlib.GetRoomVersion(fetched.Version())
+	if err != nil {
+		return nil, err
+	}
+	pdu, err := version.NewEventFromUntrustedJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(pdu.Content(), fetched.Content()) {
+		return nil, fmt.Errorf("merged event content changed")
+	}
+	return &rstypes.HeaderedEvent{PDU: pdu, Visibility: local.Visibility}, nil
 }
 
 // This function should always be called within a sqlutil.Writer for safety in SQLite.

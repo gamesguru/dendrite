@@ -1019,7 +1019,6 @@ const (
 	RefetchOutcomeNotFound      = "not_found"
 	RefetchOutcomeForbidden     = "forbidden"
 	RefetchOutcomeUnreachable   = "origin_unreachable"
-	RefetchOutcomeBadSignature  = "signature_mismatch"
 )
 
 // PerformAdminRefetchEvents fetches the complete copy of each event whose
@@ -1090,7 +1089,6 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	sawPruned := false
 	sawNotFound := false
 	sawForbidden := false
-	sawBadSignature := false
 	var unreachable []string
 	for _, server := range servers {
 		txn, ferr := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, server, e.EventID)
@@ -1128,11 +1126,6 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			sawPruned = true
 			continue
 		}
-		if err = r.verifyAdminEventSignatures(ctx, ev); err != nil {
-			sawBadSignature = true
-			lastErr = fmt.Errorf("signature check from %s failed: %w", server, err)
-			continue
-		}
 		// Content comes from the fetched copy. unsigned and signatures are not
 		// part of the event's identity: keep this store's own. Redaction keeps
 		// the original signatures, so the local ones sign the restored content.
@@ -1156,7 +1149,12 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %v", server, perr)
 			continue
 		}
+		// The merged copy carries this store's own signatures, so a failure here
+		// (for example the origin's keys are unreachable) is reported, not fatal.
 		signed := RefetchOutcomeRefetched
+		if verr := r.verifyAdminEventSignatures(ctx, ev); verr != nil {
+			signed = RefetchOutcomeSigUnverified
+		}
 		if dryRun {
 			return "would_" + signed, nil
 		}
@@ -1175,18 +1173,16 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		if aerr != nil || len(after) != 1 || after[0].Redacted() {
 			return "", fmt.Errorf("event %s is still pruned after the refetch", e.EventID)
 		}
-		return RefetchOutcomeRefetched, nil
+		return signed, nil
 	}
 	switch {
 	case len(unreachable) > 0:
 		return "", fmt.Errorf("no verified copy found; unreachable candidates: %s; last error: %w", strings.Join(unreachable, ", "), lastErr)
-	case sawPruned && !sawNotFound && !sawForbidden && !sawBadSignature:
+	case sawPruned && !sawNotFound && !sawForbidden:
 		return RefetchOutcomeHashMismatch, nil
-	case sawBadSignature && !sawNotFound && !sawForbidden && !sawPruned:
-		return RefetchOutcomeBadSignature, nil
-	case sawForbidden && !sawNotFound && !sawPruned && !sawBadSignature:
+	case sawForbidden && !sawNotFound && !sawPruned:
 		return RefetchOutcomeForbidden, nil
-	case sawNotFound && !sawForbidden && !sawPruned && !sawBadSignature:
+	case sawNotFound && !sawForbidden && !sawPruned:
 		return RefetchOutcomeNotFound, nil
 	case lastErr != nil:
 		return "", lastErr
