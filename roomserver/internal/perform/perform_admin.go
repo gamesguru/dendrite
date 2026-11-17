@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -20,6 +22,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -1007,10 +1010,16 @@ const maxRefetchServers = 8
 
 // Outcomes of PerformAdminRefetchEvents.
 const (
-	RefetchOutcomeRefetched    = "refetched"
-	RefetchOutcomeWouldRefetch = "would_refetch"
-	RefetchOutcomeAlreadyFull  = "already_full"
-	RefetchOutcomeHashMismatch = "hash_mismatch"
+	RefetchOutcomeRefetched = "refetched"
+	// RefetchOutcomeSigUnverified marks a hash-valid copy whose signatures could
+	// not be verified (for example the origin's keys are unreachable).
+	RefetchOutcomeSigUnverified = "refetched_signature_unverified"
+	RefetchOutcomeAlreadyFull   = "already_full"
+	RefetchOutcomeHashMismatch  = "hash_mismatch"
+	RefetchOutcomeNotFound      = "not_found"
+	RefetchOutcomeForbidden     = "forbidden"
+	RefetchOutcomeUnreachable   = "origin_unreachable"
+	RefetchOutcomeBadSignature  = "signature_mismatch"
 )
 
 // PerformAdminRefetchEvents fetches the complete copy of each event whose
@@ -1066,33 +1075,7 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		return RefetchOutcomeAlreadyFull, nil
 	}
 
-	// Ask the named server (or the sender's homeserver) first, then every other
-	// server in the room: the event ID commits to hashes.sha256, so a copy from
-	// any server whose ID matches and whose content hash verifies is the real
-	// event, which makes a dead origin recoverable.
-	var servers []spec.ServerName
-	if e.Server != "" {
-		servers = append(servers, e.Server)
-	}
-	servers = append(servers, e.Servers...)
-	if sender, qerr := r.Queryer.QueryUserIDForSender(ctx, have[0].RoomID(), have[0].SenderID()); qerr == nil && sender != nil {
-		servers = append(servers, sender.Domain())
-	}
-	hosts := &fedapi.QueryJoinedHostServerNamesInRoomResponse{}
-	if herr := r.Inputer.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, &fedapi.QueryJoinedHostServerNamesInRoomRequest{
-		RoomID: e.RoomID, ExcludeSelf: true, ExcludeBlacklisted: true,
-	}, hosts); herr == nil {
-		servers = append(servers, hosts.ServerNames...)
-	}
-	seen := make(map[spec.ServerName]struct{}, len(servers))
-	unique := servers[:0]
-	for _, h := range servers {
-		if _, dup := seen[h]; !dup && h != "" {
-			seen[h] = struct{}{}
-			unique = append(unique, h)
-		}
-	}
-	servers = unique
+	servers := r.refetchServerCandidates(ctx, e, have[0], roomInfo)
 	if len(servers) == 0 {
 		return "", fmt.Errorf("no server to ask for %s", e.EventID)
 	}
@@ -1105,10 +1088,30 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	}
 	var lastErr error
 	sawPruned := false
+	sawNotFound := false
+	sawForbidden := false
+	sawBadSignature := false
+	var unreachable []string
 	for _, server := range servers {
 		txn, ferr := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, server, e.EventID)
-		if ferr != nil || len(txn.PDUs) == 0 {
-			lastErr = fmt.Errorf("fetching %s from %s failed: %v", e.EventID, server, ferr)
+		if ferr != nil {
+			var httpErr spec.HTTPError
+			if errors.As(ferr, &httpErr) {
+				switch httpErr.Code {
+				case http.StatusNotFound:
+					sawNotFound = true
+					continue
+				case http.StatusForbidden:
+					sawForbidden = true
+					continue
+				}
+			}
+			unreachable = append(unreachable, string(server))
+			lastErr = fmt.Errorf("fetching %s from %s failed: %w", e.EventID, server, ferr)
+			continue
+		}
+		if len(txn.PDUs) == 0 {
+			sawNotFound = true
 			continue
 		}
 		ev, perr := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
@@ -1125,8 +1128,34 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			sawPruned = true
 			continue
 		}
+		if err = r.verifyAdminEventSignatures(ctx, ev); err != nil {
+			sawBadSignature = true
+			lastErr = fmt.Errorf("signature check from %s failed: %w", server, err)
+			continue
+		}
+		if !gjson.GetBytes(ev.JSON(), "signatures").IsObject() || len(gjson.GetBytes(ev.JSON(), "signatures").Map()) == 0 {
+			lastErr = fmt.Errorf("%s returned a copy without signatures", server)
+			continue
+		}
+		// unsigned is not part of the event's identity and differs per server:
+		// keep this store's own and drop the remote's.
+		merged, merr := sjson.DeleteBytes(ev.JSON(), "unsigned")
+		if local := gjson.GetBytes(have[0].JSON(), "unsigned"); merr == nil && local.Exists() {
+			merged, merr = sjson.SetRawBytes(merged, "unsigned", []byte(local.Raw))
+		}
+		if merr != nil {
+			return "", fmt.Errorf("merging unsigned: %w", merr)
+		}
+		if ev, perr = verImpl.NewEventFromUntrustedJSON(merged); perr != nil || ev.Redacted() {
+			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %v", server, perr)
+			continue
+		}
+		signed := RefetchOutcomeRefetched
+		if verr := r.verifyAdminEventSignatures(ctx, ev); verr != nil {
+			signed = RefetchOutcomeSigUnverified
+		}
 		if dryRun {
-			return RefetchOutcomeWouldRefetch, nil
+			return "would_" + signed, nil
 		}
 		inputRes := &api.InputRoomEventsResponse{}
 		r.Inputer.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
@@ -1145,8 +1174,87 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		}
 		return RefetchOutcomeRefetched, nil
 	}
-	if sawPruned {
+	switch {
+	case len(unreachable) > 0:
+		return "", fmt.Errorf("no verified copy found; unreachable candidates: %s; last error: %w", strings.Join(unreachable, ", "), lastErr)
+	case sawPruned && !sawNotFound && !sawForbidden && !sawBadSignature:
 		return RefetchOutcomeHashMismatch, nil
+	case sawBadSignature && !sawNotFound && !sawForbidden && !sawPruned:
+		return RefetchOutcomeBadSignature, nil
+	case sawForbidden && !sawNotFound && !sawPruned && !sawBadSignature:
+		return RefetchOutcomeForbidden, nil
+	case sawNotFound && !sawForbidden && !sawPruned && !sawBadSignature:
+		return RefetchOutcomeNotFound, nil
+	case lastErr != nil:
+		return "", lastErr
 	}
-	return "", lastErr
+	return "", fmt.Errorf("no candidate server returned a verifiable copy")
+}
+
+// refetchServerCandidates orders sources from most likely to hold the event to
+// least likely. For old events, historical residents are more useful than
+// current residents: they may have retained the event even if current members
+// joined later or pruned their history.
+func (r *Admin) refetchServerCandidates(
+	ctx context.Context, e api.AdminRefetchEvent, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo,
+) []spec.ServerName {
+	servers := make([]spec.ServerName, 0, 16)
+	add := func(candidate spec.ServerName) {
+		if candidate == "" {
+			return
+		}
+		for _, existing := range servers {
+			if existing == candidate {
+				return
+			}
+		}
+		servers = append(servers, candidate)
+	}
+	if e.Server != "" {
+		add(e.Server)
+	}
+	for _, candidate := range e.Servers {
+		add(candidate)
+	}
+
+	// Reuse backfill's historical membership and history-visibility selection.
+	prevEventIDs := event.PrevEventIDs()
+	if len(prevEventIDs) > 0 {
+		requester := newBackfillRequester(
+			r.DB, r.Inputer.FSAPI, r.Queryer, r.Cfg.Matrix.ServerName,
+			r.Cfg.Matrix.IsLocalServerName,
+			map[string][]string{event.EventID(): prevEventIDs}, nil, roomInfo.RoomVersion,
+		)
+		requester.roomNID = roomInfo.RoomNID
+		historical := requester.ServersAtEvent(ctx, e.RoomID, prevEventIDs[0])
+		sort.Slice(historical, func(i, j int) bool { return historical[i] < historical[j] })
+		for _, candidate := range historical {
+			add(candidate)
+		}
+	}
+
+	if sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID()); err == nil && sender != nil {
+		add(sender.Domain())
+	}
+	if create, err := r.DB.GetStateEvent(ctx, e.RoomID, spec.MRoomCreate, ""); err == nil && create != nil {
+		if creator, err := r.Queryer.QueryUserIDForSender(ctx, create.RoomID(), create.SenderID()); err == nil && creator != nil {
+			add(creator.Domain())
+		}
+	}
+	if roomID, err := spec.NewRoomID(e.RoomID); err == nil {
+		add(roomID.Domain())
+	}
+
+	hosts := &fedapi.QueryJoinedHostServerNamesInRoomResponse{}
+	if err := r.Inputer.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, &fedapi.QueryJoinedHostServerNamesInRoomRequest{
+		RoomID: e.RoomID, ExcludeSelf: true, ExcludeBlacklisted: true,
+	}, hosts); err == nil {
+		for _, candidate := range hosts.ServerNames {
+			add(candidate)
+		}
+	}
+	if len(servers) > maxRefetchServers {
+		servers = servers[:maxRefetchServers]
+	}
+	return servers
 }
