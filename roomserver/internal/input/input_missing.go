@@ -1316,6 +1316,9 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	if err != nil {
 		return nil, err
 	}
+	// Keep a local hash-pruned copy as a last-resort fallback, but try the
+	// federation candidates first in case one still has the full event.
+	var prunedEvent gomatrixserverlib.PDU
 
 	if localFirst {
 		// fetch from the roomserver
@@ -1323,14 +1326,18 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 		if err != nil {
 			t.log.Warnf("Failed to query roomserver for missing event %s: %s - falling back to remote", missingEventID, err)
 		} else if len(events) == 1 {
-			return events[0].PDU, nil
+			if eventutil.LooksHashPruned(events[0].JSON(), events[0]) {
+				prunedEvent = events[0].PDU
+				t.log.WithField("missing_event_id", missingEventID).Warn("Local event failed its content hash; trying federation sources")
+			} else {
+				return events[0].PDU, nil
+			}
 		}
 	}
 	var event gomatrixserverlib.PDU
 	found := false
 	var validationError error
 	// A copy that looks hash-pruned is only used if no server has a full one.
-	var prunedEvent gomatrixserverlib.PDU
 	var prunedValidationError error
 	// Cap the number of servers to try per event to avoid exhaustively
 	// iterating hundreds of servers that don't have the event.

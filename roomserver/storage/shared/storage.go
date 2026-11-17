@@ -933,7 +933,7 @@ func (d *EventDatabase) warnIfHashPruned(
 		return
 	}
 	// A genuine redaction we already know about explains the redacted form.
-	if info, err := d.RedactionsTable.SelectRedactionInfoByEventBeingRedacted(ctx, txn, event.EventID()); err == nil && info != nil {
+	if info, err := d.RedactionsTable.SelectRedactionInfoByEventBeingRedacted(ctx, txn, event.EventID()); err == nil && info != nil && info.Validated {
 		return
 	}
 	logrus.WithFields(logrus.Fields{
@@ -980,7 +980,7 @@ func (d *EventDatabase) storeEvent(
 			}
 		}
 
-		d.warnIfHashPruned(ctx, txn, event, roomInfo, isRejected, recordPrevEvents)
+		d.warnIfHashPruned(ctx, txn, event, roomInfo, !recordPrevEvents, recordPrevEvents)
 
 		if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
 			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)

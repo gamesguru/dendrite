@@ -1167,20 +1167,47 @@ func (r *Inputer) fetchAuthEvents(
 		return nil
 	}
 
-	var err error
 	var res fclient.RespEventAuth
 	var found bool
+	var prunedResponse fclient.RespEventAuth
+	var havePrunedResponse bool
+	verImpl, versionErr := gomatrixserverlib.GetRoomVersion(event.Version())
+	if versionErr != nil {
+		return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
+	}
 	for _, serverName := range servers {
 		// Request the entire auth chain for the event in question. This should
 		// contain all of the auth events — including ones that we already know —
 		// so we'll need to filter through those in the next section.
-		res, err = r.FSAPI.GetEventAuth(ctx, virtualHost, serverName, event.Version(), event.RoomID().String(), event.EventID())
-		if err != nil {
-			logger.WithError(err).Warnf("Failed to get event auth from federation for %q: %s", event.EventID(), err)
+		candidate, getErr := r.FSAPI.GetEventAuth(ctx, virtualHost, serverName, event.Version(), event.RoomID().String(), event.EventID())
+		if getErr != nil {
+			logger.WithError(getErr).Warnf("Failed to get event auth from federation for %q: %s", event.EventID(), getErr)
 			continue
 		}
+		suspicious := false
+		for _, raw := range candidate.AuthEvents {
+			parsed, parseErr := verImpl.NewEventFromUntrustedJSON(raw)
+			if parseErr == nil && eventutil.LooksHashPruned(raw, parsed) {
+				logger.Warnf("Auth chain from %q contains event %q that failed its content hash; trying another server", serverName, parsed.EventID())
+				suspicious = true
+				break
+			}
+		}
+		if suspicious {
+			if !havePrunedResponse {
+				prunedResponse = candidate
+				havePrunedResponse = true
+			}
+			continue
+		}
+		res = candidate
 		found = true
 		break
+	}
+	if !found && havePrunedResponse {
+		// Keep the only available chain if every candidate has pruned copies.
+		res = prunedResponse
+		found = true
 	}
 	fullChain := found
 	if !found {
@@ -1189,10 +1216,6 @@ func (r *Inputer) fetchAuthEvents(
 		// the unknown auth events directly via /event and walk their auth-event
 		// dependencies. The state fetched by /state_ids may already include
 		// some of those dependencies locally.
-		verImpl, versionErr := gomatrixserverlib.GetRoomVersion(event.Version())
-		if versionErr != nil {
-			return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
-		}
 		pending := make([]string, 0, len(unknown))
 		for authEventID := range unknown {
 			pending = append(pending, authEventID)

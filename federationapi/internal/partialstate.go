@@ -1298,6 +1298,14 @@ func (w *PartialStateWorker) fetchMissingViaState(
 		if !missingSet[ev.EventID()] || !wanted[ev.EventID()] || ev.RoomID().String() != roomID {
 			continue
 		}
+		if eventutil.LooksHashPruned(raw, ev) {
+			logger.WithFields(logrus.Fields{
+				"event_id":    ev.EventID(),
+				"server_name": serverName,
+			}).Warn("State response event failed its content hash; trying another server")
+			// Leave it missing so the per-event fallback can try other residents.
+			continue
+		}
 		delete(missingSet, ev.EventID())
 		inputs = append(inputs, roomserverAPI.InputRoomEvent{
 			Kind:   roomserverAPI.KindOutlier,
