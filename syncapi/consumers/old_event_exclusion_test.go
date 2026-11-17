@@ -79,26 +79,42 @@ func TestExcludeOldEventFromSync(t *testing.T) {
 	}{
 		{"a timeline event is delivered", message, &fakeOldEventState{}, false},
 		{"state below the live start is history", leave, pastLeave, true},
-		{"state below the live start stays out even when it is the current state", leave,
-			&fakeOldEventState{current: leave, liveStart: types.StreamPosition(leave.Depth() + 1), hasLiveStart: true}, true},
+		{
+			"state below the live start stays out even when it is the current state", leave,
+			&fakeOldEventState{current: leave, liveStart: types.StreamPosition(leave.Depth() + 1), hasLiveStart: true}, true,
+		},
 		{"state at the live start is delivered", leave, liveAt(leave, join), false},
 		{"state above the live start is delivered when the current state is older", leave, liveAt(join, join), false},
 		{"state above the live start is delivered when it is already the current state", leave, liveAt(join, leave), false},
 		{"state above the live start is delivered when nothing holds its key", leave, liveAt(join, nil), false},
 		{"a superseded state event above the live start stays out", join, liveAt(join, leave), true},
-		{"a late parent lifts an event above the live start", leave,
-			&fakeOldEventState{current: join, liveStart: types.StreamPosition(leave.Depth() + 1), hasLiveStart: true,
-				lift: 2}, false},
-		{"stored parents below the live start leave the event as history", leave,
-			&fakeOldEventState{current: leave, liveStart: types.StreamPosition(leave.Depth() + 1), hasLiveStart: true}, true},
-		{"an unreadable parent lookup keeps the event out", leave,
-			&fakeOldEventState{liveStart: types.StreamPosition(leave.Depth() - 1), hasLiveStart: true,
-				prospectiveErr: errors.New("db down")}, true},
+		{
+			"a late parent lifts an event above the live start", leave,
+			&fakeOldEventState{
+				current: join, liveStart: types.StreamPosition(leave.Depth() + 1), hasLiveStart: true,
+				lift: 2,
+			}, false,
+		},
+		{
+			"stored parents below the live start leave the event as history", leave,
+			&fakeOldEventState{current: leave, liveStart: types.StreamPosition(leave.Depth() + 1), hasLiveStart: true}, true,
+		},
+		{
+			"an unreadable parent lookup keeps the event out", leave,
+			&fakeOldEventState{
+				liveStart: types.StreamPosition(leave.Depth() - 1), hasLiveStart: true,
+				prospectiveErr: errors.New("db down"),
+			}, true,
+		},
 		{"a room with nothing delivered yet keeps old state out", leave, &fakeOldEventState{}, true},
-		{"an unreadable live start keeps the event out", leave,
-			&fakeOldEventState{liveStartErr: errors.New("db down"), hasLiveStart: true}, true},
-		{"an unreadable current state keeps the event out", leave,
-			&fakeOldEventState{err: errors.New("db down"), liveStart: types.StreamPosition(join.Depth()), hasLiveStart: true}, true},
+		{
+			"an unreadable live start keeps the event out", leave,
+			&fakeOldEventState{liveStartErr: errors.New("db down"), hasLiveStart: true}, true,
+		},
+		{
+			"an unreadable current state keeps the event out", leave,
+			&fakeOldEventState{err: errors.New("db down"), liveStart: types.StreamPosition(join.Depth()), hasLiveStart: true}, true,
+		},
 		{"a state fetched to fill a gap below the live start is still history", leave, pastLeave, true},
 		{"m.room.create stays out", create, liveAt(create, nil), true},
 	} {
