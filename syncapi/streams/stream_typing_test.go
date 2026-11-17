@@ -112,3 +112,20 @@ func TestTypingStreamProviderImmediateSyncDoesNotWait(t *testing.T) {
 		t.Fatalf("expected no typing stream advance, got %d", pos)
 	}
 }
+
+// A typing update can land between reading the stream position and reading the
+// events. The position handed back must still be newer than from.
+func TestTypingStreamProviderPositionAfterEventsAdvances(t *testing.T) {
+	cache := caching.NewTypingCache()
+	provider := &TypingStreamProvider{EDUCache: cache}
+
+	stale := types.StreamPosition(cache.GetLatestSyncPosition())
+	cache.AddTypingUser("@alice:test", "!room:test", nil)
+
+	if got := provider.positionAfterEvents(stale, stale); got <= stale {
+		t.Fatalf("expected the position to advance past %d, got %d", stale, got)
+	}
+	if got := provider.positionAfterEvents(5, 3); got != 5 {
+		t.Fatalf("expected an advanced position to be kept, got %d", got)
+	}
+}

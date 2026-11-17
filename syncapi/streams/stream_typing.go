@@ -53,7 +53,7 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 ) types.StreamPosition {
 	to := types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
 	if p.addTypingEvents(req, from) {
-		return to
+		return p.positionAfterEvents(to, from)
 	}
 	if allowImmediate && req.Timeout <= 0 {
 		return to
@@ -76,10 +76,22 @@ func (p *TypingStreamProvider) waitForTypingEvents(
 		case <-ticker.C:
 			to = types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
 			if p.addTypingEvents(req, from) {
-				return to
+				return p.positionAfterEvents(to, from)
 			}
 		}
 	}
+}
+
+// positionAfterEvents returns the position to report once typing events were
+// added. The position is read before the events, so a typing update that lands
+// between the two reads leaves it at or below from even though the events are
+// newer. Reporting that would hand the client a position that did not advance,
+// so read it again; the events seen are then older than the returned position.
+func (p *TypingStreamProvider) positionAfterEvents(to, from types.StreamPosition) types.StreamPosition {
+	if to > from {
+		return to
+	}
+	return types.StreamPosition(p.EDUCache.GetLatestSyncPosition())
 }
 
 func (p *TypingStreamProvider) addTypingEvents(
