@@ -375,6 +375,11 @@ func (t *OutputPresenceConsumer) flushPending() {
 		}
 	}
 
+	log.WithFields(log.Fields{
+		"users":        len(snapshot),
+		"destinations": len(keys),
+	}).Info("Queued presence EDUs")
+
 	acked := make(map[*nats.Msg]struct{})
 	ackFailed := make(map[string]bool)
 	sentDestinations := make(map[string]map[spec.ServerName]struct{})

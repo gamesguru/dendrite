@@ -288,9 +288,21 @@ func (oqs *OutgoingQueues) SendEDU(
 		return nil
 	}
 
-	log.WithFields(log.Fields{
+	eduLog := log.WithFields(log.Fields{
 		"destinations": len(destmap), "edu_type": e.Type,
-	}).Info("Sending EDU event")
+	})
+	if len(destmap) == 1 {
+		for destination := range destmap {
+			eduLog = eduLog.WithField("destination", destination)
+		}
+	}
+	if e.Type == spec.MPresence {
+		// Presence is flushed in a burst of one EDU per destination, and the
+		// presence consumer logs one summary for the burst.
+		eduLog.Debug("Sending EDU event")
+	} else {
+		eduLog.Info("Sending EDU event")
+	}
 
 	ephemeralJSON, err := json.Marshal(e)
 	if err != nil {
