@@ -85,7 +85,9 @@ type recentPresenceSequence struct {
 }
 
 type pendingPresenceAck struct {
-	msg        *nats.Msg
+	msg *nats.Msg
+	// userID keys the failure record cleared when this ack succeeds.
+	userID     string
 	generation uint64
 	mu         sync.Mutex
 	acked      bool
@@ -441,17 +443,57 @@ func (t *OutputPresenceConsumer) flushPending() {
 	t.pendingMu.Unlock()
 }
 
+// ackPendingPresence acknowledges the message once. Every successful
+// acknowledgement, whichever path sends it, clears the failure record kept for
+// it, so that the record cannot outlive the need for a redelivery guard.
 func (t *OutputPresenceConsumer) ackPendingPresence(pendingAck *pendingPresenceAck) error {
 	pendingAck.mu.Lock()
-	defer pendingAck.mu.Unlock()
 	if pendingAck.acked {
+		pendingAck.mu.Unlock()
 		return nil
 	}
 	if err := t.ackPresence(pendingAck.msg); err != nil {
+		pendingAck.mu.Unlock()
 		return err
 	}
 	pendingAck.acked = true
+	pendingAck.mu.Unlock()
+	// Taken after releasing the ack lock: recording a failure holds pendingMu
+	// and then reads the ack state.
+	if pendingAck.userID != "" {
+		t.pendingMu.Lock()
+		t.clearFailedSupersededLocked(pendingAck.userID, t.streamSequence(pendingAck.msg))
+		t.pendingMu.Unlock()
+	}
 	return nil
+}
+
+func (a *pendingPresenceAck) isAcked() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.acked
+}
+
+// clearFailedSupersededLocked forgets a failed acknowledgement that has since
+// succeeded and, once none remain for the user, lets the retained watermark
+// expire normally. Callers hold pendingMu.
+func (t *OutputPresenceConsumer) clearFailedSupersededLocked(userID string, seq uint64) {
+	if seq == 0 {
+		return
+	}
+	if _, ok := t.failedSuperseded[userID][seq]; !ok {
+		return
+	}
+	delete(t.failedSuperseded[userID], seq)
+	if len(t.failedSuperseded[userID]) > 0 {
+		return
+	}
+	delete(t.failedSuperseded, userID)
+	if r, ok := t.recentSequences[userID]; ok {
+		r.retain = false
+		r.expiresAt = time.Now().Add(t.sequenceWatermarkRetention())
+		t.recentSequences[userID] = r
+	}
 }
 
 func failedDestinationsForKey(failed map[string]map[spec.ServerName]struct{}, userIDs []string, destination spec.ServerName) []string {
@@ -535,7 +577,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 			if _, stillPending := t.pending[userID]; stillPending {
 				// This is the current message being redelivered before its EDU
 				// was queued. Keep it deferred and use this delivery's ack handle.
-				previous.acks = []*pendingPresenceAck{{msg: msg, generation: previous.generation}}
+				previous.acks = []*pendingPresenceAck{{msg: msg, userID: userID, generation: previous.generation}}
 				t.pending[userID] = previous
 				t.pendingMu.Unlock()
 				return jetstream.AckActionDefer
@@ -545,20 +587,8 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 			// Retry this exact acknowledgement ourselves so we can keep the
 			// watermark until JetStream confirms the formerly failed ack.
 			t.pendingMu.Unlock()
-			ackErr := t.ackPendingPresence(&pendingPresenceAck{msg: msg})
-			if ackErr == nil {
-				t.pendingMu.Lock()
-				delete(t.failedSuperseded[userID], streamSeq)
-				if len(t.failedSuperseded[userID]) == 0 {
-					delete(t.failedSuperseded, userID)
-					if r, ok := t.recentSequences[userID]; ok {
-						r.retain = false
-						r.expiresAt = time.Now().Add(t.sequenceWatermarkRetention())
-						t.recentSequences[userID] = r
-					}
-				}
-				t.pendingMu.Unlock()
-			} else {
+			// A successful ack clears the record itself.
+			if ackErr := t.ackPendingPresence(&pendingPresenceAck{msg: msg, userID: userID}); ackErr != nil {
 				log.WithError(ackErr).WithField("user_id", userID).Warn("failed to acknowledge redelivered superseded presence update")
 			}
 			return jetstream.AckActionDefer
@@ -579,7 +609,7 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 	t.nextOrder++
 	// Presence is latest state, so the newest message supersedes prior ones.
 	superseded := previous.acks
-	acks := []*pendingPresenceAck{{msg: msg, generation: t.nextGeneration}}
+	acks := []*pendingPresenceAck{{msg: msg, userID: userID, generation: t.nextGeneration}}
 	t.pending[userID] = pendingPresence{
 		presence:   presence,
 		status:     statusMsg,
@@ -598,6 +628,11 @@ func (t *OutputPresenceConsumer) onMessage(ctx context.Context, msgs []*nats.Msg
 			// acknowledged; otherwise a long broker outage could outlive the TTL.
 			t.pendingMu.Lock()
 			seq := t.streamSequence(old.msg)
+			// The flush may have acknowledged the same message meanwhile and
+			// found no record to clear; recording it now would never expire.
+			if old.isAcked() {
+				seq = 0
+			}
 			if seq != 0 {
 				if t.failedSuperseded == nil {
 					t.failedSuperseded = make(map[string]map[uint64]struct{})

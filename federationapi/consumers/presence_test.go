@@ -390,6 +390,29 @@ func TestPresenceDropsSupersededAckThatFailedButKeepsWatermark(t *testing.T) {
 	require.NotContains(t, consumer.failedSuperseded, "@alice:test")
 }
 
+func TestPresenceClearsFailedSupersededRecordWhenAnotherAckSucceeds(t *testing.T) {
+	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{
+		presenceSeqMessage("@alice:test", "online", 1001, 1),
+	}))
+	// A flush holds this ack handle while a newer message supersedes it.
+	old := consumer.pending["@alice:test"].acks[0]
+
+	consumer.ackPresence = func(*nats.Msg) error { return errors.New("ack failed") }
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{
+		presenceSeqMessage("@alice:test", "unavailable", 1002, 2),
+	}))
+	require.Contains(t, consumer.failedSuperseded["@alice:test"], uint64(1))
+	require.True(t, consumer.recentSequences["@alice:test"].retain)
+
+	// The flush retries the same ack and it succeeds: JetStream will not
+	// redeliver the message, so nothing may be left to clear it later.
+	consumer.ackPresence = func(*nats.Msg) error { return nil }
+	require.NoError(t, consumer.ackPendingPresence(old))
+	require.NotContains(t, consumer.failedSuperseded, "@alice:test")
+	require.False(t, consumer.recentSequences["@alice:test"].retain)
+}
+
 func TestPresenceIgnoresStaleRedelivery(t *testing.T) {
 	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
 
