@@ -203,9 +203,9 @@ type OutputOldRoomEvent struct {
 	// The Event.
 	Event             *types.HeaderedEvent                `json:"event"`
 	HistoryVisibility gomatrixserverlib.HistoryVisibility `json:"history_visibility"`
-	// GapFill is true when the event was fetched to fill a gap while processing
-	// a live event, as opposed to being history or resynced state. See
-	// InputRoomEvent.GapFill.
+	// GapFill records whether the event was fetched while filling a DAG gap.
+	// It is informational; sync timeline visibility is determined from the
+	// event's prospective topological position and the room's live boundary.
 	GapFill bool `json:"gap_fill,omitempty"`
 }
 
