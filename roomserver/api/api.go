@@ -312,6 +312,10 @@ type ClientRoomserverAPI interface {
 	// feeds it through the normal input path as if it had arrived via /send.
 	// The outcome is read back from storage: "accepted", "rejected" or "not_stored".
 	PerformAdminFetchEvent(ctx context.Context, roomID, eventID string, serverName spec.ServerName) (outcome string, err error)
+	// PerformAdminRefetchEvents replaces stored hash-pruned copies of events with
+	// the complete copy fetched from the origin server. Results are keyed by
+	// event ID; one failure does not stop the rest.
+	PerformAdminRefetchEvents(ctx context.Context, events []AdminRefetchEvent, dryRun bool) map[string]string
 	// PerformAdminImportEvents ingests operator-supplied PDUs into roomID as new
 	// events, oldest depth first, after verifying their signatures. origin is
 	// asked for any prev or auth events the batch lacks. Results are per input
@@ -496,4 +500,12 @@ type AdminImportResult struct {
 	Line    int    `json:"line"`
 	EventID string `json:"event_id,omitempty"`
 	Outcome string `json:"outcome"`
+}
+
+// AdminRefetchEvent names one event whose stored copy should be replaced by a
+// complete one. Server is optional: the sender's homeserver is used if empty.
+type AdminRefetchEvent struct {
+	RoomID  string          `json:"room_id"`
+	EventID string          `json:"event_id"`
+	Server  spec.ServerName `json:"server,omitempty"`
 }

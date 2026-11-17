@@ -858,3 +858,38 @@ func AdminImportEvents(
 		Results []roomserverAPI.AdminImportResult `json:"results"`
 	}{Results: results}}
 }
+
+// AdminRefetchPruned replaces stored hash-pruned copies of events with the
+// complete copies from their origin servers. Body:
+// {"dry_run": bool, "events": [{"room_id", "event_id", "server"?}, ...]}.
+func AdminRefetchPruned(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
+	var body struct {
+		DryRun bool                              `json:"dry_run"`
+		Events []roomserverAPI.AdminRefetchEvent `json:"events"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.BadJSON("The request body could not be decoded into valid JSON: " + err.Error())}
+	}
+	if len(body.Events) == 0 || len(body.Events) > maxAdminFetchEvents {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"events\" array of 1-100 events.")}
+	}
+	for _, e := range body.Events {
+		if e.RoomID == "" || e.EventID == "" {
+			return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Every event needs room_id and event_id.")}
+		}
+	}
+	results := rsAPI.PerformAdminRefetchEvents(req.Context(), body.Events, body.DryRun)
+	totals := map[string]int{}
+	for _, outcome := range results {
+		key := outcome
+		if len(key) > 5 && key[:5] == "error" {
+			key = "error"
+		}
+		totals[key]++
+	}
+	return util.JSONResponse{Code: http.StatusOK, JSON: struct {
+		DryRun  bool              `json:"dry_run"`
+		Totals  map[string]int    `json:"totals"`
+		Results map[string]string `json:"results"`
+	}{body.DryRun, totals, results}}
+}

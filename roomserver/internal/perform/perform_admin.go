@@ -19,6 +19,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
@@ -998,4 +999,126 @@ func (r *Admin) PerformAdminImportEvents(
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Line < results[j].Line })
 	return results, nil
+}
+
+// Outcomes of PerformAdminRefetchEvents.
+const (
+	RefetchOutcomeRefetched    = "refetched"
+	RefetchOutcomeWouldRefetch = "would_refetch"
+	RefetchOutcomeAlreadyFull  = "already_full"
+	RefetchOutcomeHashMismatch = "hash_mismatch"
+)
+
+// PerformAdminRefetchEvents fetches the complete copy of each event whose
+// stored JSON is hash-pruned (pruned but not a genuine redaction) from its
+// origin server, requires it to pass the content hash and signature checks,
+// and stores it as an outlier, which the storage layer lets replace a pruned
+// copy. Nothing is emitted to other components: the event is not new. With
+// dryRun nothing is written.
+func (r *Admin) PerformAdminRefetchEvents(
+	ctx context.Context, events []api.AdminRefetchEvent, dryRun bool,
+) map[string]string {
+	results := make(map[string]string, len(events))
+	for _, e := range events {
+		if _, done := results[e.EventID]; done || e.EventID == "" {
+			continue
+		}
+		outcome, err := r.refetchEvent(ctx, e, dryRun)
+		if err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"room_id": e.RoomID, "event_id": e.EventID,
+			}).Warn("refetch of pruned event failed")
+			outcome = "error: " + err.Error()
+		}
+		results[e.EventID] = outcome
+	}
+	return results
+}
+
+func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRun bool) (string, error) {
+	roomInfo, err := r.DB.RoomInfo(ctx, e.RoomID)
+	if err != nil {
+		return "", err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return "", eventutil.ErrRoomNoExists{}
+	}
+	meta, err := r.DB.EventNIDs(ctx, []string{e.EventID})
+	if err != nil {
+		return "", err
+	}
+	stored, ok := meta[e.EventID]
+	if !ok {
+		return "", fmt.Errorf("event %s is not stored", e.EventID)
+	}
+	have, err := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
+	if err != nil {
+		return "", err
+	}
+	if len(have) != 1 {
+		return "", fmt.Errorf("event %s could not be loaded", e.EventID)
+	}
+	if !have[0].Redacted() || gjson.GetBytes(have[0].JSON(), "unsigned.redacted_because").Exists() {
+		return RefetchOutcomeAlreadyFull, nil
+	}
+
+	servers := []spec.ServerName{e.Server}
+	if e.Server == "" {
+		servers = servers[:0]
+		if sender, qerr := r.Queryer.QueryUserIDForSender(ctx, have[0].RoomID(), have[0].SenderID()); qerr == nil && sender != nil {
+			servers = append(servers, sender.Domain())
+		}
+		if len(servers) == 0 {
+			return "", fmt.Errorf("no server given and the sender's homeserver is unknown")
+		}
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return "", err
+	}
+	var lastErr error
+	for _, server := range servers {
+		txn, ferr := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, server, e.EventID)
+		if ferr != nil || len(txn.PDUs) == 0 {
+			lastErr = fmt.Errorf("fetching %s from %s failed: %v", e.EventID, server, ferr)
+			continue
+		}
+		ev, perr := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
+		if perr != nil {
+			lastErr = fmt.Errorf("parsing event from %s: %w", server, perr)
+			continue
+		}
+		if ev.EventID() != e.EventID || ev.RoomID().String() != e.RoomID {
+			lastErr = fmt.Errorf("%s returned a different event", server)
+			continue
+		}
+		if ev.Redacted() {
+			// Still fails its content hash: the origin has only a pruned copy too.
+			lastErr = nil
+			return RefetchOutcomeHashMismatch, nil
+		}
+		if err = r.verifyAdminEventSignatures(ctx, ev); err != nil {
+			return "", fmt.Errorf("signature check failed: %w", err)
+		}
+		if dryRun {
+			return RefetchOutcomeWouldRefetch, nil
+		}
+		inputRes := &api.InputRoomEventsResponse{}
+		r.Inputer.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+			InputRoomEvents: []api.InputRoomEvent{{
+				Kind: api.KindOutlier, Event: &types.HeaderedEvent{PDU: ev}, Origin: server,
+			}},
+			Asynchronous: false,
+			VirtualHost:  r.Cfg.Matrix.ServerName,
+		}, inputRes)
+		if inputRes.ErrMsg != "" {
+			return "", inputRes.Err()
+		}
+		after, aerr := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
+		if aerr != nil || len(after) != 1 || after[0].Redacted() {
+			return "", fmt.Errorf("event %s is still pruned after the refetch", e.EventID)
+		}
+		return RefetchOutcomeRefetched, nil
+	}
+	return "", lastErr
 }
