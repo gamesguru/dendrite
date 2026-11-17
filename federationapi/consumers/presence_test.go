@@ -413,6 +413,41 @@ func TestPresenceClearsFailedSupersededRecordWhenAnotherAckSucceeds(t *testing.T
 	require.False(t, consumer.recentSequences["@alice:test"].retain)
 }
 
+func TestPresenceFlushClearsFailedSupersededRecord(t *testing.T) {
+	sender := &stubPresenceSender{}
+	consumer := newTestPresenceConsumer(t, sender, "remote.test")
+	old := presenceSeqMessage("@alice:test", "online", 1001, 1)
+	newer := presenceSeqMessage("@alice:test", "unavailable", 1002, 2)
+	var oldAckAttempts int
+	consumer.ackPresence = func(msg *nats.Msg) error {
+		if msg != old {
+			return nil
+		}
+		oldAckAttempts++
+		if oldAckAttempts == 1 {
+			return errors.New("temporary ack failure")
+		}
+		return nil
+	}
+
+	require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{old}))
+	sender.onSend = func(_, _ spec.ServerName) {
+		sender.onSend = nil
+		// The flush has already snapshotted the old ack and is sending its
+		// EDU. A newer message supersedes it and the old ack fails once.
+		require.Equal(t, jetstream.AckActionDefer, consumer.onMessage(t.Context(), []*nats.Msg{newer}))
+		require.Contains(t, consumer.failedSuperseded["@alice:test"], uint64(1))
+	}
+	consumer.flushPending()
+
+	// The flush retries the same ack and succeeds. JetStream will not redeliver
+	// the message, so the success must clear the failure record itself.
+	require.Equal(t, 2, oldAckAttempts)
+	require.NotContains(t, consumer.failedSuperseded, "@alice:test")
+	require.False(t, consumer.recentSequences["@alice:test"].retain)
+	require.Equal(t, "unavailable", consumer.pending["@alice:test"].presence)
+}
+
 func TestPresenceIgnoresStaleRedelivery(t *testing.T) {
 	consumer := newTestPresenceConsumer(t, &stubPresenceSender{}, "remote.test")
 
