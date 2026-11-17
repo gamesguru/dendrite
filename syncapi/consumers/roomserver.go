@@ -614,22 +614,28 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	return nil
 }
 
-// currentStateGetter is the part of the sync API's current-state store that
+// oldEventState is the part of the sync API's store that
 // excludeOldEventFromSync reads.
-type currentStateGetter interface {
+type oldEventState interface {
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	// RoomLiveStartPosition is the lowest topological position among the room's
+	// events that sync delivers. ok is false when the room has none yet.
+	RoomLiveStartPosition(ctx context.Context, roomID string) (pos types.StreamPosition, ok bool, err error)
+	// ProspectiveEventPosition is the position InsertEventInTopology would
+	// assign, using the stored positions of the event's prev events.
+	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (pos types.StreamPosition, err error)
 }
 
 // excludeOldEvent decides whether an old event stays out of the sync timeline.
-// Only a gap-filled state event needs the current state, so the lookup is made
-// for those alone. A failure to read it keeps the event out.
+// Only a state event needs the store, so the snapshot is opened for those
+// alone. A failure to read it keeps the event out.
 func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent, gapFill bool) bool {
-	if ev.StateKey() == nil || !gapFill {
+	if ev.StateKey() == nil {
 		return excludeOldEventFromSync(ctx, nil, ev, gapFill)
 	}
 	snapshot, err := s.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
-		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to open a snapshot to classify a gap-filled state event; keeping it out of the timeline")
+		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to open a snapshot to classify an old state event; keeping it out of the timeline")
 		return true
 	}
 	defer snapshot.Rollback() //nolint:errcheck
@@ -640,22 +646,48 @@ func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstyp
 // sync timeline.
 //
 //   - A timeline (non-state) event is delivered, as it always has been.
-//   - A state event that is not a gap-fill (resynced state, or anything else
-//     that arrives as old) is kept out: it is history or bulk state.
-//   - A gap-filled state event happened while we were in the room, as a
-//     missed prev event of a live event, so it is delivered. It is kept out if
-//     it is m.room.create, or if the current state for its key already holds an
-//     event at the same depth or deeper: delivering a superseded or concurrent
-//     event would make a client apply an older change over a newer one.
-func excludeOldEventFromSync(ctx context.Context, state currentStateGetter, ev *rstypes.HeaderedEvent, gapFill bool) bool {
+//   - m.room.create is kept out: it is the start of the room, never news.
+//   - A state event below the room's live start is history or bulk state, such
+//     as the state the room had when we joined or backfill, so it is kept out.
+//     The live start is the lowest topological position of an event sync
+//     delivers, so it is causal, not a remote timestamp. A gap-filled state
+//     event is never treated as history: it was fetched while processing a live
+//     event.
+//   - Any other old state event happened while we were in the room, however it
+//     arrived (a gap-fill, a late parent, a resync), so it is delivered, unless
+//     the current state for its key already holds an event at the same depth
+//     or deeper: delivering a superseded or concurrent event would make a
+//     client apply an older change over a newer one.
+func excludeOldEventFromSync(ctx context.Context, state oldEventState, ev *rstypes.HeaderedEvent, gapFill bool) bool {
 	if ev.StateKey() == nil {
 		return false
 	}
-	if !gapFill || state == nil {
+	if state == nil || ev.Type() == spec.MRoomCreate {
 		return true
 	}
-	if ev.Type() == spec.MRoomCreate {
-		return true
+	if !gapFill {
+		liveStart, ok, err := state.RoomLiveStartPosition(ctx, ev.RoomID().String())
+		if err != nil {
+			log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the live start of the room to classify an old state event; keeping it out of the timeline")
+			return true
+		}
+		// With nothing delivered yet, every old event predates the room's live
+		// part, and one below the live start is history.
+		if !ok {
+			return true
+		}
+		// Compare the position InsertEventInTopology will store, not the raw
+		// claimed depth: a late parent lifts its children above it, and using
+		// the raw depth would keep such an event hidden even though it sorts
+		// above the live start.
+		pos, err := state.ProspectiveEventPosition(ctx, ev)
+		if err != nil {
+			log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the stored parents to classify an old state event; keeping it out of the timeline")
+			return true
+		}
+		if pos < liveStart {
+			return true
+		}
 	}
 	stateKey := *ev.StateKey()
 	if ev.StateKeyResolved != nil {
@@ -663,7 +695,7 @@ func excludeOldEventFromSync(ctx context.Context, state currentStateGetter, ev *
 	}
 	current, err := state.GetStateEvent(ctx, ev.RoomID().String(), ev.Type(), stateKey)
 	if err != nil {
-		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the current state to classify a gap-filled state event; keeping it out of the timeline")
+		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the current state to classify an old state event; keeping it out of the timeline")
 		return true
 	}
 	if current == nil || current.EventID() == ev.EventID() {

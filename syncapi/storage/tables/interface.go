@@ -97,6 +97,9 @@ type Events interface {
 // Topology keeps track of the depths and stream positions for all events.
 // These positions are used as types.TopologyToken when backfilling events locally.
 type Topology interface {
+	// ProspectiveEventPosition returns the topological position that
+	// InsertEventInTopology would assign based on currently stored prev events.
+	ProspectiveEventPosition(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent) (types.StreamPosition, error)
 	// InsertEventInTopology inserts the given event in the room's topology, based on the event's depth.
 	// `pos` is the stream position of this event in the events table, and is used to order events which have the same depth.
 	InsertEventInTopology(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition) (topoPos types.StreamPosition, err error)
@@ -118,6 +121,10 @@ type Topology interface {
 	// With `includeBackfilled`, events excluded from sync (backfilled history) persisted after the position
 	// are also returned, but only strictly shallower than `maxBackfillDepth`: a backfilled event at the token's own depth was stored after it, so it is newer. Without it, such events are never returned.
 	SelectEventIDsBeforeStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos, maxBackfillDepth types.StreamPosition, limit int, includeBackfilled bool) (eventIDs []string, start, end types.TopologyToken, err error)
+	// SelectLiveStartPosition returns the lowest topological position among the
+	// room's events that are delivered to sync (not excluded from it). ok is false
+	// when the room has none. Older state events sit below this position.
+	SelectLiveStartPosition(ctx context.Context, txn *sql.Tx, roomID string) (pos types.StreamPosition, ok bool, err error)
 	// SelectPositionInTopology returns the depth and stream position of a given event in the topology of the room it belongs to.
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)
 	// SelectPositionsInTopology returns the stored positions for the requested

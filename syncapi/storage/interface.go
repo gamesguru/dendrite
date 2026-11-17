@@ -124,6 +124,12 @@ type DatabaseTransaction interface {
 	// before a stream position, for backward pagination from a stream token. When includeBackfilled
 	// is set, backfilled events excluded from sync are also returned, up to the token's position.
 	GetEventsBeforeStreamPosition(ctx context.Context, maxStreamPos types.StreamPosition, to *types.TopologyToken, roomID string, filter *synctypes.RoomEventFilter, includeBackfilled bool) (events []types.StreamEvent, start, end types.TopologyToken, err error)
+	// RoomLiveStartPosition returns the lowest topological position among the
+	// room's events that sync delivers, and false when it has none.
+	RoomLiveStartPosition(ctx context.Context, roomID string) (types.StreamPosition, bool, error)
+	// ProspectiveEventPosition returns the topological position the event would
+	// receive from the stored positions of its prev events.
+	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (types.StreamPosition, error)
 	// EventPositionInTopology returns the depth and stream position of the given event.
 	EventPositionInTopology(ctx context.Context, eventID string) (types.TopologyToken, error)
 	// EventPositionByStreamPosition resolves an event's current topology

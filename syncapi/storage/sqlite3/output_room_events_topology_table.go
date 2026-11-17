@@ -99,6 +99,12 @@ const selectMaxTopologyPositionSQL = "" +
 	"SELECT COALESCE(MAX(topological_position), -1) FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND event_id IN ($2)"
 
+// The lowest topological position among the room's events that sync delivers.
+const selectLiveStartPositionSQL = "" +
+	"SELECT MIN(t.topological_position) FROM syncapi_output_room_events_topology t" +
+	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
+	" WHERE t.room_id = $1 AND e.exclude_from_sync = FALSE"
+
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
@@ -117,6 +123,7 @@ type outputRoomEventsTopologyStatements struct {
 	selectEventIDsInRangeDESCStmt                 *sql.Stmt
 	selectEventIDsBeforeStreamPositionStmt        *sql.Stmt
 	selectPositionInTopologyStmt                  *sql.Stmt
+	selectLiveStartPositionStmt                   *sql.Stmt
 	selectPositionByStreamPositionStmt            *sql.Stmt
 	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
 	selectStreamToTopologicalPositionDescStmt     *sql.Stmt
@@ -141,6 +148,7 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectEventIDsInRangeDESCStmt, selectEventIDsInRangeDESCSQL},
 		{&s.selectEventIDsBeforeStreamPositionStmt, selectEventIDsBeforeStreamPositionSQL},
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
+		{&s.selectLiveStartPositionStmt, selectLiveStartPositionSQL},
 		{&s.selectPositionByStreamPositionStmt, selectPositionByStreamPositionSQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
@@ -318,6 +326,47 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionInTopology(
 	stmt := sqlutil.TxStmt(txn, s.selectPositionInTopologyStmt)
 	err = stmt.QueryRowContext(ctx, eventID).Scan(&pos, &spos)
 	return
+}
+
+// SelectLiveStartPosition returns the lowest topological position among the
+// room's events that sync delivers, and false when it has none.
+func (s *outputRoomEventsTopologyStatements) SelectLiveStartPosition(
+	ctx context.Context, txn *sql.Tx, roomID string,
+) (types.StreamPosition, bool, error) {
+	var pos sql.NullInt64
+	err := sqlutil.TxStmt(txn, s.selectLiveStartPositionStmt).QueryRowContext(ctx, roomID).Scan(&pos)
+	if err != nil || !pos.Valid {
+		return 0, false, err
+	}
+	return types.StreamPosition(pos.Int64), true, nil
+}
+
+// ProspectiveEventPosition returns the topological position that
+// InsertEventInTopology would assign based on currently stored prev events.
+func (s *outputRoomEventsTopologyStatements) ProspectiveEventPosition(
+	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent,
+) (types.StreamPosition, error) {
+	pos := depth.Clamp(event.Depth())
+	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
+		args := make([]any, 0, len(prevs)+1)
+		args = append(args, event.RoomID().String())
+		for _, prev := range prevs {
+			args = append(args, prev)
+		}
+		query := strings.Replace(selectMaxTopologyPositionSQL, "($2)", sqlutil.QueryVariadicOffset(len(prevs), 1), 1)
+		var maxPrev int64
+		row := s.db.QueryRowContext
+		if txn != nil {
+			row = txn.QueryRowContext
+		}
+		if err := row(ctx, query, args...).Scan(&maxPrev); err != nil {
+			return 0, err
+		}
+		if lifted := maxPrev + 1; maxPrev >= 0 && lifted > pos {
+			pos = lifted
+		}
+	}
+	return types.StreamPosition(pos), nil
 }
 
 func (s *outputRoomEventsTopologyStatements) SelectPositionByStreamPosition(

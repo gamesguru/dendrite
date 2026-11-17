@@ -391,6 +391,18 @@ func (d *DatabaseTransaction) BackwardExtremitiesForRoom(
 	return d.BackwardExtremities.SelectBackwardExtremitiesForRoom(ctx, d.txn, roomID)
 }
 
+func (d *DatabaseTransaction) RoomLiveStartPosition(
+	ctx context.Context, roomID string,
+) (types.StreamPosition, bool, error) {
+	return d.Topology.SelectLiveStartPosition(ctx, d.txn, roomID)
+}
+
+func (d *DatabaseTransaction) ProspectiveEventPosition(
+	ctx context.Context, event *rstypes.HeaderedEvent,
+) (types.StreamPosition, error) {
+	return d.Topology.ProspectiveEventPosition(ctx, d.txn, event)
+}
+
 func (d *DatabaseTransaction) EventPositionInTopology(
 	ctx context.Context, eventID string,
 ) (types.TopologyToken, error) {
