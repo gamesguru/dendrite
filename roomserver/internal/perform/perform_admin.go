@@ -1070,7 +1070,7 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	if len(have) != 1 {
 		return "", fmt.Errorf("event %s could not be loaded", e.EventID)
 	}
-	if !have[0].Redacted() || gjson.GetBytes(have[0].JSON(), "unsigned.redacted_because").Exists() {
+	if !have[0].Redacted() || gjson.GetBytes(have[0].Unsigned(), "redacted_because").Exists() {
 		return RefetchOutcomeAlreadyFull, nil
 	}
 
@@ -1132,7 +1132,13 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		merged := ev.JSON()
 		var merr error
 		for _, key := range []string{"unsigned", "signatures"} {
-			if local := gjson.GetBytes(have[0].JSON(), key); local.Exists() {
+			local := gjson.Result{}
+			if key == "unsigned" {
+				local = gjson.ParseBytes(have[0].Unsigned())
+			} else {
+				local = gjson.GetBytes(have[0].JSON(), key)
+			}
+			if local.Exists() {
 				merged, merr = sjson.SetRawBytes(merged, key, []byte(local.Raw))
 			} else if key == "unsigned" {
 				merged, merr = sjson.DeleteBytes(merged, key)
@@ -1141,11 +1147,15 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 				return "", fmt.Errorf("merging %s: %w", key, merr)
 			}
 		}
-		if !gjson.GetBytes(merged, "signatures").IsObject() {
-			lastErr = fmt.Errorf("neither the stored nor the fetched copy has signatures")
+		localSignatures := gjson.GetBytes(have[0].JSON(), "signatures")
+		fetchedSignatures := gjson.GetBytes(ev.JSON(), "signatures")
+		if (roomInfo.RoomVersion == gomatrixserverlib.RoomVersionV1 || roomInfo.RoomVersion == gomatrixserverlib.RoomVersionV2) &&
+			(!localSignatures.IsObject() || len(localSignatures.Map()) == 0) &&
+			(!fetchedSignatures.IsObject() || len(fetchedSignatures.Map()) == 0) {
+			lastErr = fmt.Errorf("room version %s requires a signed event when the stored copy has no signatures", roomInfo.RoomVersion)
 			continue
 		}
-		if ev, perr = verImpl.NewEventFromUntrustedJSON(merged); perr != nil || ev.Redacted() {
+		if ev, perr = verImpl.NewEventFromTrustedJSON(merged, false); perr != nil || ev.Redacted() {
 			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %v", server, perr)
 			continue
 		}

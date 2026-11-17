@@ -7,12 +7,14 @@
 package shared
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"bytes"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -517,21 +519,64 @@ func (d *Database) UpdateEventJSON(ctx context.Context, eventID string, event *r
 // ReplaceEventJSON copies verified event fields into the existing sync API
 // rows while retaining the unsigned metadata local to each row. Current state
 // is updated only if the event is still current when this transaction runs.
-func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched *rstypes.HeaderedEvent) (outputUpdated, stateUpdated bool, err error) {
+func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched *rstypes.HeaderedEvent, dryRun bool) (outputStatus, stateStatus, outputHash, stateHash string, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		outputRows, err := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
 		if err != nil {
 			return err
 		}
 		if len(outputRows) > 0 {
-			merged, err := mergeFetchedEventWithLocalUnsigned(fetched, outputRows[0].HeaderedEvent)
-			if err != nil {
-				return fmt.Errorf("merge output event unsigned: %w", err)
+			local := outputRows[0].HeaderedEvent
+			if gjson.GetBytes(local.Unsigned(), "redacted_because").Exists() {
+				outputStatus = "redacted"
+			} else {
+				merged, err := mergeFetchedEventWithLocalUnsigned(fetched, local)
+				if err != nil {
+					return fmt.Errorf("merge output event unsigned: %w", err)
+				}
+				outputHash, err = headeredEventHash(merged)
+				if err != nil {
+					return err
+				}
+				outputStatus = "would_update_output"
+				if !dryRun {
+					expected, err := json.Marshal(local)
+					if err != nil {
+						return err
+					}
+					written, err := d.OutputEvents.UpdateUnredactedEventJSON(ctx, txn, eventID, expected, merged)
+					if err != nil {
+						return err
+					}
+					if !written {
+						check, checkErr := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
+						if checkErr != nil {
+							return checkErr
+						}
+						if len(check) == 0 {
+							outputStatus = "not_present"
+						} else if gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists() {
+							outputStatus = "redacted"
+						} else {
+							outputStatus = "write_skipped"
+						}
+					} else {
+						stored, err := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
+						if err != nil {
+							return fmt.Errorf("read back output event %s: %w", eventID, err)
+						}
+						if len(stored) != 1 {
+							return fmt.Errorf("output event %s failed read-back verification", eventID)
+						}
+						if err := verifyRefetchedContent(eventID, stored[0].HeaderedEvent, fetched); err != nil {
+							return err
+						}
+						outputStatus = "updated_output"
+					}
+				}
 			}
-			if err = d.OutputEvents.UpdateEventJSON(ctx, txn, eventID, merged); err != nil {
-				return err
-			}
-			outputUpdated = true
+		} else {
+			outputStatus = "not_present"
 		}
 
 		stateRows, err := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
@@ -539,42 +584,123 @@ func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched
 			return err
 		}
 		if len(stateRows) > 0 && stateRows[0].EventID() == eventID {
-			merged, err := mergeFetchedEventWithLocalUnsigned(fetched, stateRows[0].HeaderedEvent)
+			local := stateRows[0].HeaderedEvent
+			if gjson.GetBytes(local.Unsigned(), "redacted_because").Exists() {
+				stateStatus = "redacted"
+				return nil
+			}
+			merged, err := mergeFetchedEventWithLocalUnsigned(fetched, local)
 			if err != nil {
 				return fmt.Errorf("merge current-state event unsigned: %w", err)
 			}
-			stateUpdated, err = d.CurrentRoomState.UpdateEventJSON(ctx, txn, eventID, merged)
+			stateHash, err = headeredEventHash(merged)
 			if err != nil {
 				return err
 			}
+			stateStatus = "would_update_state"
+			if !dryRun {
+				expected, err := json.Marshal(local)
+				if err != nil {
+					return err
+				}
+				updated, err := d.CurrentRoomState.UpdateUnredactedEventJSON(ctx, txn, eventID, expected, merged)
+				if err != nil {
+					return err
+				}
+				if !updated {
+					check, checkErr := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
+					if checkErr != nil {
+						return checkErr
+					}
+					if len(check) == 0 || check[0].EventID() != eventID {
+						stateStatus = "not_present"
+					} else if gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists() {
+						stateStatus = "redacted"
+					} else {
+						stateStatus = "write_skipped"
+					}
+					return nil
+				}
+				stored, err := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
+				if err != nil {
+					return fmt.Errorf("read back current-state event %s: %w", eventID, err)
+				}
+				if len(stored) != 1 {
+					return fmt.Errorf("current-state event %s failed read-back verification", eventID)
+				}
+				if err := verifyRefetchedContent(eventID, stored[0].HeaderedEvent, fetched); err != nil {
+					return err
+				}
+				stateStatus = "updated_state"
+			}
+		} else {
+			stateStatus = "not_present"
 		}
 		return nil
 	})
 	if err != nil {
-		return false, false, err
+		return "error", "error", "", "", err
 	}
-	return outputUpdated, stateUpdated, nil
+	return outputStatus, stateStatus, outputHash, stateHash, nil
+}
+
+func headeredEventHash(event *rstypes.HeaderedEvent) (string, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func verifyRefetchedContent(eventID string, stored, fetched *rstypes.HeaderedEvent) error {
+	roomVersion, err := gomatrixserverlib.GetRoomVersion(fetched.Version())
+	if err != nil {
+		return err
+	}
+	parsed, err := roomVersion.NewEventFromUntrustedJSON(stored.JSON())
+	if err != nil {
+		return fmt.Errorf("reparse stored event %s: %w", eventID, err)
+	}
+	if parsed.Redacted() || !bytes.Equal(parsed.Content(), fetched.Content()) {
+		return fmt.Errorf("event %s failed read-back content-hash verification", eventID)
+	}
+	return nil
 }
 
 func mergeFetchedEventWithLocalUnsigned(fetched, local *rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
 	data := fetched.JSON()
-	unsigned := gjson.GetBytes(local.JSON(), "unsigned")
-	var err error
-	if unsigned.Exists() {
-		data, err = sjson.SetRawBytes(data, "unsigned", []byte(unsigned.Raw))
-	} else {
-		data, err = sjson.DeleteBytes(data, "unsigned")
-	}
-	if err != nil {
-		return nil, err
+	for _, key := range []string{"unsigned", "signatures"} {
+		localValue := gjson.Result{}
+		if key == "unsigned" {
+			localValue = gjson.ParseBytes(local.Unsigned())
+		} else {
+			localValue = gjson.GetBytes(local.JSON(), key)
+		}
+		var err error
+		if localValue.Exists() {
+			data, err = sjson.SetRawBytes(data, key, []byte(localValue.Raw))
+		} else if key == "unsigned" {
+			data, err = sjson.DeleteBytes(data, key)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	version, err := gomatrixserverlib.GetRoomVersion(fetched.Version())
 	if err != nil {
 		return nil, err
 	}
-	pdu, err := version.NewEventFromUntrustedJSON(data)
+	// The source copy has already passed untrusted parsing and its hash check.
+	// Trusted parsing here is needed to retain the row-local unsigned section,
+	// which untrusted parsing deliberately strips.
+	pdu, err := version.NewEventFromTrustedJSON(data, false)
 	if err != nil {
 		return nil, err
+	}
+	if (fetched.Version() == gomatrixserverlib.RoomVersionV1 || fetched.Version() == gomatrixserverlib.RoomVersionV2) &&
+		!gjson.GetBytes(data, "signatures").IsObject() {
+		return nil, fmt.Errorf("room version %s requires event signatures", fetched.Version())
 	}
 	if !bytes.Equal(pdu.Content(), fetched.Content()) {
 		return nil, fmt.Errorf("merged event content changed")

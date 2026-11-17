@@ -7,9 +7,14 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/shared"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
@@ -30,6 +35,148 @@ func newSyncDB(t *testing.T, dbType test.DBType) (storage.Database, func()) {
 	}
 
 	return syncDB, closeDB
+}
+
+func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, cleanup := newSyncDB(t, dbType)
+		defer cleanup()
+		ctx := t.Context()
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		const eventType = "com.example.profile"
+		const stateKey = "profile"
+		writeState := func(event *rstypes.HeaderedEvent, remove []string) {
+			_, err := db.WriteEvent(ctx, event, []*rstypes.HeaderedEvent{event}, []string{event.EventID()}, remove, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+		makePruned := func(event *rstypes.HeaderedEvent, marker string) *rstypes.HeaderedEvent {
+			prunedJSON, err := sjson.SetRawBytes(event.JSON(), "content", []byte(`{}`))
+			require.NoError(t, err)
+			roomVersion, err := gomatrixserverlib.GetRoomVersion(event.Version())
+			require.NoError(t, err)
+			pdu, err := roomVersion.NewEventFromUntrustedJSON(prunedJSON)
+			require.NoError(t, err)
+			require.True(t, pdu.Redacted())
+			pruned := &rstypes.HeaderedEvent{PDU: pdu}
+			require.NoError(t, pruned.SetUnsignedField("prev_content", map[string]string{"marker": marker}))
+			return pruned
+		}
+		storePrunedCopies := func(event *rstypes.HeaderedEvent) {
+			transaction, err := db.NewDatabaseTransaction(ctx)
+			require.NoError(t, err)
+			output := makePruned(event, "output-local")
+			state := makePruned(event, "state-local")
+			require.NoError(t, transaction.OutputEvents.UpdateEventJSON(ctx, nil, event.EventID(), output))
+			_, err = transaction.CurrentRoomState.UpdateEventJSON(ctx, nil, event.EventID(), state)
+			require.NoError(t, err)
+			require.NoError(t, transaction.Commit())
+		}
+
+		initial := room.CreateEvent(t, alice, eventType, map[string]string{"value": "full"}, test.WithStateKey(stateKey))
+		writeState(initial, nil)
+		storePrunedCopies(initial)
+		prunedRows, err := db.Events(ctx, []string{initial.EventID()})
+		require.NoError(t, err)
+		require.Len(t, prunedRows, 1)
+		require.Equal(t, "output-local", gjson.GetBytes(prunedRows[0].Unsigned(), "prev_content.marker").String())
+		outStatus, stateStatus, outputHash, stateHash, err := db.ReplaceEventJSON(ctx, initial.EventID(), initial, true)
+		require.NoError(t, err)
+		require.Equal(t, "would_update_output", outStatus)
+		require.Equal(t, "would_update_state", stateStatus)
+		require.NotEmpty(t, outputHash)
+		require.NotEmpty(t, stateHash)
+		stillPruned, err := db.Events(ctx, []string{initial.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stillPruned, 1)
+		require.JSONEq(t, `{}`, string(stillPruned[0].Content()), "dry run must not write the output row")
+
+		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, initial.EventID(), initial, false)
+		require.NoError(t, err)
+		require.Equal(t, "updated_output", outStatus)
+		require.Equal(t, "updated_state", stateStatus)
+
+		output, err := db.Events(ctx, []string{initial.EventID()})
+		require.NoError(t, err)
+		require.Len(t, output, 1)
+		require.JSONEq(t, `{"value":"full"}`, string(output[0].Content()))
+		require.Equal(t, "output-local", gjson.GetBytes(output[0].Unsigned(), "prev_content.marker").String())
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		current, err := snapshot.GetStateEvent(ctx, room.ID, eventType, stateKey)
+		require.NoError(t, err)
+		require.NotNil(t, current)
+		require.NoError(t, snapshot.Rollback())
+		require.JSONEq(t, `{"value":"full"}`, string(current.Content()))
+		require.Equal(t, "state-local", gjson.GetBytes(current.Unsigned(), "prev_content.marker").String())
+
+		// A newer state event takes the slot before the replacement. The old
+		// event may still be refreshed in the timeline but cannot rewind state.
+		newer := room.CreateEvent(t, alice, eventType, map[string]string{"value": "newer"}, test.WithStateKey(stateKey))
+		writeState(newer, []string{initial.EventID()})
+		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, initial.EventID(), initial, false)
+		require.NoError(t, err)
+		require.Equal(t, "updated_output", outStatus)
+		require.Equal(t, "not_present", stateStatus)
+		snapshot, err = db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		current, err = snapshot.GetStateEvent(ctx, room.ID, eventType, stateKey)
+		require.NoError(t, err)
+		require.NotNil(t, current)
+		require.Equal(t, newer.EventID(), current.EventID())
+		require.NoError(t, snapshot.Rollback())
+
+		outputOnly := room.CreateEvent(t, alice, eventType, map[string]string{"value": "output only"}, test.WithStateKey("output-only"))
+		writeState(outputOnly, nil)
+		transaction, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		require.NoError(t, transaction.CurrentRoomState.DeleteRoomStateByEventID(ctx, nil, outputOnly.EventID()))
+		require.NoError(t, transaction.Commit())
+		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, outputOnly.EventID(), outputOnly, false)
+		require.NoError(t, err)
+		require.Equal(t, "updated_output", outStatus)
+		require.Equal(t, "not_present", stateStatus)
+
+		stateOnly := room.CreateEvent(t, alice, eventType, map[string]string{"value": "state only"}, test.WithStateKey("state-only"))
+		writeState(stateOnly, nil)
+		transaction, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		require.NoError(t, transaction.OutputEvents.DeleteEvent(ctx, nil, stateOnly.EventID()))
+		require.NoError(t, transaction.Commit())
+		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, stateOnly.EventID(), stateOnly, false)
+		require.NoError(t, err)
+		require.Equal(t, "not_present", outStatus)
+		require.Equal(t, "updated_state", stateStatus)
+
+		absent := room.CreateEvent(t, alice, eventType, map[string]string{"value": "absent"}, test.WithStateKey("absent"))
+		writeState(absent, nil)
+		transaction, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		require.NoError(t, transaction.OutputEvents.DeleteEvent(ctx, nil, absent.EventID()))
+		require.NoError(t, transaction.CurrentRoomState.DeleteRoomStateByEventID(ctx, nil, absent.EventID()))
+		require.NoError(t, transaction.Commit())
+		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, absent.EventID(), absent, false)
+		require.NoError(t, err)
+		require.Equal(t, "not_present", outStatus)
+		require.Equal(t, "not_present", stateStatus)
+
+		redactedLocal := room.CreateEvent(t, alice, eventType, map[string]string{"value": "redacted"}, test.WithStateKey("redacted"))
+		writeState(redactedLocal, nil)
+		transaction, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		outputRedacted := makePruned(redactedLocal, "output")
+		stateRedacted := makePruned(redactedLocal, "state")
+		require.NoError(t, outputRedacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, stateRedacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, transaction.OutputEvents.UpdateEventJSON(ctx, nil, redactedLocal.EventID(), outputRedacted))
+		_, err = transaction.CurrentRoomState.UpdateEventJSON(ctx, nil, redactedLocal.EventID(), stateRedacted)
+		require.NoError(t, err)
+		require.NoError(t, transaction.Commit())
+		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, redactedLocal.EventID(), redactedLocal, false)
+		require.NoError(t, err)
+		require.Equal(t, "redacted", outStatus)
+		require.Equal(t, "redacted", stateStatus)
+	})
 }
 
 func TestFilterTable(t *testing.T) {

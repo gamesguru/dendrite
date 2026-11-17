@@ -93,6 +93,11 @@ const deleteRoomStateByEventIDSQL = "" +
 const updateCurrentRoomStateEventJSONSQL = "" +
 	"UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2"
 
+const updateUnredactedCurrentRoomStateEventJSONSQL = "" +
+	"UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2" +
+	" AND headered_event_json::jsonb = $3::jsonb" +
+	" AND (headered_event_json::jsonb -> 'unsigned' -> 'redacted_because') IS NULL"
+
 const deleteRoomStateByEventIDsSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE event_id = ANY($1)"
 
@@ -167,6 +172,7 @@ type currentRoomStateStatements struct {
 	selectJoinedUsersInRoomStmt        *sql.Stmt
 	selectEventsWithEventIDsStmt       *sql.Stmt
 	updateEventJSONStmt                *sql.Stmt
+	updateUnredactedEventJSONStmt      *sql.Stmt
 	selectStateEventStmt               *sql.Stmt
 	selectStateEventsStmt              *sql.Stmt
 	selectSharedUsersStmt              *sql.Stmt
@@ -206,6 +212,7 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 		{&s.selectJoinedUsersInRoomStmt, selectJoinedUsersInRoomSQL},
 		{&s.selectEventsWithEventIDsStmt, selectEventsWithEventIDsSQL},
 		{&s.updateEventJSONStmt, updateCurrentRoomStateEventJSONSQL},
+		{&s.updateUnredactedEventJSONStmt, updateUnredactedCurrentRoomStateEventJSONSQL},
 		{&s.selectStateEventStmt, selectStateEventSQL},
 		{&s.selectStateEventsStmt, selectStateEventsSQL},
 		{&s.selectSharedUsersStmt, selectSharedUsersSQL},
@@ -574,6 +581,25 @@ func (s *currentRoomStateStatements) UpdateEventJSON(
 		return false, err
 	}
 	res, err := sqlutil.TxStmt(txn, s.updateEventJSONStmt).ExecContext(ctx, data, eventID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (s *currentRoomStateStatements) UpdateUnredactedEventJSON(
+	ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent,
+) (bool, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	data, err = restoreEventID(data, eventID)
+	if err != nil {
+		return false, err
+	}
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, data, eventID, string(expectedJSON))
 	if err != nil {
 		return false, err
 	}

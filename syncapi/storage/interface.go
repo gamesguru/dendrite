@@ -201,7 +201,7 @@ type Database interface {
 	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
 	// ReplaceEventJSON updates existing sync copies from a verified roomserver
 	// event while preserving each copy's local unsigned metadata.
-	ReplaceEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) (outputUpdated, stateUpdated bool, err error)
+	ReplaceEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent, dryRun bool) (outputStatus, stateStatus, outputHash, stateHash string, err error)
 	// UpdateUnredactedEventJSON writes only if the stored JSON still matches
 	// expectedJSON and the stored event is not redacted.
 	UpdateUnredactedEventJSON(ctx context.Context, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error)

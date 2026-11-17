@@ -513,6 +513,31 @@ func (s *currentRoomStateStatements) UpdateEventJSON(
 	return n > 0, err
 }
 
+func (s *currentRoomStateStatements) UpdateUnredactedEventJSON(
+	ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent,
+) (bool, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	data, err = restoreEventID(data, eventID)
+	if err != nil {
+		return false, err
+	}
+	query := "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2 AND json(headered_event_json) = json($3) AND json_type(headered_event_json, '$.unsigned.redacted_because') IS NULL"
+	var res sql.Result
+	if txn == nil {
+		res, err = s.db.ExecContext(ctx, query, data, eventID, string(expectedJSON))
+	} else {
+		res, err = txn.ExecContext(ctx, query, data, eventID, string(expectedJSON))
+	}
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func currentRoomStateRowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {
 	var events []types.StreamEvent
 	for rows.Next() {
