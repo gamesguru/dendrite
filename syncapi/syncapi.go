@@ -200,6 +200,11 @@ func AddPublicRoutes(
 		routing.SetupFederation(routers.Federation, &zendriteCfg.SyncAPI, syncDB, rsAPI, keyRing)
 	}
 
+	routers.ZendriteAdmin.Handle("/admin/repairUnsigned",
+		httputil.MakeAdminAPI("admin_repair_unsigned_all", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return routing.AdminRepairUnsignedAll(req, syncDB, rsAPI, device)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
 	routers.ZendriteAdmin.Handle("/admin/repairUnsigned/{roomID}",
 		httputil.MakeAdminAPI("admin_repair_unsigned", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return routing.AdminRepairUnsigned(req, syncDB, rsAPI, device)

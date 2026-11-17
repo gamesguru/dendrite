@@ -19,11 +19,15 @@ import (
 // prev event ID, so each test decides exactly what the roomserver knows.
 type stateBefore struct {
 	answers map[string]rsapi.QueryStateAfterEventsResponse
+	err     error
 }
 
 func (s *stateBefore) QueryStateAfterEvents(
 	_ context.Context, req *rsapi.QueryStateAfterEventsRequest, res *rsapi.QueryStateAfterEventsResponse,
 ) error {
+	if s.err != nil {
+		return s.err
+	}
 	if answer, ok := s.answers[req.PrevEventIDs[0]]; ok {
 		*res = answer
 	}
@@ -284,4 +288,21 @@ func TestRepairRoomPrevStateKeepsExistingPrevContent(t *testing.T) {
 	assert.Equal(t, 1, report.AlreadyHad)
 	assert.Equal(t, 0, report.Repaired)
 	assert.Equal(t, "invite", gjson.GetBytes(newJoin.Unsigned(), "prev_content.membership").Str)
+}
+
+// A predecessor stored without a before-state snapshot reports MissingStateError.
+// That is "cannot say" for this lookup, not a repair failure, so it must count
+// as unavailable rather than as an error. The roomserver API still returns the
+// error to callers that need to know about missing state.
+func TestRepairRoomPrevStateMissingStateIsUnavailable(t *testing.T) {
+	_, newJoin, roomID, q, db := profileChange(t)
+	q.err = rstypes.MissingStateError("storage: missing state for event NID 1")
+
+	report, err := RepairRoomPrevState(context.Background(), db, q, roomID, true)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, report.LookupUnavailable)
+	assert.Equal(t, 0, report.Errors)
+	assert.Equal(t, 0, report.Repaired)
+	assert.False(t, HasPrevContent(newJoin))
 }

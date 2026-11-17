@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -61,6 +62,16 @@ func LookupPrevState(
 	}
 	res := &rsapi.QueryStateAfterEventsResponse{}
 	if err := q.QueryStateAfterEvents(ctx, req, res); err != nil {
+		// A prev event stored without a before-state snapshot (redactions, and
+		// some backfilled events) comes back as MissingStateError. The state
+		// before the event cannot be derived here, which is the same answer as a
+		// missing prev event: unavailable, not a failure. Other callers of
+		// QueryStateAfterEvents still see the error, because for them missing
+		// state may mean a real storage problem.
+		var missingStateErr rstypes.MissingStateError
+		if errors.As(err, &missingStateErr) {
+			return synctypes.PrevEventRef{}, PrevStateUnavailable, nil
+		}
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, fmt.Errorf("QueryStateAfterEvents: %w", err)
 	}
 	if !res.RoomExists || !res.PrevEventsExist || res.StateIncomplete {
@@ -237,6 +248,10 @@ func RepairRoomPrevState(
 			}
 			prev, outcome, err := LookupPrevState(ctx, q, ev)
 			if err != nil {
+				logrus.WithError(err).WithFields(logrus.Fields{
+					"room_id":  roomID,
+					"event_id": ev.EventID(),
+				}).Warn("Failed to look up the state before a stored event")
 				report.Errors++
 				continue
 			}
@@ -257,6 +272,10 @@ func RepairRoomPrevState(
 				// redactions or other event rewrites are not overwritten.
 				latest, lerr := db.Events(ctx, []string{ev.EventID()})
 				if lerr != nil || len(latest) != 1 || latest[0] == nil {
+					logrus.WithError(lerr).WithFields(logrus.Fields{
+						"room_id":  roomID,
+						"event_id": ev.EventID(),
+					}).Warn("Failed to re-read a stored event before repair")
 					report.Errors++
 					continue
 				}
@@ -266,10 +285,18 @@ func RepairRoomPrevState(
 				}
 				expectedJSON, lerr := json.Marshal(ev)
 				if lerr != nil {
+					logrus.WithError(lerr).WithFields(logrus.Fields{
+						"room_id":  roomID,
+						"event_id": ev.EventID(),
+					}).Warn("Failed to marshal a stored event before repair")
 					report.Errors++
 					continue
 				}
 				if err = ApplyPrevState(ev, prev); err != nil {
+					logrus.WithError(err).WithFields(logrus.Fields{
+						"room_id":  roomID,
+						"event_id": ev.EventID(),
+					}).Warn("Failed to set prev_content on a stored event")
 					report.Errors++
 					continue
 				}
@@ -278,6 +305,10 @@ func RepairRoomPrevState(
 				// overwritten.
 				written, werr := db.UpdateUnredactedEventJSON(ctx, ev.EventID(), expectedJSON, ev)
 				if werr != nil {
+					logrus.WithError(werr).WithFields(logrus.Fields{
+						"room_id":  roomID,
+						"event_id": ev.EventID(),
+					}).Warn("Failed to write repaired prev_content")
 					report.Errors++
 					continue
 				}
