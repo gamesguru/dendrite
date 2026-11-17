@@ -76,6 +76,12 @@ func TestTypingStreamProviderIncrementalSyncWaitsForPendingTyping(t *testing.T) 
 		Timeout:  time.Second,
 	}
 
+	// The interval is normally 50ms. A loaded CI machine can delay the
+	// goroutine below past that, returning before the typing update arrives.
+	previousInterval := typingWaitInterval
+	typingWaitInterval = 2 * time.Second
+	t.Cleanup(func() { typingWaitInterval = previousInterval })
+
 	go func() {
 		time.Sleep(5 * time.Millisecond)
 		cache.AddTypingUser(userID, roomID, nil)

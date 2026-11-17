@@ -13,7 +13,9 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
-const typingWaitInterval = 50 * time.Millisecond
+// typingWaitInterval bounds how long a sync waits for typing state to arrive.
+// It is a variable so tests can widen the window instead of racing the timer.
+var typingWaitInterval = 50 * time.Millisecond
 
 type TypingStreamProvider struct {
 	DefaultStreamProvider
