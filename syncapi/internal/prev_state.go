@@ -62,7 +62,9 @@ func LookupPrevState(
 	if err := q.QueryStateAfterEvents(ctx, req, res); err != nil {
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, fmt.Errorf("QueryStateAfterEvents: %w", err)
 	}
-	if !res.RoomExists || !res.PrevEventsExist {
+	if !res.RoomExists || !res.PrevEventsExist || res.StateIncomplete {
+		// Incomplete state means the answer may omit the true predecessor, so
+		// it is unavailable rather than absent: do not write prev_content.
 		return synctypes.PrevEventRef{}, PrevStateUnavailable, nil
 	}
 	for _, prev := range res.StateEvents {
@@ -77,13 +79,6 @@ func LookupPrevState(
 			ReplacesState: prev.EventID(),
 			PrevSenderID:  string(prev.SenderID()),
 		}, PrevStateFound, nil
-	}
-	if res.StateIncomplete {
-		// Incomplete state can omit the true predecessor, so a missing entry is
-		// unavailable rather than absent. A predecessor that is present is still
-		// a stored state event for this key, so it was used above: a snapshot
-		// can lack entries but does not invent them.
-		return synctypes.PrevEventRef{}, PrevStateUnavailable, nil
 	}
 	return synctypes.PrevEventRef{}, PrevStateNone, nil
 }
