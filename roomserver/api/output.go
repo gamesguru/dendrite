@@ -203,6 +203,10 @@ type OutputOldRoomEvent struct {
 	// The Event.
 	Event             *types.HeaderedEvent                `json:"event"`
 	HistoryVisibility gomatrixserverlib.HistoryVisibility `json:"history_visibility"`
+	// GapFill is true when the event was fetched to fill a gap while processing
+	// a live event, as opposed to being history or resynced state. See
+	// InputRoomEvent.GapFill.
+	GapFill bool `json:"gap_fill,omitempty"`
 }
 
 // An OutputNewInviteEvent is written whenever an invite becomes active.

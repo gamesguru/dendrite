@@ -845,6 +845,7 @@ func (r *Inputer) processRoomEvent(
 				OldRoomEvent: &api.OutputOldRoomEvent{
 					Event:             headered,
 					HistoryVisibility: historyVisibility,
+					GapFill:           input.GapFill,
 				},
 			},
 		})

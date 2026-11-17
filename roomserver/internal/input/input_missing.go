@@ -122,6 +122,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 	for _, newEvent := range newEvents {
 		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 			Kind:         api.KindOld,
+			GapFill:      true,
 			Event:        &types.HeaderedEvent{PDU: newEvent},
 			Origin:       t.origin,
 			SendAsServer: api.DoNotSendToOtherServers,
@@ -217,6 +218,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		for _, newEvent := range newEvents {
 			err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 				Kind:         api.KindOld,
+				GapFill:      true,
 				Event:        &types.HeaderedEvent{PDU: newEvent},
 				Origin:       t.origin,
 				SendAsServer: api.DoNotSendToOtherServers,
@@ -276,6 +278,7 @@ func (t *missingStateReq) processEventWithMissingState(
 
 	err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 		Kind:          api.KindOld,
+		GapFill:       true,
 		Event:         &types.HeaderedEvent{PDU: backwardsExtremity},
 		Origin:        t.origin,
 		HasState:      true,
@@ -296,6 +299,7 @@ func (t *missingStateReq) processEventWithMissingState(
 	for _, newEvent := range newEvents {
 		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 			Kind:         api.KindOld,
+			GapFill:      true,
 			Event:        &types.HeaderedEvent{PDU: newEvent},
 			Origin:       t.origin,
 			SendAsServer: api.DoNotSendToOtherServers,

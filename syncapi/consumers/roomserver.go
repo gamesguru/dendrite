@@ -524,12 +524,12 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	ev := msg.Event
 	received := time.Now()
 
-	// TODO: The state key check when excluding from sync is designed
-	// to stop us from lying to clients with old state, whilst still
-	// allowing normal timeline events through. This is an absolute
-	// hack but until we have some better strategy for dealing with
-	// old events in the sync API, this should at least prevent us
-	// from confusing clients into thinking they've joined/left rooms.
+	// Old state events are kept out of the sync timeline so that history and
+	// resynced state do not reach clients as if they had just happened, which
+	// would make them think a user had just joined or left. A state event
+	// fetched to fill a gap while processing a live event did happen while we
+	// were in the room, so it is delivered unless something newer already holds
+	// its state key; see excludeOldEventFromSync.
 
 	userID, err := s.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), ev.SenderID())
 	if err != nil {
@@ -543,6 +543,8 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// must not stop the event being stored.
 	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
+	excludeFromSync := s.excludeOldEvent(ctx, ev, msg.GapFill)
+
 	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
@@ -550,7 +552,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		if err != nil {
 			return err
 		}
-		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, ev.StateKey() != nil, msg.HistoryVisibility, noBackfill...)
+		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, excludeFromSync, msg.HistoryVisibility, noBackfill...)
 		return err
 	})
 	if err != nil {
@@ -610,6 +612,64 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	s.notifier.OnNewEvent(ev, ev.RoomID().String(), nil, types.StreamingToken{PDUPosition: pduPos, StickyPosition: stickyPos}) //nolint:contextcheck
 
 	return nil
+}
+
+// currentStateGetter is the part of the sync API's current-state store that
+// excludeOldEventFromSync reads.
+type currentStateGetter interface {
+	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+}
+
+// excludeOldEvent decides whether an old event stays out of the sync timeline.
+// Only a gap-filled state event needs the current state, so the lookup is made
+// for those alone. A failure to read it keeps the event out.
+func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent, gapFill bool) bool {
+	if ev.StateKey() == nil || !gapFill {
+		return excludeOldEventFromSync(ctx, nil, ev, gapFill)
+	}
+	snapshot, err := s.db.NewDatabaseSnapshot(ctx)
+	if err != nil {
+		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to open a snapshot to classify a gap-filled state event; keeping it out of the timeline")
+		return true
+	}
+	defer snapshot.Rollback() //nolint:errcheck
+	return excludeOldEventFromSync(ctx, snapshot, ev, gapFill)
+}
+
+// excludeOldEventFromSync reports whether an old event must stay out of the
+// sync timeline.
+//
+//   - A timeline (non-state) event is delivered, as it always has been.
+//   - A state event that is not a gap-fill (resynced state, or anything else
+//     that arrives as old) is kept out: it is history or bulk state.
+//   - A gap-filled state event happened while we were in the room, as a
+//     missed prev event of a live event, so it is delivered. It is kept out if
+//     it is m.room.create, or if the current state for its key already holds an
+//     event at the same depth or deeper: delivering a superseded or concurrent
+//     event would make a client apply an older change over a newer one.
+func excludeOldEventFromSync(ctx context.Context, state currentStateGetter, ev *rstypes.HeaderedEvent, gapFill bool) bool {
+	if ev.StateKey() == nil {
+		return false
+	}
+	if !gapFill || state == nil {
+		return true
+	}
+	if ev.Type() == spec.MRoomCreate {
+		return true
+	}
+	stateKey := *ev.StateKey()
+	if ev.StateKeyResolved != nil {
+		stateKey = *ev.StateKeyResolved
+	}
+	current, err := state.GetStateEvent(ctx, ev.RoomID().String(), ev.Type(), stateKey)
+	if err != nil {
+		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the current state to classify a gap-filled state event; keeping it out of the timeline")
+		return true
+	}
+	if current == nil || current.EventID() == ev.EventID() {
+		return false
+	}
+	return current.Depth() >= ev.Depth()
 }
 
 // writeStickyEvent adds an event that is an unexpired MSC4354 sticky event to

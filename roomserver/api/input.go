@@ -119,6 +119,13 @@ type InputRoomEvent struct {
 	// event. This is used by admin endpoints (e.g. downloadState) that need to
 	// inject events into rooms where the sender may lack the necessary power level.
 	SkipEventAuth bool `json:"skip_event_auth,omitempty"`
+	// GapFill marks a KindOld event that was fetched to fill a gap in the DAG
+	// while processing a live event (/get_missing_events or the state at a
+	// backwards extremity). Such an event happened while we were in the room,
+	// so it is not history: the sync API delivers it to clients, as Synapse
+	// does for pulled events that are not backfilled. It is false for state
+	// events written by a partial-state resync, which are bulk history.
+	GapFill bool `json:"gap_fill,omitempty"`
 }
 
 // TransactionID contains the transaction ID sent by a client when sending an
