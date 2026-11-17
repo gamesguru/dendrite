@@ -133,6 +133,35 @@ func TestTypingStreamProviderPositionAfterEventsAdvances(t *testing.T) {
 	}
 }
 
+func TestTypingStreamProviderPositionIncludesInterleavedTypingUpdate(t *testing.T) {
+	const roomID = "!room:test"
+	const userID = "@alice:test"
+
+	cache := caching.NewTypingCache()
+	provider := &TypingStreamProvider{EDUCache: cache}
+	from := types.StreamPosition(0)
+	req := &types.SyncRequest{
+		Context:  context.Background(),
+		Response: types.NewResponse(),
+		Rooms:    map[string]string{roomID: spec.Join},
+	}
+
+	// Reproduce waitForTypingEvents' read order: the global position is read,
+	// then a typing update lands before the room snapshot is read.
+	to := types.StreamPosition(cache.GetLatestSyncPosition())
+	updatePosition := cache.AddTypingUser(userID, roomID, nil)
+	added, oldest := provider.addTypingEvents(req, from)
+	if !added {
+		t.Fatal("expected the interleaved typing update in the response")
+	}
+	if got := provider.positionAfterEvents(to, from, oldest); got != types.StreamPosition(updatePosition) {
+		t.Fatalf("expected returned position %d to cover the included update, got %d", updatePosition, got)
+	}
+	if got := req.Response.Rooms.Join[roomID].Ephemeral.Events; len(got) != 1 {
+		t.Fatalf("expected one typing event, got %d", len(got))
+	}
+}
+
 // With typing updates in several rooms, the fallback position is the lowest
 // room position that produced an event, so no other room's update is skipped.
 func TestTypingStreamProviderAddTypingEventsReportsOldestPosition(t *testing.T) {

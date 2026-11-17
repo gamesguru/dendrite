@@ -8,7 +8,6 @@ package perform
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1051,12 +1050,7 @@ func persistEvents(ctx context.Context, db storage.Database, querier api.QuerySe
 			// The event is already stored. Skipping it here would leave it
 			// without a before-state snapshot (set by the caller for stored
 			// events only), so every later backfill would refetch it. Keep it.
-			entry := logrus.WithError(err).WithField("event_id", ev.EventID())
-			if errors.Is(err, sql.ErrNoRows) {
-				entry.Debug("Redaction deferred until the event has a before-state")
-			} else {
-				entry.Error("Failed to redact event")
-			}
+			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("Failed to redact event")
 			redactedEvent = nil
 		}
 		// If storing this event results in it being redacted, then do so.
