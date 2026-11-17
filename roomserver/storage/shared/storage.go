@@ -479,7 +479,9 @@ func (d *EventDatabase) snapshotNIDFromEventID(
 		return 0, err
 	}
 	if stateNID == 0 {
-		return 0, sql.ErrNoRows // effectively there's no state entry
+		// Distinguish "no before-state yet" from a missing event row so callers
+		// that must ignore the former still report the latter.
+		return 0, types.ErrNoStateSnapshot
 	}
 	return stateNID, err
 }
