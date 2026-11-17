@@ -7,9 +7,11 @@ package perform
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 )
 
 // TestAdminDuplicateOutcome covers the two results for an event ID that was
@@ -31,6 +33,77 @@ func TestAdminDuplicateOutcome(t *testing.T) {
 			})
 			if got != tc.want {
 				t.Fatalf("adminDuplicateOutcome() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdminRefetchSignatureStatus(t *testing.T) {
+	verifyErr := errors.New("signature key unavailable")
+	tests := []struct {
+		name      string
+		version   gomatrixserverlib.RoomVersion
+		verifyErr error
+		want      string
+		wantFatal bool
+	}{
+		{name: "verified", version: gomatrixserverlib.RoomVersionV2, want: RefetchOutcomeRefetched},
+		{name: "v1 failure is fatal", version: gomatrixserverlib.RoomVersionV1, verifyErr: verifyErr, wantFatal: true},
+		{name: "v2 failure is fatal", version: gomatrixserverlib.RoomVersionV2, verifyErr: verifyErr, wantFatal: true},
+		{name: "modern version can report unverified", version: gomatrixserverlib.RoomVersionV10, verifyErr: verifyErr, want: RefetchOutcomeSigUnverified},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, fatal := adminRefetchSignatureStatus(tc.version, tc.verifyErr)
+			if got != tc.want || fatal != tc.wantFatal {
+				t.Fatalf("adminRefetchSignatureStatus() = (%q, %t), want (%q, %t)", got, fatal, tc.want, tc.wantFatal)
+			}
+		})
+	}
+}
+
+func TestExplicitRefetchServersReservesSenderSlotOnlyWhenNeeded(t *testing.T) {
+	explicit := make([]spec.ServerName, maxRefetchServers)
+	for i := range explicit {
+		explicit[i] = spec.ServerName(fmt.Sprintf("server-%d.test", i))
+	}
+	tests := []struct {
+		name   string
+		first  spec.ServerName
+		list   []spec.ServerName
+		sender spec.ServerName
+		want   []spec.ServerName
+	}{
+		{
+			name:   "sender already first does not drop an explicit candidate",
+			first:  "sender.test",
+			list:   explicit,
+			sender: "sender.test",
+			want:   append([]spec.ServerName{"sender.test"}, explicit[:maxRefetchServers-1]...),
+		},
+		{
+			name:   "sender late in explicit list is retained within cap",
+			list:   append(append([]spec.ServerName(nil), explicit...), "sender.test"),
+			sender: "sender.test",
+			want:   append(append([]spec.ServerName(nil), explicit[:maxRefetchServers-1]...), "sender.test"),
+		},
+		{
+			name:   "sender not explicit gets a reserved slot",
+			list:   explicit,
+			sender: "sender.test",
+			want:   append(append([]spec.ServerName(nil), explicit[:maxRefetchServers-1]...), "sender.test"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := explicitRefetchServers(tc.first, tc.list, tc.sender)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d candidates, want %d: %v", len(got), len(tc.want), got)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("candidate %d = %q, want %q (all %v)", i, got[i], tc.want[i], got)
+				}
 			}
 		})
 	}

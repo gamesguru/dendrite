@@ -723,6 +723,7 @@ func AdminFetchEvent(req *http.Request, device *userapi.Device, rsAPI roomserver
 }
 
 const maxAdminFetchEvents = 100
+const maxAdminRefetchServers = 8
 
 // AdminFetchEvents is the batch form of AdminFetchEvent. Body: {"event_ids": [...]}.
 // Events are ingested sequentially in the order given (list oldest first to
@@ -860,8 +861,9 @@ func AdminImportEvents(
 }
 
 // AdminRefetchPruned replaces stored hash-pruned copies of events with the
-// complete copies from their origin servers. Body:
-// {"dry_run": bool, "events": [{"room_id", "event_id", "server"?}, ...]}.
+// complete copies from candidate servers. Body:
+// {"dry_run": bool, "servers": ["server.name"...], "events":
+// [{"room_id", "event_id", "server"?, "servers"?}, ...]}.
 func AdminRefetchPruned(req *http.Request, device *userapi.Device, rsAPI roomserverAPI.ClientRoomserverAPI) util.JSONResponse {
 	var body struct {
 		DryRun bool `json:"dry_run"`
@@ -874,6 +876,9 @@ func AdminRefetchPruned(req *http.Request, device *userapi.Device, rsAPI roomser
 	}
 	if len(body.Events) == 0 || len(body.Events) > maxAdminFetchEvents {
 		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("Expecting an \"events\" array of 1-100 events.")}
+	}
+	if len(body.Servers) > maxAdminRefetchServers {
+		return util.JSONResponse{Code: http.StatusBadRequest, JSON: spec.MissingParam("The servers array may contain at most 8 entries.")}
 	}
 	for i, e := range body.Events {
 		if e.RoomID == "" || e.EventID == "" {

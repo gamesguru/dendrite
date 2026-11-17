@@ -1070,7 +1070,11 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	if len(have) != 1 {
 		return "", fmt.Errorf("event %s could not be loaded", e.EventID)
 	}
-	if !have[0].Redacted() || gjson.GetBytes(have[0].Unsigned(), "redacted_because").Exists() {
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return "", err
+	}
+	if !eventutil.StoredCopyLooksHashPruned(verImpl, have[0].JSON()) {
 		return RefetchOutcomeAlreadyFull, nil
 	}
 
@@ -1080,10 +1084,6 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	}
 	if len(servers) > maxRefetchServers {
 		servers = servers[:maxRefetchServers]
-	}
-	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
-	if err != nil {
-		return "", err
 	}
 	var lastErr error
 	sawPruned := false
@@ -1119,6 +1119,12 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		}
 		if ev.EventID() != e.EventID || ev.RoomID().String() != e.RoomID {
 			lastErr = fmt.Errorf("%s returned a different event", server)
+			continue
+		}
+		storedHash := gjson.GetBytes(have[0].JSON(), "hashes.sha256")
+		fetchedHash := gjson.GetBytes(txn.PDUs[0], "hashes.sha256")
+		if storedHash.Exists() != fetchedHash.Exists() || storedHash.String() != fetchedHash.String() {
+			sawPruned = true
 			continue
 		}
 		if ev.Redacted() {
@@ -1166,9 +1172,10 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 		}
 		// The merged copy carries this store's own signatures, so a failure here
 		// (for example the origin's keys are unreachable) is reported, not fatal.
-		signed := RefetchOutcomeRefetched
-		if verr := r.verifyAdminEventSignatures(ctx, ev); verr != nil {
-			signed = RefetchOutcomeSigUnverified
+		verr := r.verifyAdminEventSignatures(ctx, ev)
+		signed, signatureFailureIsFatal := adminRefetchSignatureStatus(roomInfo.RoomVersion, verr)
+		if signatureFailureIsFatal {
+			return "", fmt.Errorf("room version %s requires verified signatures for refetched event %s: %w", roomInfo.RoomVersion, e.EventID, verr)
 		}
 		if dryRun {
 			return "would_" + signed, nil
@@ -1185,7 +1192,7 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 			return "", inputRes.Err()
 		}
 		after, aerr := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
-		if aerr != nil || len(after) != 1 || after[0].Redacted() {
+		if aerr != nil || len(after) != 1 || eventutil.StoredCopyLooksHashPruned(verImpl, after[0].JSON()) {
 			return "", fmt.Errorf("event %s is still pruned after the refetch", e.EventID)
 		}
 		return signed, nil
@@ -1205,6 +1212,16 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 	return "", fmt.Errorf("no candidate server returned a verifiable copy")
 }
 
+func adminRefetchSignatureStatus(roomVersion gomatrixserverlib.RoomVersion, verifyErr error) (outcome string, fatal bool) {
+	if verifyErr == nil {
+		return RefetchOutcomeRefetched, false
+	}
+	if roomVersion == gomatrixserverlib.RoomVersionV1 || roomVersion == gomatrixserverlib.RoomVersionV2 {
+		return "", true
+	}
+	return RefetchOutcomeSigUnverified, false
+}
+
 // refetchServerCandidates orders sources from most likely to hold the event to
 // least likely. For old events, historical residents are more useful than
 // current residents: they may have retained the event even if current members
@@ -1212,7 +1229,11 @@ func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRu
 func (r *Admin) refetchServerCandidates(
 	ctx context.Context, e api.AdminRefetchEvent, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo,
 ) []spec.ServerName {
-	servers := make([]spec.ServerName, 0, 16)
+	var senderServer spec.ServerName
+	if sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID()); err == nil && sender != nil {
+		senderServer = sender.Domain()
+	}
+	servers := explicitRefetchServers(e.Server, e.Servers, senderServer)
 	add := func(candidate spec.ServerName) {
 		if candidate == "" {
 			return
@@ -1223,12 +1244,6 @@ func (r *Admin) refetchServerCandidates(
 			}
 		}
 		servers = append(servers, candidate)
-	}
-	if e.Server != "" {
-		add(e.Server)
-	}
-	for _, candidate := range e.Servers {
-		add(candidate)
 	}
 
 	// Reuse backfill's historical membership and history-visibility selection.
@@ -1247,9 +1262,6 @@ func (r *Admin) refetchServerCandidates(
 		}
 	}
 
-	if sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID()); err == nil && sender != nil {
-		add(sender.Domain())
-	}
 	if create, err := r.DB.GetStateEvent(ctx, e.RoomID, spec.MRoomCreate, ""); err == nil && create != nil {
 		if creator, err := r.Queryer.QueryUserIDForSender(ctx, create.RoomID(), create.SenderID()); err == nil && creator != nil {
 			add(creator.Domain())
@@ -1271,4 +1283,60 @@ func (r *Admin) refetchServerCandidates(
 		servers = servers[:maxRefetchServers]
 	}
 	return servers
+}
+
+// explicitRefetchServers keeps explicit order while reserving a candidate slot
+// for the sender's homeserver only when it is not already in the explicit list.
+func explicitRefetchServers(first spec.ServerName, explicit []spec.ServerName, sender spec.ServerName) []spec.ServerName {
+	ordered := make([]spec.ServerName, 0, len(explicit)+1)
+	add := func(candidate spec.ServerName) {
+		if candidate == "" {
+			return
+		}
+		for _, existing := range ordered {
+			if existing == candidate {
+				return
+			}
+		}
+		ordered = append(ordered, candidate)
+	}
+	add(first)
+	for _, candidate := range explicit {
+		add(candidate)
+	}
+
+	senderIndex := -1
+	for i, candidate := range ordered {
+		if candidate == sender && sender != "" {
+			senderIndex = i
+			break
+		}
+	}
+	if senderIndex >= 0 && senderIndex < maxRefetchServers {
+		if len(ordered) > maxRefetchServers {
+			ordered = ordered[:maxRefetchServers]
+		}
+		return ordered
+	}
+	limit := maxRefetchServers
+	if sender != "" {
+		limit--
+	}
+	if len(ordered) > limit {
+		ordered = ordered[:limit]
+	}
+	if senderIndex >= 0 {
+		// The sender appeared after the cap in the explicit list. Keep it while
+		// preserving the earlier explicit order for the remaining slots.
+		addSender := sender
+		for _, candidate := range ordered {
+			if candidate == addSender {
+				return ordered
+			}
+		}
+		ordered = append(ordered, addSender)
+	} else if sender != "" {
+		ordered = append(ordered, sender)
+	}
+	return ordered
 }

@@ -30,29 +30,56 @@
 \pset footer on
 
 \echo ''
-\echo '=== 1a. hidden output rows: current state (wrongly hidden) vs history ==='
-WITH hidden AS (
-  SELECT o.id, o.room_id, o.event_id, o.type
+\echo '=== 1a. hidden output rows: repair candidates vs intentionally hidden ==='
+WITH live_start AS (
+  SELECT t.room_id, min(t.topological_position) AS live_start
+  FROM syncapi_output_room_events_topology t
+  JOIN syncapi_output_room_events e ON e.event_id = t.event_id
+  WHERE e.exclude_from_sync = FALSE
+    AND e.type <> 'm.room.create'
+    AND e.headered_event_json::jsonb ? 'state_key'
+  GROUP BY t.room_id
+), hidden AS (
+  SELECT o.id, o.room_id, o.event_id, o.type, t.topological_position, l.live_start,
+         (s.event_id IS NOT NULL) AS is_current
   FROM syncapi_output_room_events o
+  LEFT JOIN syncapi_current_room_state s
+    ON s.room_id = o.room_id AND s.event_id = o.event_id
+  LEFT JOIN syncapi_output_room_events_topology t ON t.event_id = o.event_id
+  LEFT JOIN live_start l ON l.room_id = o.room_id
   WHERE o.exclude_from_sync = TRUE
 )
 SELECT count(*) AS hidden_total,
-       count(*) FILTER (WHERE EXISTS (
-         SELECT 1 FROM syncapi_current_room_state s
-         WHERE s.room_id = h.room_id AND s.event_id = h.event_id
-       )) AS hidden_but_current_state,
-       count(*) FILTER (WHERE NOT EXISTS (
-         SELECT 1 FROM syncapi_current_room_state s
-         WHERE s.room_id = h.room_id AND s.event_id = h.event_id
-       )) AS hidden_history
+       count(*) FILTER (WHERE is_current
+         AND type <> 'm.room.create'
+         AND live_start IS NOT NULL
+         AND topological_position >= live_start
+       ) AS repair_candidates,
+       count(*) FILTER (WHERE NOT is_current) AS hidden_history,
+       count(*) FILTER (WHERE is_current
+         AND (type = 'm.room.create' OR live_start IS NULL OR topological_position IS NULL OR topological_position < live_start)
+       ) AS intentionally_hidden_current_state
 FROM hidden h;
 
 \echo ''
 \echo '=== 1b. wrongly hidden current-state rows, by room (expect empty) ==='
+WITH live_start AS (
+  SELECT t.room_id, min(t.topological_position) AS live_start
+  FROM syncapi_output_room_events_topology t
+  JOIN syncapi_output_room_events e ON e.event_id = t.event_id
+  WHERE e.exclude_from_sync = FALSE
+    AND e.type <> 'm.room.create'
+    AND e.headered_event_json::jsonb ? 'state_key'
+  GROUP BY t.room_id
+)
 SELECT o.room_id, o.type, count(*) AS wrongly_hidden, min(o.id) AS first_id, max(o.id) AS last_id
 FROM syncapi_output_room_events o
 JOIN syncapi_current_room_state s ON s.room_id = o.room_id AND s.event_id = o.event_id
+JOIN syncapi_output_room_events_topology t ON t.event_id = o.event_id
+JOIN live_start l ON l.room_id = o.room_id
 WHERE o.exclude_from_sync = TRUE
+  AND o.type <> 'm.room.create'
+  AND t.topological_position >= l.live_start
 GROUP BY o.room_id, o.type
 ORDER BY wrongly_hidden DESC;
 
@@ -73,6 +100,7 @@ FROM syncapi_output_room_events o
 JOIN last_join lj ON lj.room_id = o.room_id
 WHERE o.exclude_from_sync = TRUE
   AND o.type <> 'm.room.member'
+  AND o.headered_event_json::jsonb ? 'state_key'
   AND o.id > lj.join_id
 GROUP BY o.room_id
 ORDER BY hidden_state_after_last_join DESC;
@@ -100,7 +128,7 @@ SELECT count(*) FILTER (
            AND NOT (sync_content @> rs_content)
        ) AS needs_review,
        count(*) FILTER (
-         WHERE rs_rb IS NOT NULL OR sync_rb IS NOT NULL
+         WHERE (rs_rb IS NOT NULL OR sync_rb IS NOT NULL)
            AND rs_content IS DISTINCT FROM sync_content
        ) AS genuine_redaction_mismatch
 FROM cmp;
@@ -145,12 +173,27 @@ ORDER BY affected_output_rows DESC;
 
 \echo ''
 \echo '=== 2e. event IDs for POST /_zendrite/admin/refetchPruned (batches of 100) ==='
--- Output rows only. Drop the ::text if you want to pipe it.
-SELECT o.event_id::text
-FROM syncapi_output_room_events o
-JOIN roomserver_events e ON e.event_id = o.event_id
-JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
-  AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-ORDER BY o.id;
+-- Each result is a complete request body and has at most 100 event objects.
+-- Locally repairable rows are excluded: sync content already contains the
+-- roomserver content, so these do not need a federation refetch.
+WITH candidates AS (
+  SELECT o.id,
+         o.room_id,
+         o.event_id,
+         row_number() OVER (ORDER BY o.id) - 1 AS n
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+  WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
+    AND NOT ((o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
+    AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+    AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+)
+SELECT (n / 100) + 1 AS batch_number,
+       jsonb_build_object(
+         'dry_run', true,
+         'events', jsonb_agg(jsonb_build_object('room_id', room_id, 'event_id', event_id) ORDER BY n)
+       ) AS request_body
+FROM candidates
+GROUP BY n / 100
+ORDER BY batch_number;

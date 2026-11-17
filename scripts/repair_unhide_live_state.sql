@@ -11,8 +11,8 @@
 --     in syncapi_current_room_state -- otherwise it is history and belongs in
 --     /messages only, not in the live timeline
 --   * its topological position is at or after the room's live start: the
---     lowest topological position among that room's already-delivered
---     (exclude_from_sync = FALSE) events
+--     lowest position among delivered, non-create state events. Backfilled
+--     messages and other non-state events are not a live-start marker.
 --   * not m.room.create
 --
 -- The boundary is topological, not origin_server_ts: remote clocks are not
@@ -41,13 +41,16 @@
 
 BEGIN ISOLATION LEVEL REPEATABLE READ;
 
--- The live start per room. Rooms with nothing delivered are absent, so no
--- candidate is produced for them: there is no live part to place an event in.
+-- The live start per room. Rooms without a delivered, non-create state event
+-- are absent, so no candidate is produced: this schema cannot infer a live
+-- state boundary from messages alone.
 CREATE TEMP TABLE zz_live_start ON COMMIT DROP AS
 SELECT t.room_id, min(t.topological_position) AS live_start
 FROM syncapi_output_room_events_topology t
 JOIN syncapi_output_room_events e ON e.event_id = t.event_id
 WHERE e.exclude_from_sync = FALSE
+  AND e.type <> 'm.room.create'
+  AND e.headered_event_json::jsonb ? 'state_key'
 GROUP BY t.room_id;
 
 -- Every row the repair would change. Current state is required, so a row that
@@ -79,9 +82,8 @@ SELECT id, room_id, type, event_id, topological_position, live_start
 FROM zz_unhide_candidates
 ORDER BY room_id, topological_position, id;
 
--- Refuse to run on an empty or implausible set. An empty set is not an error
--- worth aborting on; it means the repair is already done. This RAISE only
--- guards the apply below, so comment it out for a read-only check.
+-- Informational candidate count only. An empty set means the repair is already
+-- done; no count threshold is used to guard the UPDATE below.
 DO $$
 DECLARE
   n bigint;
