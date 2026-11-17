@@ -722,8 +722,10 @@ func AdminFetchEvent(req *http.Request, device *userapi.Device, rsAPI roomserver
 	}{Outcome: outcome}}
 }
 
-const maxAdminFetchEvents = 100
-const maxAdminRefetchServers = 8
+const (
+	maxAdminFetchEvents    = 100
+	maxAdminRefetchServers = 8
+)
 
 // AdminFetchEvents is the batch form of AdminFetchEvent. Body: {"event_ids": [...]}.
 // Events are ingested sequentially in the order given (list oldest first to
