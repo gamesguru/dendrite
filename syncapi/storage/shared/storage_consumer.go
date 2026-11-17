@@ -572,6 +572,9 @@ func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched
 						if err := verifyRefetchedContent(eventID, stored[0].HeaderedEvent, fetched); err != nil {
 							return err
 						}
+						if err := d.insertRelation(ctx, txn, merged); err != nil {
+							return fmt.Errorf("index restored event relation %s: %w", eventID, err)
+						}
 						outputStatus = "updated_output"
 					}
 				}

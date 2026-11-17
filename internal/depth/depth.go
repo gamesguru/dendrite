@@ -25,3 +25,14 @@ func Clamp(d int64) int64 {
 	}
 	return d
 }
+
+// LiftAbovePrevEvents returns the clamped event depth, raised above maxPrev
+// when the stored predecessor topology requires it. A maxPrev value of -1 means none
+// of the event's prev events are present in the topology.
+func LiftAbovePrevEvents(eventDepth, maxPrev int64) int64 {
+	position := Clamp(eventDepth)
+	if lifted := maxPrev + 1; maxPrev >= 0 && lifted > position {
+		position = lifted
+	}
+	return position
+}

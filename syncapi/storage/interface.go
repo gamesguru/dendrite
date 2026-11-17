@@ -124,8 +124,8 @@ type DatabaseTransaction interface {
 	// before a stream position, for backward pagination from a stream token. When includeBackfilled
 	// is set, backfilled events excluded from sync are also returned, up to the token's position.
 	GetEventsBeforeStreamPosition(ctx context.Context, maxStreamPos types.StreamPosition, to *types.TopologyToken, roomID string, filter *synctypes.RoomEventFilter, includeBackfilled bool) (events []types.StreamEvent, start, end types.TopologyToken, err error)
-	// RoomLiveStartPosition returns the lowest topological position among the
-	// room's events that sync delivers, and false when it has none.
+	// RoomLiveStartPosition returns the first delivered non-create state event's
+	// topological position, and false when the room has no such event.
 	RoomLiveStartPosition(ctx context.Context, roomID string) (types.StreamPosition, bool, error)
 	// ProspectiveEventPosition returns the topological position the event would
 	// receive from the stored positions of its prev events.
@@ -205,8 +205,12 @@ type Database interface {
 	// UpdateEventJSON replaces the serialized event for an event already in the
 	// sync timeline, for example when backfill discovers its redaction later.
 	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
-	// ReplaceEventJSON updates existing sync copies from a verified roomserver
-	// event while preserving each copy's local unsigned metadata.
+	// ReplaceEventJSON restores event content from a roomserver copy after the
+	// caller has checked its content hash. The roomserver copy's signatures are
+	// not necessarily verified; each sync row keeps its own unsigned metadata
+	// and signatures. In dry-run mode it performs no writes and returns the
+	// statuses and hashes that would be written. Statuses distinguish updated,
+	// would-update, missing, redacted, and skipped rows.
 	ReplaceEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent, dryRun bool) (outputStatus, stateStatus, outputHash, stateHash string, err error)
 	// UpdateUnredactedEventJSON writes only if the stored JSON still matches
 	// expectedJSON and the stored event is not redacted.

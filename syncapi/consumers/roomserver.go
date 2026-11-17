@@ -543,9 +543,13 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// must not stop the event being stored.
 	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
-	excludeFromSync := s.excludeOldEvent(ctx, ev)
-
 	// Retried in place, as for new events.
+	excludeFromSync, err := s.excludeOldEvent(ctx, ev)
+	if err != nil {
+		// Return before WriteEvent. onMessage will NAK this output-log message,
+		// allowing the state classification to be retried with fresh DB state.
+		return fmt.Errorf("classify old event %s for sync: %w", ev.EventID(), err)
+	}
 	var pduPos types.StreamPosition
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
 		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
@@ -618,8 +622,8 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 // excludeOldEventFromSync reads.
 type oldEventState interface {
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
-	// RoomLiveStartPosition is the lowest topological position among the room's
-	// events that sync delivers. ok is false when the room has none yet.
+	// RoomLiveStartPosition is the first delivered non-create state event's
+	// topological position. ok is false when the room has none yet.
 	RoomLiveStartPosition(ctx context.Context, roomID string) (pos types.StreamPosition, ok bool, err error)
 	// ProspectiveEventPosition is the position InsertEventInTopology would
 	// assign, using the stored positions of the event's prev events.
@@ -628,15 +632,31 @@ type oldEventState interface {
 
 // excludeOldEvent decides whether an old event stays out of the sync timeline.
 // Only a state event needs the store, so the snapshot is opened for those
-// alone. A failure to read it keeps the event out.
-func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent) bool {
+// alone. A failed lookup is returned so the consumer can retry/redeliver it.
+func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent) (bool, error) {
 	if ev.StateKey() == nil {
 		return excludeOldEventFromSync(ctx, nil, ev)
 	}
+	if ev.StateKeyResolved == nil {
+		stateKey := *ev.StateKey()
+		// An ordinary user-ID state key is already in the format used by the
+		// sync current-state table. Only pseudo-ID keys need translating.
+		if stateKey != "" {
+			if _, err := spec.NewUserID(stateKey, true); err != nil {
+				// Match updateStateEvents: resolving an unknown/non-user state key
+				// is best-effort. The original key remains usable if no mapping
+				// exists.
+				userID, err := s.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
+				if err == nil && userID != nil {
+					resolved := userID.String()
+					ev.StateKeyResolved = &resolved
+				}
+			}
+		}
+	}
 	snapshot, err := s.db.NewDatabaseSnapshot(ctx)
 	if err != nil {
-		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to open a snapshot to classify an old state event; keeping it out of the timeline")
-		return true
+		return false, fmt.Errorf("open snapshot to classify old state event %s: %w", ev.EventID(), err)
 	}
 	defer snapshot.Rollback() //nolint:errcheck
 	return excludeOldEventFromSync(ctx, snapshot, ev)
@@ -656,23 +676,25 @@ func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstyp
 //     arrived (a gap-fill, a late parent, a resync), so it is delivered unless
 //     the current state for its key already holds an event at the same depth
 //     or deeper. Delivering a superseded or concurrent event could make a
-//     client apply an older change over a newer one.
-func excludeOldEventFromSync(ctx context.Context, state oldEventState, ev *rstypes.HeaderedEvent) bool {
+//     client apply an older change over a newer one. Depth is only a proxy for
+//     state resolution: concurrent branches can share a depth, and then the
+//     candidate is suppressed. That is the conservative choice, and the next
+//     live state event corrects sync's row if it ever guesses wrong.
+func excludeOldEventFromSync(ctx context.Context, state oldEventState, ev *rstypes.HeaderedEvent) (bool, error) {
 	if ev.StateKey() == nil {
-		return false
+		return false, nil
 	}
 	if state == nil || ev.Type() == spec.MRoomCreate {
-		return true
+		return true, nil
 	}
 	liveStart, ok, err := state.RoomLiveStartPosition(ctx, ev.RoomID().String())
 	if err != nil {
-		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the live start of the room to classify an old state event; keeping it out of the timeline")
-		return true
+		return false, fmt.Errorf("read live start to classify old state event %s: %w", ev.EventID(), err)
 	}
 	// With nothing delivered yet, every old event predates the room's live
 	// part, and one below the live start is history.
 	if !ok {
-		return true
+		return true, nil
 	}
 	// Compare the position InsertEventInTopology will store, not the raw
 	// claimed depth: a late parent lifts its children above it, and using
@@ -680,11 +702,10 @@ func excludeOldEventFromSync(ctx context.Context, state oldEventState, ev *rstyp
 	// above the live start.
 	pos, err := state.ProspectiveEventPosition(ctx, ev)
 	if err != nil {
-		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the stored parents to classify an old state event; keeping it out of the timeline")
-		return true
+		return false, fmt.Errorf("read stored parents to classify old state event %s: %w", ev.EventID(), err)
 	}
 	if pos < liveStart {
-		return true
+		return true, nil
 	}
 	stateKey := *ev.StateKey()
 	if ev.StateKeyResolved != nil {
@@ -692,13 +713,19 @@ func excludeOldEventFromSync(ctx context.Context, state oldEventState, ev *rstyp
 	}
 	current, err := state.GetStateEvent(ctx, ev.RoomID().String(), ev.Type(), stateKey)
 	if err != nil {
-		log.WithError(err).WithField("event_id", ev.EventID()).Warn("Failed to read the current state to classify an old state event; keeping it out of the timeline")
-		return true
+		return false, fmt.Errorf("read current state to classify old state event %s: %w", ev.EventID(), err)
 	}
-	if current == nil || current.EventID() == ev.EventID() {
-		return false
+	if current == nil {
+		return false, nil
 	}
-	return current.Depth() >= ev.Depth()
+	if current.EventID() == ev.EventID() {
+		return false, nil
+	}
+	// A different row does not by itself mean this candidate lost state
+	// resolution: for a gap-filled event sync's current-state row can still be
+	// its older predecessor. Suppress only when the current row is at least as
+	// deep. Arrival path does not change this, so there is no gap-fill case.
+	return current.Depth() >= ev.Depth(), nil
 }
 
 // writeStickyEvent adds an event that is an unexpired MSC4354 sticky event to

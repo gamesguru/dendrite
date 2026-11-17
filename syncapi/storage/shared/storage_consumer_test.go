@@ -3,6 +3,7 @@ package shared_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -63,17 +64,27 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 			return pruned
 		}
 		storePrunedCopies := func(event *rstypes.HeaderedEvent) {
-			transaction, err := db.NewDatabaseTransaction(ctx)
+			tx, err := db.NewDatabaseTransaction(ctx)
 			require.NoError(t, err)
 			output := makePruned(event, "output-local")
 			state := makePruned(event, "state-local")
-			require.NoError(t, transaction.OutputEvents.UpdateEventJSON(ctx, nil, event.EventID(), output))
-			_, err = transaction.CurrentRoomState.UpdateEventJSON(ctx, nil, event.EventID(), state)
+			var outputJSON, stateJSON []byte
+			require.NoError(t, tx.DB.QueryRowContext(ctx, "SELECT headered_event_json FROM syncapi_output_room_events WHERE event_id = $1", event.EventID()).Scan(&outputJSON))
+			require.NoError(t, tx.DB.QueryRowContext(ctx, "SELECT headered_event_json FROM syncapi_current_room_state WHERE event_id = $1", event.EventID()).Scan(&stateJSON))
+			written, err := tx.OutputEvents.UpdateUnredactedEventJSON(ctx, nil, event.EventID(), outputJSON, output)
 			require.NoError(t, err)
-			require.NoError(t, transaction.Commit())
+			require.True(t, written)
+			written, err = tx.CurrentRoomState.UpdateUnredactedEventJSON(ctx, nil, event.EventID(), stateJSON, state)
+			require.NoError(t, err)
+			require.True(t, written)
+			_, err = tx.DB.ExecContext(ctx, "UPDATE syncapi_output_room_events SET contains_url = false WHERE event_id = $1", event.EventID())
+			require.NoError(t, err)
+			_, err = tx.DB.ExecContext(ctx, "UPDATE syncapi_current_room_state SET contains_url = false WHERE event_id = $1", event.EventID())
+			require.NoError(t, err)
+			require.NoError(t, tx.Rollback())
 		}
 
-		initial := room.CreateEvent(t, alice, eventType, map[string]string{"value": "full"}, test.WithStateKey(stateKey))
+		initial := room.CreateEvent(t, alice, eventType, map[string]string{"value": "full", "url": "https://example.org"}, test.WithStateKey(stateKey))
 		writeState(initial, nil)
 		storePrunedCopies(initial)
 		prunedRows, err := db.Events(ctx, []string{initial.EventID()})
@@ -99,15 +110,22 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 		output, err := db.Events(ctx, []string{initial.EventID()})
 		require.NoError(t, err)
 		require.Len(t, output, 1)
-		require.JSONEq(t, `{"value":"full"}`, string(output[0].Content()))
+		require.JSONEq(t, `{"value":"full","url":"https://example.org"}`, string(output[0].Content()))
 		require.Equal(t, "output-local", gjson.GetBytes(output[0].Unsigned(), "prev_content.marker").String())
+		hasURL := true
+		tx, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		filtered, err := tx.OutputEvents.SelectEvents(ctx, nil, []string{initial.EventID()}, &synctypes.RoomEventFilter{ContainsURL: &hasURL, Limit: 10}, true)
+		require.NoError(t, err)
+		require.Len(t, filtered, 1, "contains_url should be restored with the event JSON")
+		require.NoError(t, tx.Rollback())
 		snapshot, err := db.NewDatabaseSnapshot(ctx)
 		require.NoError(t, err)
 		current, err := snapshot.GetStateEvent(ctx, room.ID, eventType, stateKey)
 		require.NoError(t, err)
 		require.NotNil(t, current)
 		require.NoError(t, snapshot.Rollback())
-		require.JSONEq(t, `{"value":"full"}`, string(current.Content()))
+		require.JSONEq(t, `{"value":"full","url":"https://example.org"}`, string(current.Content()))
 		require.Equal(t, "state-local", gjson.GetBytes(current.Unsigned(), "prev_content.marker").String())
 
 		// A newer state event takes the slot before the replacement. The old
@@ -162,20 +180,80 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 
 		redactedLocal := room.CreateEvent(t, alice, eventType, map[string]string{"value": "redacted"}, test.WithStateKey("redacted"))
 		writeState(redactedLocal, nil)
-		transaction, err = db.NewDatabaseTransaction(ctx)
-		require.NoError(t, err)
 		outputRedacted := makePruned(redactedLocal, "output")
 		stateRedacted := makePruned(redactedLocal, "state")
 		require.NoError(t, outputRedacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
 		require.NoError(t, stateRedacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
-		require.NoError(t, transaction.OutputEvents.UpdateEventJSON(ctx, nil, redactedLocal.EventID(), outputRedacted))
-		_, err = transaction.CurrentRoomState.UpdateEventJSON(ctx, nil, redactedLocal.EventID(), stateRedacted)
+		tx, err = db.NewDatabaseTransaction(ctx)
 		require.NoError(t, err)
-		require.NoError(t, transaction.Commit())
+		require.NoError(t, tx.OutputEvents.UpdateEventJSON(ctx, nil, redactedLocal.EventID(), outputRedacted))
+		stateJSON, err := json.Marshal(stateRedacted)
+		require.NoError(t, err)
+		_, err = tx.DB.ExecContext(ctx, "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2", stateJSON, redactedLocal.EventID())
+		require.NoError(t, err)
+		require.NoError(t, tx.Rollback())
 		outStatus, stateStatus, _, _, err = db.ReplaceEventJSON(ctx, redactedLocal.EventID(), redactedLocal, false)
 		require.NoError(t, err)
 		require.Equal(t, "redacted", outStatus)
 		require.Equal(t, "redacted", stateStatus)
+	})
+}
+
+func TestReplaceEventJSONReindexesRestoredRelation(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, cleanup := newSyncDB(t, dbType)
+		defer cleanup()
+		ctx := t.Context()
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		parent := room.CreateEvent(t, alice, "com.example.parent", map[string]string{"value": "parent"}, test.WithStateKey(""))
+		_, err := db.WriteEvent(ctx, parent, []*rstypes.HeaderedEvent{parent}, []string{parent.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		reply := room.CreateEvent(t, alice, "m.room.message", map[string]any{
+			"msgtype": "m.text", "body": "reply",
+			"m.relates_to": map[string]string{"rel_type": "m.thread", "event_id": parent.EventID()},
+		})
+		_, err = db.WriteEvent(ctx, reply, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		tx, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		require.NoError(t, tx.Relations.DeleteRelation(ctx, nil, room.ID, reply.EventID()))
+		require.NoError(t, tx.Rollback())
+		prunedJSON, err := sjson.SetRawBytes(reply.JSON(), "content", []byte(`{}`))
+		require.NoError(t, err)
+		version, err := gomatrixserverlib.GetRoomVersion(reply.Version())
+		require.NoError(t, err)
+		prunedPDU, err := version.NewEventFromUntrustedJSON(prunedJSON)
+		require.NoError(t, err)
+		require.True(t, prunedPDU.Redacted())
+		tx, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		var previous []byte
+		require.NoError(t, tx.DB.QueryRowContext(ctx, "SELECT headered_event_json FROM syncapi_output_room_events WHERE event_id = $1", reply.EventID()).Scan(&previous))
+		pruned := &rstypes.HeaderedEvent{PDU: prunedPDU}
+		updated, err := tx.OutputEvents.UpdateUnredactedEventJSON(ctx, nil, reply.EventID(), previous, pruned)
+		require.NoError(t, err)
+		require.True(t, updated)
+		require.NoError(t, tx.Rollback())
+
+		outStatus, stateStatus, _, _, err := db.ReplaceEventJSON(ctx, reply.EventID(), reply, false)
+		require.NoError(t, err)
+		require.Equal(t, "updated_output", outStatus)
+		require.Equal(t, "not_present", stateStatus)
+		tx, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		relationTypes, err := tx.Relations.SelectRelationTypesForEvents(ctx, nil, room.ID, []string{parent.EventID()}, []string{"m.thread"}, types.StreamPosition(1<<62))
+		require.NoError(t, err)
+		require.True(t, relationTypes[parent.EventID()]["m.thread"])
+		threadRelations, err := tx.ThreadRelations(ctx, room.ID, types.StreamPosition(1<<62), types.TopologyToken{Depth: types.StreamPosition(1 << 62), PDUPosition: types.StreamPosition(1 << 62)}, 10)
+		require.NoError(t, err)
+		threadEventIDs := make([]string, 0, len(threadRelations))
+		for _, relation := range threadRelations {
+			threadEventIDs = append(threadEventIDs, relation.EventID)
+		}
+		require.Contains(t, threadEventIDs, reply.EventID())
+		require.NoError(t, tx.Rollback())
 	})
 }
 

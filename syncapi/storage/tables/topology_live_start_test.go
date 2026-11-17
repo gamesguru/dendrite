@@ -22,9 +22,9 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 )
 
-// The live start of a room is the lowest topological position among the events
-// sync delivers. Events sync keeps out do not count, and a room with none has
-// no live start.
+// The live start of a room is the lowest topological position among delivered
+// non-create state events. Backfilled messages and room creation must not drag
+// the boundary into history. A room with no such event has no live start.
 func TestTopologyLiveStartPosition(t *testing.T) {
 	ctx := context.Background()
 	alice := test.NewUser(t)
@@ -66,18 +66,27 @@ func TestTopologyLiveStartPosition(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, ok)
 
-			// Only excluded events: still no live start.
-			insert(txn, 0, true)
+			// A delivered create and excluded state events still do not establish
+			// the live state boundary.
+			insert(txn, 0, false)
 			insert(txn, 1, true)
 			_, ok, err = topology.SelectLiveStartPosition(ctx, txn, room.ID)
 			require.NoError(t, err)
-			require.False(t, ok, "excluded events do not start the live part of a room")
+			require.False(t, ok, "create and excluded events do not start the live state timeline")
 
-			// The lowest delivered event is the live start, whatever order they
-			// were stored in.
+			// A backfilled message can have a very low topological position but
+			// must not drag the state boundary below a later live state event.
+			message := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "old"}, test.WithDepth(1), test.WithPrevEvents(evs[0].EventID()))
+			pos, err := events.InsertEvent(ctx, txn, message, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+			_, err = topology.InsertEventInTopology(ctx, txn, message, pos)
+			require.NoError(t, err)
+
+			// The lowest delivered state event is the live start, regardless of
+			// the older backfilled message's topological position.
 			insert(txn, 3, false)
 			insert(txn, 2, false)
-			pos, ok, err := topology.SelectLiveStartPosition(ctx, txn, room.ID)
+			pos, ok, err = topology.SelectLiveStartPosition(ctx, txn, room.ID)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.Equal(t, types.StreamPosition(evs[2].Depth()), pos)

@@ -102,6 +102,10 @@ const selectSharedUsersSQL = "" +
 
 const selectMembershipCount = `SELECT count(*) FROM syncapi_current_room_state WHERE type = 'm.room.member' AND room_id = $1 AND membership = $2`
 
+const updateUnredactedCurrentRoomStateEventJSONSQL = "" +
+	"UPDATE syncapi_current_room_state SET headered_event_json = $1, contains_url = $2 WHERE event_id = $3" +
+	" AND json(headered_event_json) = json($4) AND json_type(headered_event_json, '$.unsigned.redacted_because') IS NULL"
+
 const selectRoomHeroes = `
 SELECT state_key FROM syncapi_current_room_state
 WHERE type = 'm.room.member' AND room_id = $1 AND state_key != $2 AND membership IN ($3)
@@ -123,7 +127,8 @@ type currentRoomStateStatements struct {
 	// selectJoinedUsersInRoomStmt      *sql.Stmt - prepared at runtime due to variadic
 	selectStateEventStmt *sql.Stmt
 	// selectSharedUsersSQL             *sql.Stmt - prepared at runtime due to variadic
-	selectMembershipCountStmt *sql.Stmt
+	selectMembershipCountStmt     *sql.Stmt
+	updateUnredactedEventJSONStmt *sql.Stmt
 	// selectRoomHeroes          *sql.Stmt - prepared at runtime due to variadic
 }
 
@@ -158,6 +163,7 @@ func NewSqliteCurrentRoomStateTable(db *sql.DB, streamID *StreamIDStatements) (t
 		{&s.selectJoinedUsersStmt, selectJoinedUsersSQL},
 		{&s.selectStateEventStmt, selectStateEventSQL},
 		{&s.selectMembershipCountStmt, selectMembershipCount},
+		{&s.updateUnredactedEventJSONStmt, updateUnredactedCurrentRoomStateEventJSONSQL},
 	}.Prepare(db)
 }
 
@@ -489,30 +495,6 @@ func (s *currentRoomStateStatements) SelectEventsWithEventIDs(
 	return res, nil
 }
 
-func (s *currentRoomStateStatements) UpdateEventJSON(
-	ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent,
-) (bool, error) {
-	data, err := json.Marshal(event)
-	if err != nil {
-		return false, err
-	}
-	data, err = restoreEventID(data, eventID)
-	if err != nil {
-		return false, err
-	}
-	var res sql.Result
-	if txn == nil {
-		res, err = s.db.ExecContext(ctx, "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2", data, eventID)
-	} else {
-		res, err = txn.ExecContext(ctx, "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2", data, eventID)
-	}
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n > 0, err
-}
-
 func (s *currentRoomStateStatements) UpdateUnredactedEventJSON(
 	ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent,
 ) (bool, error) {
@@ -524,18 +506,22 @@ func (s *currentRoomStateStatements) UpdateUnredactedEventJSON(
 	if err != nil {
 		return false, err
 	}
-	query := "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2 AND json(headered_event_json) = json($3) AND json_type(headered_event_json, '$.unsigned.redacted_because') IS NULL"
-	var res sql.Result
-	if txn == nil {
-		res, err = s.db.ExecContext(ctx, query, data, eventID, string(expectedJSON))
-	} else {
-		res, err = txn.ExecContext(ctx, query, data, eventID, string(expectedJSON))
-	}
+	containsURL := contentContainsURL(event.Content())
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, data, containsURL, eventID, string(expectedJSON))
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+func contentContainsURL(content []byte) bool {
+	var fields map[string]any
+	if json.Unmarshal(content, &fields) != nil {
+		return false
+	}
+	_, ok := fields["url"]
+	return ok
 }
 
 func currentRoomStateRowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {

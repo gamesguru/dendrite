@@ -26,7 +26,9 @@ func TestSyncPrunedOverallStatus(t *testing.T) {
 		{name: "state only", output: "not_present", state: "updated_state", want: "updated_state"},
 		{name: "neither present", output: "not_present", state: "not_present", want: "not_present"},
 		{name: "dry run both", output: "would_update_output", state: "would_update_state", want: "would_update_both", dryRun: true},
-		{name: "redacted", output: "updated_output", state: "redacted", want: "updated_output"},
+		{name: "redacted partial", output: "updated_output", state: "redacted", want: "partial_or_skipped"},
+		{name: "dry run redacted partial", output: "would_update_output", state: "redacted", want: "partial_or_skipped", dryRun: true},
+		{name: "all redacted", output: "redacted", state: "redacted", want: "redacted"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,11 +42,29 @@ func TestSyncPrunedOverallStatus(t *testing.T) {
 type prunedEventRoomserver struct {
 	api.SyncRoomserverAPI
 	event *rstypes.HeaderedEvent
+	err   error
 }
 
 func (r prunedEventRoomserver) QueryEventsByID(_ context.Context, _ *api.QueryEventsByIDRequest, res *api.QueryEventsByIDResponse) error {
+	if r.err != nil {
+		return r.err
+	}
 	res.Events = []*rstypes.HeaderedEvent{r.event}
 	return nil
+}
+
+func TestAdminSyncPrunedQueryErrorIsNotReportedAsMissing(t *testing.T) {
+	request := httptest.NewRequest("POST", "/_zendrite/admin/syncPruned", strings.NewReader(`{"dry_run":true,"event_ids":["$event"]}`))
+	response := AdminSyncPruned(request, nil, prunedEventRoomserver{err: context.DeadlineExceeded}, nil)
+	require.Equal(t, 200, response.Code)
+	encoded, err := json.Marshal(response.JSON)
+	require.NoError(t, err)
+	var body struct {
+		Results map[string]syncPrunedResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &body))
+	require.Equal(t, "error", body.Results["$event"].Output)
+	require.Equal(t, "error", body.Results["$event"].State)
 }
 
 func TestAdminSyncPrunedReportsRoomserverPruned(t *testing.T) {

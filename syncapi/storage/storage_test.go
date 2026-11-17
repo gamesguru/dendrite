@@ -1861,6 +1861,11 @@ func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
 
 		reset := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "after reset"}, test.WithDepth(0))
 		require.Equal(t, int64(0), reset.Depth(), "the event claims a restarted depth")
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			prospective, err := snapshot.ProspectiveEventPosition(ctx, reset)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(1001), prospective)
+		})
 		_, err := db.WriteEvent(ctx, reset, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 

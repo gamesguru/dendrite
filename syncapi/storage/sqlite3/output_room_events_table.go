@@ -96,8 +96,8 @@ const updateEventJSONSQL = "" +
 // JSON path as IsRedacted so that a redacted_because key in the event content
 // does not count as a redaction.
 const updateUnredactedEventJSONSQL = "" +
-	"UPDATE syncapi_output_room_events SET headered_event_json=$1 WHERE event_id=$2" +
-	" AND json(headered_event_json) = json($3)" +
+	"UPDATE syncapi_output_room_events SET headered_event_json=$1, contains_url=$2 WHERE event_id=$3" +
+	" AND json(headered_event_json) = json($4)" +
 	" AND json_type(headered_event_json, '$.unsigned.redacted_because') IS NULL"
 
 const selectStateInRangeSQL = "" +
@@ -238,12 +238,22 @@ func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Conte
 	if err != nil {
 		return false, err
 	}
-	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, eventID, string(expectedJSON))
+	containsURL := eventContainsURL(event.Content())
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, containsURL, eventID, string(expectedJSON))
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+func eventContainsURL(content []byte) bool {
+	var fields map[string]any
+	if json.Unmarshal(content, &fields) != nil {
+		return false
+	}
+	_, ok := fields["url"]
+	return ok
 }
 
 func restoreEventID(eventJSON []byte, eventID string) ([]byte, error) {

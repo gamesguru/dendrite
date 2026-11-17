@@ -50,7 +50,7 @@ func AdminSyncPruned(req *http.Request, syncDB storage.Database, rsAPI api.SyncR
 		if err := rsAPI.QueryEventsByID(req.Context(), &api.QueryEventsByIDRequest{
 			EventIDs: []string{eventID}, ExcludeRejected: true,
 		}, &queried); err != nil {
-			results[eventID] = syncPrunedResult{Status: "error: " + err.Error(), Output: "not_present", State: "not_present"}
+			results[eventID] = syncPrunedResult{Status: "error: " + err.Error(), Output: "error", State: "error"}
 			continue
 		}
 		if len(queried.Events) == 0 {
@@ -81,6 +81,16 @@ func AdminSyncPruned(req *http.Request, syncDB storage.Database, rsAPI api.SyncR
 }
 
 func syncPrunedOverallStatus(output, state string, dryRun bool) string {
+	if output == "write_skipped" || state == "write_skipped" {
+		return "partial_or_skipped"
+	}
+	if output == "redacted" || state == "redacted" {
+		if (output == "redacted" && (state == "redacted" || state == "not_present")) ||
+			(state == "redacted" && output == "not_present") {
+			return "redacted"
+		}
+		return "partial_or_skipped"
+	}
 	if dryRun {
 		if output == "would_update_output" && state == "would_update_state" {
 			return "would_update_both"

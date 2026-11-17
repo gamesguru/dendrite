@@ -69,13 +69,17 @@ func TestRepairUnsignedAllRoomsSumsReportsAndSurvivesFailures(t *testing.T) {
 			RoomID: "!c:example.org", Scanned: 5, StateEvents: 5, AlreadyHad: 1,
 			Repairable: 0, Repaired: 0, NoPredecessor: 2, LookupUnavailable: 2, Errors: 3,
 		},
+		"!b:example.org": {
+			RoomID: "!b:example.org", Scanned: 7, StateEvents: 6, Repairable: 2, Repaired: 1, Errors: 1,
+			Samples: []internal.PrevStateRepairSample{{EventID: "$partial"}},
+		},
 	}
 	var asked []string
 	repair := func(_ context.Context, roomID string, apply bool) (*internal.PrevStateRepairReport, error) {
 		asked = append(asked, roomID)
 		require.True(t, apply)
 		if roomID == "!b:example.org" {
-			return nil, errors.New("roomserver unavailable")
+			return reports[roomID], errors.New("roomserver unavailable")
 		}
 		return reports[roomID], nil
 	}
@@ -86,12 +90,13 @@ func TestRepairUnsignedAllRoomsSumsReportsAndSurvivesFailures(t *testing.T) {
 	require.Equal(t, []string{"!a:example.org", "!b:example.org", "!c:example.org"}, asked,
 		"every room is attempted, in order, and one failure does not stop the others")
 	require.True(t, res.Apply)
-	require.Len(t, res.Rooms, 2)
+	require.Len(t, res.Rooms, 3)
 	require.Nil(t, res.Rooms[0].Samples, "per-room samples are dropped from the all-rooms response")
+	require.Nil(t, res.Rooms[1].Samples, "partial report samples are also dropped")
 	require.Equal(t, []repairUnsignedAllFailure{{RoomID: "!b:example.org", Error: "roomserver unavailable"}}, res.Failed)
 	require.Equal(t, repairUnsignedAllTotals{
-		Rooms: 2, Failed: 1, Scanned: 15, StateEvents: 13, Redacted: 1, AlreadyHadPrevContent: 3,
-		Repairable: 4, Repaired: 4, NoPredecessor: 3, LookupUnavailable: 2, WriteSkipped: 1, Errors: 3,
+		Rooms: 3, Failed: 1, Scanned: 22, StateEvents: 19, Redacted: 1, AlreadyHadPrevContent: 3,
+		Repairable: 6, Repaired: 5, NoPredecessor: 3, LookupUnavailable: 2, WriteSkipped: 1, Errors: 4,
 	}, res.Totals)
 }
 

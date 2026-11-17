@@ -108,7 +108,8 @@ type repairUnsignedRoomFunc func(ctx context.Context, roomID string, apply bool)
 // repairUnsignedAllRooms runs repair over every room, in order, and sums the
 // reports. A room that cannot be processed is listed in Failed and does not
 // stop the others. The per-room samples are dropped to keep the response small.
-// It stops early, returning what it has so far, if ctx ends.
+// If ctx ends, the remaining rooms are listed in Failed as not attempted; the
+// loop still visits every room ID.
 func repairUnsignedAllRooms(ctx context.Context, roomIDs []string, apply bool, repair repairUnsignedRoomFunc) repairUnsignedAllResponse {
 	res := repairUnsignedAllResponse{Apply: apply, Rooms: []*internal.PrevStateRepairReport{}}
 	for _, roomID := range roomIDs {
@@ -117,26 +118,27 @@ func repairUnsignedAllRooms(ctx context.Context, roomIDs []string, apply bool, r
 			continue
 		}
 		report, err := repair(ctx, roomID, apply)
+		if report != nil {
+			report.Samples = nil
+			res.Rooms = append(res.Rooms, report)
+			res.Totals.Scanned += report.Scanned
+			res.Totals.StateEvents += report.StateEvents
+			res.Totals.Redacted += report.Redacted
+			res.Totals.AlreadyHadPrevContent += report.AlreadyHad
+			res.Totals.Repairable += report.Repairable
+			res.Totals.Repaired += report.Repaired
+			res.Totals.NoPredecessor += report.NoPredecessor
+			res.Totals.LookupUnavailable += report.LookupUnavailable
+			res.Totals.WriteSkipped += report.WriteSkipped
+			res.Totals.Errors += report.Errors
+		}
 		if err != nil || report == nil {
 			msg := "no report"
 			if err != nil {
 				msg = err.Error()
 			}
 			res.Failed = append(res.Failed, repairUnsignedAllFailure{RoomID: roomID, Error: msg})
-			continue
 		}
-		report.Samples = nil
-		res.Rooms = append(res.Rooms, report)
-		res.Totals.Scanned += report.Scanned
-		res.Totals.StateEvents += report.StateEvents
-		res.Totals.Redacted += report.Redacted
-		res.Totals.AlreadyHadPrevContent += report.AlreadyHad
-		res.Totals.Repairable += report.Repairable
-		res.Totals.Repaired += report.Repaired
-		res.Totals.NoPredecessor += report.NoPredecessor
-		res.Totals.LookupUnavailable += report.LookupUnavailable
-		res.Totals.WriteSkipped += report.WriteSkipped
-		res.Totals.Errors += report.Errors
 	}
 	res.Totals.Rooms = len(res.Rooms)
 	res.Totals.Failed = len(res.Failed)

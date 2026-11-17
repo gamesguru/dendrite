@@ -104,11 +104,15 @@ const selectMaxTopologyPositionSQL = "" +
 	"SELECT COALESCE(MAX(topological_position), -1) FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND event_id = ANY($2)"
 
-// The lowest topological position among the room's events that sync delivers.
+// The first delivered, non-create state event establishes when the room's
+// state timeline became live. Backfilled messages must not drag the boundary
+// into history.
 const selectLiveStartPositionSQL = "" +
-	"SELECT MIN(t.topological_position) FROM syncapi_output_room_events_topology t" +
+	"SELECT t.topological_position FROM syncapi_output_room_events_topology t" +
 	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
-	" WHERE t.room_id = $1 AND e.exclude_from_sync = FALSE"
+	" WHERE t.room_id = $1 AND e.exclude_from_sync = FALSE" +
+	" AND e.type <> 'm.room.create' AND e.headered_event_json::json -> 'state_key' IS NOT NULL" +
+	" ORDER BY t.topological_position ASC LIMIT 1"
 
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
@@ -203,23 +207,15 @@ func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
 func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition,
 ) (topoPos types.StreamPosition, err error) {
-	// Clamp the depth to prevent issues with events that have depth values
-	// exceeding the canonical JSON integer limit (e.g., from corrupt federation data).
-	depth := depth.Clamp(event.Depth())
-	// An event must sort after its parents. A server that restarted its depth
-	// counter claims a depth below them, which would split the room into two
-	// depth ranges, so lift the position above the stored prev events.
-	var maxPrev int64
+	maxPrev := int64(-1)
 	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
 		if err = sqlutil.TxStmt(txn, s.selectMaxTopologyPositionStmt).QueryRowContext(
 			ctx, event.RoomID().String(), sqlutil.StringArray(prevs),
 		).Scan(&maxPrev); err != nil {
 			return 0, err
 		}
-		if lifted := maxPrev + 1; maxPrev >= 0 && lifted > depth {
-			depth = lifted
-		}
 	}
+	depth := depth.LiftAbovePrevEvents(event.Depth(), maxPrev)
 	err = sqlutil.TxStmt(txn, s.insertEventInTopologyStmt).QueryRowContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	).Scan(&topoPos)
@@ -323,13 +319,16 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionInTopology(
 	return
 }
 
-// SelectLiveStartPosition returns the lowest topological position among the
-// room's events that sync delivers, and false when it has none.
+// SelectLiveStartPosition returns the first delivered non-create state event's
+// topological position, and false when the room has no such event.
 func (s *outputRoomEventsTopologyStatements) SelectLiveStartPosition(
 	ctx context.Context, txn *sql.Tx, roomID string,
 ) (types.StreamPosition, bool, error) {
 	var pos sql.NullInt64
 	err := sqlutil.TxStmt(txn, s.selectLiveStartPositionStmt).QueryRowContext(ctx, roomID).Scan(&pos)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
 	if err != nil || !pos.Valid {
 		return 0, false, err
 	}
@@ -341,18 +340,15 @@ func (s *outputRoomEventsTopologyStatements) SelectLiveStartPosition(
 func (s *outputRoomEventsTopologyStatements) ProspectiveEventPosition(
 	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent,
 ) (types.StreamPosition, error) {
-	pos := depth.Clamp(event.Depth())
+	maxPrev := int64(-1)
 	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
-		var maxPrev int64
 		if err := sqlutil.TxStmt(txn, s.selectMaxTopologyPositionStmt).QueryRowContext(
 			ctx, event.RoomID().String(), sqlutil.StringArray(prevs),
 		).Scan(&maxPrev); err != nil {
 			return 0, err
 		}
-		if lifted := maxPrev + 1; maxPrev >= 0 && lifted > pos {
-			pos = lifted
-		}
 	}
+	pos := depth.LiftAbovePrevEvents(event.Depth(), maxPrev)
 	return types.StreamPosition(pos), nil
 }
 
