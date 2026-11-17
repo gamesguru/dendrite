@@ -149,10 +149,11 @@ func TestGetRequiredState_DeliversCurrentEventForExcludedStateChange(t *testing.
 	assert.Equal(t, "m.room.power_levels", requiredState[1].Type)
 }
 
-// TestGetRequiredState_ExcludedStateChangeWithoutCurrentState covers the race
-// where the output stream has the excluded change but current state has not
-// caught up yet. Dropping the slot would lose the change permanently, so the
-// newest event in the gap is the fallback.
+// TestGetRequiredState_ExcludedStateChangeWithoutCurrentState covers an
+// excluded state event whose slot has no current-state row. Excluded events are
+// mostly historical (backfill and gap-fill never write current state), so
+// sending one as a fallback would put a stale event in the client's required
+// state. The slot is dropped instead.
 func TestGetRequiredState_ExcludedStateChangeWithoutCurrentState(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +183,5 @@ func TestGetRequiredState_ExcludedStateChangeWithoutCurrentState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.Len(t, requiredState, 1)
-	assert.Equal(t, join.EventID(), requiredState[0].EventID, "the newest change in the gap is delivered when current state lags")
+	assert.Empty(t, requiredState, "a historical excluded event must not be sent as current state")
 }

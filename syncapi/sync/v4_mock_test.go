@@ -167,6 +167,16 @@ func (m *mockSnapshot) GetStateEvent(ctx context.Context, roomID, evType, stateK
 	return nil, nil
 }
 
+func (m *mockSnapshot) GetStateEvents(ctx context.Context, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error) {
+	result := make(map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, len(keys))
+	for _, k := range keys {
+		if event, ok := m.stateEvents[roomID][k.EventType+"|"+k.StateKey]; ok {
+			result[k] = event
+		}
+	}
+	return result, nil
+}
+
 func (m *mockSnapshot) GetStateEventsForRoom(ctx context.Context, roomID string, stateFilterPart *synctypes.StateFilter) ([]*rstypes.HeaderedEvent, error) {
 	var events []*rstypes.HeaderedEvent
 	if roomEvents, ok := m.stateEvents[roomID]; ok {
