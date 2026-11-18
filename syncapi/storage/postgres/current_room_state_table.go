@@ -93,7 +93,10 @@ const deleteRoomStateByEventIDSQL = "" +
 // Same guard as updateUnredactedEventJSONSQL; see nulSafeJSONB.
 var updateUnredactedCurrentRoomStateEventJSONSQL = "" +
 	"UPDATE syncapi_current_room_state SET headered_event_json = $1, contains_url = $2 WHERE event_id = $3" +
-	" AND headered_event_json = $4::text" +
+	" AND CASE WHEN headered_event_json ~ " + invalidJSONEscapeSQL +
+	" OR $4::text ~ " + invalidJSONEscapeSQL +
+	" THEN headered_event_json = $4::text" +
+	" ELSE headered_event_json::jsonb = $4::text::jsonb END" +
 	" AND (" + nulSafeJSONB("headered_event_json") + " -> 'unsigned' -> 'redacted_because') IS NULL"
 
 const deleteRoomStateByEventIDsSQL = "" +

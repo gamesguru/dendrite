@@ -148,6 +148,19 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.Len(t, stored, 1)
 		require.Equal(t, int64(2), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
 
+		// A re-marshaled expectation can differ from the stored text in
+		// whitespace while describing the same JSON value.
+		reformatted, err := json.MarshalIndent(stored[0], "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, live.SetUnsignedField("age", 7))
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), reformatted, live)
+		require.NoError(t, err)
+		require.True(t, written, "a semantically equal expectation must still match")
+		stored, err = db.Events(ctx, []string{live.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(7), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
 		// A redacted_because key in the content is not a redaction and must not
 		// block the write.
 		contentKey := room.CreateEvent(t, alice, "com.example.custom", map[string]any{
