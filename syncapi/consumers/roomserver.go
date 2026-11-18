@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -443,7 +444,7 @@ func (s *OutputRoomEventConsumer) onNewRoomEvent(
 		if err != nil {
 			return err
 		}
-		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, false, msg.HistoryVisibility, noBackfill...)
+		pduPos, err = s.db.WriteEvent(ctx, ev, addsStateEvents, msg.AddsStateEventIDs, msg.RemovesStateEventIDs, msg.TransactionID, excludeNewEventFromSync(&msg), msg.HistoryVisibility, noBackfill...)
 		return err
 	})
 	if err != nil {
@@ -625,6 +626,20 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 }
 
 type oldEventState = tables.EventStateReader
+
+// excludeNewEventFromSync reports whether a state event that arrived as new is
+// really history. A live state event becomes a forward extremity of the room,
+// so it is among the latest events. One stored after a descendant already is
+// (a create fetched after the join that depends on it, a late parent) has a
+// recent stream position but belongs in the past, and clients must not see it
+// as new activity. A forked event from a lagging server is still a forward
+// extremity, so it is delivered. Timeline events are always delivered.
+func excludeNewEventFromSync(msg *api.OutputNewRoomEvent) bool {
+	if msg.Event.StateKey() == nil || len(msg.LatestEventIDs) == 0 {
+		return false
+	}
+	return !slices.Contains(msg.LatestEventIDs, msg.Event.EventID())
+}
 
 // resolveOldEventStateKey translates pseudo-ID state keys before the old event
 // write. Classification itself runs inside WriteOldEvent's serialized txn.
