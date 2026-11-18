@@ -319,9 +319,9 @@ ORDER BY sync_api_repair_cases DESC;
 -- empty and Sync cannot supply a local object repair: Sync either has no
 -- content key or has content that does not contain the roomserver copy. A Sync
 -- object contains the empty object, so that copy is locally repairable and is
--- listed by 2b instead; only non-object Sync content that cannot supply an
--- object repair reaches this list. Empty on both sides is sent through 2e's
--- verification flow first.
+-- listed by 2b instead; only absent or non-object Sync content that cannot
+-- supply an object repair reaches this list. Empty on both sides is sent
+-- through 2e's verification flow first.
 WITH parsed AS (
   SELECT o.id, o.room_id, o.event_id,
          CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
