@@ -84,8 +84,23 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 			require.NoError(t, tx.Rollback())
 		}
 
-		initial := room.CreateEvent(t, alice, eventType, map[string]string{"value": "full", "url": "https://example.org"}, test.WithStateKey(stateKey))
+		initial := room.CreateEvent(t, alice, eventType, map[string]string{"value": "full\x00value", "url": "https://example.org"}, test.WithStateKey(stateKey))
 		writeState(initial, nil)
+		// Both guarded PostgreSQL updates must accept exact stored/expected JSON
+		// containing an escaped NUL in event content.
+		tx, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		var outputJSON, stateJSON []byte
+		require.NoError(t, tx.DB.QueryRowContext(ctx, "SELECT headered_event_json FROM syncapi_output_room_events WHERE event_id = $1", initial.EventID()).Scan(&outputJSON))
+		require.NoError(t, tx.DB.QueryRowContext(ctx, "SELECT headered_event_json FROM syncapi_current_room_state WHERE event_id = $1", initial.EventID()).Scan(&stateJSON))
+		written, err := tx.OutputEvents.UpdateUnredactedEventJSON(ctx, nil, initial.EventID(), outputJSON, initial)
+		require.NoError(t, err)
+		require.True(t, written)
+		written, err = tx.CurrentRoomState.UpdateUnredactedEventJSON(ctx, nil, initial.EventID(), stateJSON, initial)
+		require.NoError(t, err)
+		require.True(t, written)
+		require.NoError(t, tx.Commit())
+
 		storePrunedCopies(initial)
 		prunedRows, err := db.Events(ctx, []string{initial.EventID()})
 		require.NoError(t, err)
@@ -110,10 +125,10 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 		output, err := db.Events(ctx, []string{initial.EventID()})
 		require.NoError(t, err)
 		require.Len(t, output, 1)
-		require.JSONEq(t, `{"value":"full","url":"https://example.org"}`, string(output[0].Content()))
+		require.JSONEq(t, `{"value":"full\u0000value","url":"https://example.org"}`, string(output[0].Content()))
 		require.Equal(t, "output-local", gjson.GetBytes(output[0].Unsigned(), "prev_content.marker").String())
 		hasURL := true
-		tx, err := db.NewDatabaseTransaction(ctx)
+		tx, err = db.NewDatabaseTransaction(ctx)
 		require.NoError(t, err)
 		filtered, err := tx.OutputEvents.SelectEvents(ctx, nil, []string{initial.EventID()}, &synctypes.RoomEventFilter{ContainsURL: &hasURL, Limit: 10}, true)
 		require.NoError(t, err)
@@ -125,7 +140,7 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 		require.NoError(t, err)
 		require.NotNil(t, current)
 		require.NoError(t, snapshot.Rollback())
-		require.JSONEq(t, `{"value":"full","url":"https://example.org"}`, string(current.Content()))
+		require.JSONEq(t, `{"value":"full\u0000value","url":"https://example.org"}`, string(current.Content()))
 		require.Equal(t, "state-local", gjson.GetBytes(current.Unsigned(), "prev_content.marker").String())
 
 		// A newer state event takes the slot before the replacement. The old
@@ -187,7 +202,7 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 		tx, err = db.NewDatabaseTransaction(ctx)
 		require.NoError(t, err)
 		require.NoError(t, tx.OutputEvents.UpdateEventJSON(ctx, nil, redactedLocal.EventID(), outputRedacted))
-		stateJSON, err := json.Marshal(stateRedacted)
+		stateJSON, err = json.Marshal(stateRedacted)
 		require.NoError(t, err)
 		_, err = tx.DB.ExecContext(ctx, "UPDATE syncapi_current_room_state SET headered_event_json = $1 WHERE event_id = $2", stateJSON, redactedLocal.EventID())
 		require.NoError(t, err)
