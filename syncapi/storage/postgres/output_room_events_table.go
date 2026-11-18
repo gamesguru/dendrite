@@ -156,9 +156,11 @@ const updateEventJSONSQL = "" +
 // text to json or jsonb: a NUL escape, or a lone surrogate escape. A backslash
 // run must have odd length to start an escape, so escaped backslashes such as
 // \\u0000 text do not match, and a valid surrogate pair does not match either.
+// The high surrogate that excuses a low one must itself start with an odd
+// backslash run, so escaped text such as \\ud83d does not pair with it.
 // An equality guard falls back to exact text for matches, so distinct values
 // such as \u0000 and \uFFFD never compare equal.
-const invalidJSONEscapeSQL = `'(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'`
+const invalidJSONEscapeSQL = `'(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'`
 
 // sanitizeEscapeSQL is the broader pattern used only to sanitize JSON before
 // inspecting it. Over-matching valid escapes is harmless there.
