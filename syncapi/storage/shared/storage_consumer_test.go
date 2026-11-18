@@ -1,6 +1,7 @@
 package shared_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -270,6 +271,44 @@ func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T
 		require.NoError(t, err)
 		require.Equal(t, "redacted", outStatus)
 		require.Equal(t, "redacted", stateStatus)
+	})
+}
+
+func TestPostgresGuardAcceptsSemanticallyEqualSurrogatePair(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		if dbType != test.DBTypePostgres {
+			t.Skip("PostgreSQL jsonb guard behavior")
+		}
+		db, cleanup := newSyncDB(t, dbType)
+		defer cleanup()
+		ctx := t.Context()
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		event := room.CreateEvent(t, alice, spec.MRoomTopic, map[string]string{"topic": "😀"}, test.WithStateKey(""))
+		_, err := db.WriteEvent(ctx, event, []*rstypes.HeaderedEvent{event}, []string{event.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		expectedJSON, err := event.MarshalJSON()
+		require.NoError(t, err)
+		storedJSON := bytes.Replace(expectedJSON, []byte("😀"), []byte(`\ud83d\ude00`), 1)
+		require.NotEqual(t, expectedJSON, storedJSON)
+		tx, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		for _, table := range []string{"syncapi_output_room_events", "syncapi_current_room_state"} {
+			_, err = tx.DB.ExecContext(ctx, "UPDATE "+table+" SET headered_event_json = $1 WHERE event_id = $2", string(storedJSON), event.EventID())
+			require.NoError(t, err)
+		}
+		require.NoError(t, tx.Commit())
+
+		require.NoError(t, event.SetUnsignedField("age", 1))
+		tx, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		written, err := tx.OutputEvents.UpdateUnredactedEventJSON(ctx, nil, event.EventID(), expectedJSON, event)
+		require.NoError(t, err)
+		require.True(t, written, "output comparison should treat a valid surrogate pair as the same JSON string")
+		written, err = tx.CurrentRoomState.UpdateUnredactedEventJSON(ctx, nil, event.EventID(), expectedJSON, event)
+		require.NoError(t, err)
+		require.True(t, written, "current-state comparison should treat a valid surrogate pair as the same JSON string")
+		require.NoError(t, tx.Commit())
 	})
 }
 
