@@ -207,6 +207,20 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, written, "a redacted NUL-bearing row must not be rewritten")
 
+		// Literal "\\u0000" text is valid JSON (an escaped backslash), so a
+		// reformatted expectation must still match semantically.
+		literal := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "a\\u0000b"})
+		_, err = db.WriteEvent(ctx, literal, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		literalJSON, err := literal.MarshalJSON()
+		require.NoError(t, err)
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, literalJSON, "", "  "))
+		require.NoError(t, literal.SetUnsignedField("age", 7))
+		written, err = db.UpdateUnredactedEventJSON(ctx, literal.EventID(), indented.Bytes(), literal)
+		require.NoError(t, err)
+		require.True(t, written, "escaped-backslash text must not force an exact-text comparison")
+
 		// A non-redaction rewrite after the repair read must not be overwritten.
 		changed := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "changed"})
 		_, err = db.WriteEvent(ctx, changed, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)

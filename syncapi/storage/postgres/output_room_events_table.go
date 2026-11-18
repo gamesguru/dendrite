@@ -153,18 +153,25 @@ const updateEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2"
 
 // invalidJSONEscapeSQL matches the escapes PostgreSQL rejects when casting
-// text to json or jsonb. An equality guard falls back to exact text for them,
-// so distinct values such as \u0000 and \uFFFD never compare equal.
-const invalidJSONEscapeSQL = `'\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})'`
+// text to json or jsonb: a NUL escape, or a lone surrogate escape. A backslash
+// run must have odd length to start an escape, so escaped backslashes such as
+// \\u0000 text do not match, and a valid surrogate pair does not match either.
+// An equality guard falls back to exact text for matches, so distinct values
+// such as \u0000 and \uFFFD never compare equal.
+const invalidJSONEscapeSQL = `'(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'`
 
-// nulSafeJSONB casts a text expression holding event JSON to jsonb. jsonb
-// rejects the \u0000 escape and lone surrogate escapes that valid event content
-// can contain, and one such row must not make a guarded update fail. Those
-// escapes are replaced by U+FFFD first; the result is used only to inspect the
-// top-level redaction marker.
+// sanitizeEscapeSQL is the broader pattern used only to sanitize JSON before
+// inspecting it. Over-matching valid escapes is harmless there.
+const sanitizeEscapeSQL = `'\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})'`
+
+// The nulSafeJSONB function casts a text expression holding event JSON to
+// JSONB. The JSONB type rejects the \u0000 escape and lone surrogate escapes
+// that valid event content can contain, and one such row must not make a
+// guarded update fail. Those escapes are replaced by U+FFFD first; the result
+// is used only to inspect the top-level redaction marker.
 func nulSafeJSONB(expr string) string {
 	return "(CASE WHEN " + expr + " LIKE '%\\\\u%'" +
-		" THEN regexp_replace(" + expr + ", " + invalidJSONEscapeSQL + ", '\\\\uFFFD', 'g')" +
+		" THEN regexp_replace(" + expr + ", " + sanitizeEscapeSQL + ", '\\\\uFFFD', 'g')" +
 		" ELSE " + expr + " END)::jsonb"
 }
 

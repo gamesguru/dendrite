@@ -209,7 +209,7 @@ func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	_, err = insertEventInTopologyStmt.ExecContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	)
-	return types.StreamPosition(depth), err
+	return depth, err
 }
 
 // SelectEventIDsInRange selects the IDs of events which positions are within a

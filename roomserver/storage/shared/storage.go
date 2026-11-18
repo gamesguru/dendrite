@@ -973,7 +973,6 @@ func (d *EventDatabase) storeEvent(
 	)
 
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
-		alreadyStored := false
 		if eventNID, stateNID, err = d.EventsTable.InsertEvent(
 			ctx,
 			txn,
@@ -986,7 +985,6 @@ func (d *EventDatabase) storeEvent(
 			isRejected,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				alreadyStored = true
 				// We've already inserted the event so select the numeric event ID
 				eventNID, stateNID, err = d.EventsTable.SelectEvent(ctx, txn, event.EventID())
 			} else if err != nil {
@@ -1002,13 +1000,21 @@ func (d *EventDatabase) storeEvent(
 		// A complete copy must never replace a stored event that a validated
 		// redaction covers, even if the stored JSON lacks redacted_because
 		// (for example a pruned outlier stored after the redaction arrived).
+		// InsertEvent also returns a revived rejected row instead of
+		// sql.ErrNoRows, so "already stored" is decided by the JSON row itself.
 		skipJSON := false
-		if alreadyStored && !event.Redacted() {
+		if !event.Redacted() {
 			validated, vErr := d.RedactionsTable.HasValidatedRedactionForEvent(ctx, txn, event.EventID())
 			if vErr != nil {
 				return fmt.Errorf("d.RedactionsTable.HasValidatedRedactionForEvent: %w", vErr)
 			}
-			skipJSON = validated
+			if validated {
+				existing, jErr := d.EventJSONTable.BulkSelectEventJSON(ctx, txn, []types.EventNID{eventNID})
+				if jErr != nil {
+					return fmt.Errorf("d.EventJSONTable.BulkSelectEventJSON: %w", jErr)
+				}
+				skipJSON = len(existing) > 0
+			}
 		}
 		if !skipJSON {
 			if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
@@ -2824,8 +2830,32 @@ func (d *Database) GetPartialStateJoinEventID(ctx context.Context, roomNID types
 // SetRoomPartialState marks a room as having partial state after a faster join.
 func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.lockRoomByNID(ctx, txn, roomNID); err != nil {
+			return err
+		}
 		return d.PartialStateTable.InsertPartialStateRoom(ctx, txn, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
 	})
+}
+
+// lockRoomByNID serializes room-scoped updates with other operations that
+// acquire the room row lock. Resolve the room ID in the same transaction so
+// the lock is acquired before reading or changing related room state.
+func (d *Database) lockRoomByNID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error {
+	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{roomNID})
+	if err != nil {
+		return fmt.Errorf("select room ID for room NID %d: %w", roomNID, err)
+	}
+	if len(roomIDs) == 0 {
+		return fmt.Errorf("room NID %d not found", roomNID)
+	}
+	lockedRoomNID, err := d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomIDs[0])
+	if err != nil {
+		return fmt.Errorf("lock room %s: %w", roomIDs[0], err)
+	}
+	if lockedRoomNID != roomNID {
+		return fmt.Errorf("room %s has NID %d, expected %d", roomIDs[0], lockedRoomNID, roomNID)
+	}
+	return nil
 }
 
 // GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
@@ -2866,6 +2896,9 @@ func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID
 func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	var deviceListStreamID int64
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.lockRoomByNID(ctx, txn, roomNID); err != nil {
+			return err
+		}
 		var err error
 		wasPartial, err := d.PartialStateTable.SelectPartialStateRoom(ctx, txn, roomNID)
 		if err != nil {
