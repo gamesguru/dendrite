@@ -207,9 +207,21 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
 		if !ok {
-			// this should be impossible as all events returned must have pass Step 5 of the PDU checks
-			// which requires a list of state IDs.
-			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to find state IDs for event which passed auth checks")
+			// RequestBackfill keeps events that only failed signature
+			// verification. Those skip the auth-at-state check, so they reach
+			// here without a before-state even though the event is stored.
+			// Resolve it now instead of dropping the event; dropping it leaves
+			// no snapshot, so every later /messages page fetches and discards
+			// the same event again.
+			if _, resolveErr := requester.StateIDsBeforeEvent(ctx, ev.PDU); resolveErr != nil {
+				logrus.WithError(resolveErr).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to resolve state IDs for stored backfill event")
+				markUnvalidated(ev.PDU)
+				continue
+			}
+			stateIDs, ok = requester.eventIDToBeforeStateIDs[ev.EventID()]
+		}
+		if !ok {
+			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to find state IDs for stored backfill event")
 			markUnvalidated(ev.PDU)
 			continue
 		}
