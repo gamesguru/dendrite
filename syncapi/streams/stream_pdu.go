@@ -822,6 +822,17 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			hasMembershipChange = true
 		}
 	}
+	// A membership can reach the state block without appearing in the timeline,
+	// for example with lazy loading or when the state block carries a full
+	// snapshot. Refresh the summary for those too, but keep this separate from
+	// timeline-activity tracking above.
+	hasStateMembershipChange := false
+	for _, stateEvent := range delta.StateEvents {
+		if stateEvent.Type() == spec.MRoomMember && stateEvent.StateKey() != nil {
+			hasStateMembershipChange = true
+			break
+		}
+	}
 
 	// MSC3706: Check if this room became un-partial-stated (completed partial state resync)
 	// in the sync range. If so, we need to send the room summary with updated member counts.
@@ -934,7 +945,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	switch delta.Membership {
 	case spec.Join:
 		jr := types.NewJoinResponse()
-		if hasMembershipChange {
+		if hasMembershipChange || hasStateMembershipChange {
 			jr.Summary, err = snapshot.GetRoomSummary(ctx, delta.RoomID, device.UserID)
 			if err != nil {
 				if abandonsSync(err) {
