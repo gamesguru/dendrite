@@ -414,8 +414,8 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionsInTopology(
 	return positions, rows.Err()
 }
 
-// SelectDeliveryBoundaries returns the topological position of the latest
-// delivered event at or before atStreamPos, per room.
+// SelectDeliveryBoundaries returns the highest topological position among
+// delivered events at or before atStreamPos, per room.
 func (s *outputRoomEventsTopologyStatements) SelectDeliveryBoundaries(
 	ctx context.Context, txn *sql.Tx, roomIDs []string, atStreamPos types.StreamPosition,
 ) (map[string]types.StreamPosition, error) {

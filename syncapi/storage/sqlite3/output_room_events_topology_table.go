@@ -423,8 +423,8 @@ func (s *outputRoomEventsTopologyStatements) selectPositionsChunk(
 	return rows.Err()
 }
 
-// SelectDeliveryBoundaries returns the topological position of the latest
-// delivered event at or before atStreamPos, per room.
+// SelectDeliveryBoundaries returns the highest topological position among
+// delivered events at or before atStreamPos, per room.
 func (s *outputRoomEventsTopologyStatements) SelectDeliveryBoundaries(
 	ctx context.Context, txn *sql.Tx, roomIDs []string, atStreamPos types.StreamPosition,
 ) (map[string]types.StreamPosition, error) {
@@ -454,17 +454,13 @@ func (s *outputRoomEventsTopologyStatements) selectDeliveryBoundariesChunk(
 	// The room placeholders come first and the stream bound last: the SQLite
 	// driver binds numbered parameters in the order they first appear.
 	streamParam := len(roomIDs) + 1
-	query := "SELECT t.room_id, t.topological_position" +
+	query := "SELECT t.room_id, MAX(t.topological_position)" +
 		" FROM syncapi_output_room_events_topology t" +
 		" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
 		" WHERE t.room_id IN " + sqlutil.QueryVariadic(len(roomIDs)) +
 		" AND t.stream_position <= $" + strconv.Itoa(streamParam) +
 		" AND e.exclude_from_sync = 0" +
-		" AND t.topological_position = (" +
-		"  SELECT MAX(t2.topological_position) FROM syncapi_output_room_events_topology t2" +
-		"  JOIN syncapi_output_room_events e2 ON e2.event_id = t2.event_id" +
-		"  WHERE t2.room_id = t.room_id AND t2.stream_position <= $" + strconv.Itoa(streamParam) +
-		"  AND e2.exclude_from_sync = 0)"
+		" GROUP BY t.room_id"
 	var rows *sql.Rows
 	var err error
 	if txn != nil {

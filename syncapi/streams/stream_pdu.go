@@ -740,12 +740,23 @@ func orderRoomTimelineEvents(events []*rstypes.HeaderedEvent, backwards bool) []
 	return ordered
 }
 
-// forwardTimelineEvents drops events that are behind the room's delivery
-// boundary. Their stream positions are new, but their place in the room's
-// topology is below the frontier the client has already been sent, so they are
-// late history rather than new activity. They remain in current state,
-// complete-sync history, and /messages. An event at the boundary is kept: it is
-// concurrent with the frontier, not behind it.
+// forwardTimelineEvents drops state events that are behind the room's
+// delivery boundary. Their stream positions are new, but their place in the
+// room's topology is below the frontier the client has already been sent, so
+// they are late history rather than new activity. The current state block
+// carries their effect, and complete-sync history and /messages still show
+// them. An event at the boundary is kept: it is concurrent with the frontier,
+// not behind it.
+//
+// Non-state events are always delivered. A message from a lagging or forked
+// server can have a lower position than the frontier while still being new
+// information, and there is no local signal that separates it from a backfill.
+// Withholding it would lose it from sync.
+//
+// The boundary trusts event depth, which the sender controls. An inflated
+// depth can raise a room's frontier and delay a late state event's appearance
+// in the timeline. It cannot hide the event from the state block, and it does
+// not affect non-state delivery, so the impact is limited to timeline order.
 func forwardTimelineEvents(
 	events []*rstypes.HeaderedEvent,
 	boundary types.StreamPosition,
@@ -753,6 +764,10 @@ func forwardTimelineEvents(
 ) []*rstypes.HeaderedEvent {
 	kept := events[:0:0]
 	for _, event := range events {
+		if event.StateKey() == nil {
+			kept = append(kept, event)
+			continue
+		}
 		position, ok := positions[event.EventID()]
 		if ok && position.Depth < boundary {
 			continue

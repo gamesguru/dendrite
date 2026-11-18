@@ -16,35 +16,38 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 )
 
-func TestForwardTimelineDropsEventsBehindDeliveryBoundary(t *testing.T) {
+func TestForwardTimelineDropsStateEventsBehindDeliveryBoundary(t *testing.T) {
 	alice := test.NewUser(t)
 	r := test.NewRoom(t, alice)
 	create := r.Events()[0]
 	require.Equal(t, spec.MRoomCreate, create.Type())
-	oldMessage := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "old"})
-	liveMessage := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "live"})
+	oldTopic := r.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "old"}, test.WithStateKey(""))
+	// A message from a lagging fork is below the frontier but still new.
+	forkedMessage := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "fork"})
+	liveName := r.CreateAndInsert(t, alice, "m.room.name", map[string]any{"name": "live"}, test.WithStateKey(""))
 
 	positions := map[string]types.TopologyToken{
-		create.EventID():      {Depth: types.StreamPosition(create.Depth())},
-		oldMessage.EventID():  {Depth: types.StreamPosition(oldMessage.Depth())},
-		liveMessage.EventID(): {Depth: types.StreamPosition(liveMessage.Depth())},
+		create.EventID():        {Depth: types.StreamPosition(create.Depth())},
+		oldTopic.EventID():      {Depth: types.StreamPosition(oldTopic.Depth())},
+		forkedMessage.EventID(): {Depth: types.StreamPosition(forkedMessage.Depth())},
+		liveName.EventID():      {Depth: types.StreamPosition(liveName.Depth())},
 	}
 	got := forwardTimelineEvents(
-		[]*rstypes.HeaderedEvent{create, oldMessage, liveMessage},
-		types.StreamPosition(liveMessage.Depth()),
+		[]*rstypes.HeaderedEvent{create, oldTopic, forkedMessage, liveName},
+		types.StreamPosition(liveName.Depth()),
 		positions,
 	)
-	require.Equal(t, []*rstypes.HeaderedEvent{liveMessage}, got,
-		"events behind the frontier stay in history instead of appearing as new activity")
+	require.Equal(t, []*rstypes.HeaderedEvent{forkedMessage, liveName}, got,
+		"state behind the frontier stays in state, while a forked message is still delivered")
 
 	// An event at exactly the boundary is concurrent with the frontier, not
 	// behind it, so it is delivered.
 	atBoundary := forwardTimelineEvents(
-		[]*rstypes.HeaderedEvent{oldMessage},
-		types.StreamPosition(oldMessage.Depth()),
+		[]*rstypes.HeaderedEvent{oldTopic},
+		types.StreamPosition(oldTopic.Depth()),
 		positions,
 	)
-	require.Equal(t, []*rstypes.HeaderedEvent{oldMessage}, atBoundary)
+	require.Equal(t, []*rstypes.HeaderedEvent{oldTopic}, atBoundary)
 }
 
 func TestBackwardTimelineKeepsLateCreateAtStart(t *testing.T) {
