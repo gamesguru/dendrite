@@ -142,33 +142,41 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 
 	// superuser database
 	postgresDB := os.Getenv("POSTGRES_DB")
-	// we cannot use 'zendrite_test' here else 2x concurrently running packages will try to use the same db.
-	// instead, hash the current working directory, snaffle the first 16 bytes and append that to zendrite_test
-	// and use that as the unique db name. We do this because packages are per-directory hence by hashing the
-	// working (test) directory we ensure we get a consistent hash and don't hash against concurrent packages.
+	// Tests in a package share a working directory, and two `go test` runs in
+	// the same checkout share it too. Include the process and the test name so
+	// every test gets a private database instead of resetting another test's
+	// schema underneath it.
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("cannot get working directory: %s", err)
 	}
-	hash := sha256.Sum256([]byte(wd))
-	dbName := fmt.Sprintf("zendrite_test_%s", hex.EncodeToString(hash[:16]))
+	wdHash := sha256.Sum256([]byte(wd))
+	testHash := sha256.Sum256([]byte(t.Name()))
+	dbName := fmt.Sprintf(
+		"zendrite_test_%s_%d_%s",
+		hex.EncodeToString(wdHash[:8]), os.Getpid(), hex.EncodeToString(testHash[:8]),
+	)
 	if postgresDB == "" { // local server, use createdb
 		createLocalDB(t, dbName)
 	} else { // remote server, shell into the postgres user and CREATE DATABASE
 		createRemoteDB(t, dbName, user, connStr)
 	}
+	adminConnStr := connStr + " dbname=postgres"
 	connStr += fmt.Sprintf(" dbname=%s", dbName)
 
 	return connStr, func() {
-		// Drop all tables on the database to get a fresh instance
-		db, err := sql.Open("pgx", connStr)
+		// The test owns this database, so it can be dropped rather than just
+		// cleared. Terminate any pool connections the test left behind.
+		db, err := sql.Open("pgx", adminConnStr)
 		if err != nil {
-			t.Fatalf("failed to connect to postgres db '%s': %s", connStr, err)
+			t.Fatalf("failed to connect to postgres to drop test db '%s': %s", dbName, err)
 		}
-		_, err = db.Exec(`DROP SCHEMA public CASCADE;
-		CREATE SCHEMA public;`)
-		if err != nil {
-			t.Fatalf("failed to cleanup postgres db '%s': %s", connStr, err)
+		_, _ = db.Exec(
+			`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+			dbName,
+		)
+		if _, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
+			t.Fatalf("failed to drop postgres test db '%s': %s", dbName, err)
 		}
 		_ = db.Close()
 	}
