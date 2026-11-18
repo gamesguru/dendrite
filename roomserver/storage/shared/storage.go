@@ -1233,6 +1233,7 @@ func (d *EventDatabase) MaybeRedactEvent(
 		err                           error
 		validated                     bool
 		ignoreRedaction               bool
+		redactionJSONWritten          bool
 	)
 
 	wErr := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -1354,6 +1355,7 @@ func (d *EventDatabase) MaybeRedactEvent(
 		if err != nil {
 			return fmt.Errorf("d.EventJSONTable.OverwriteEventJSON: %w", err)
 		}
+		redactionJSONWritten = true
 
 		err = d.RedactionsTable.MarkRedactionValidated(ctx, txn, redactionEvent.EventID(), true)
 		if err != nil {
@@ -1371,7 +1373,7 @@ func (d *EventDatabase) MaybeRedactEvent(
 	if wErr != nil {
 		return nil, nil, wErr
 	}
-	if redactedEvent != nil {
+	if redactionJSONWritten {
 		// Invalidate after commit. This takes the cache write lock, waits for any
 		// pre-commit fill to finish, then removes it before later reads proceed.
 		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)

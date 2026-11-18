@@ -312,6 +312,48 @@ func TestPostgresGuardAcceptsSemanticallyEqualSurrogatePair(t *testing.T) {
 	})
 }
 
+func TestPostgresGuardDetectsLoneLowSurrogateAfterEscapedHigh(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		if dbType != test.DBTypePostgres {
+			t.Skip("PostgreSQL jsonb guard behavior")
+		}
+		db, cleanup := newSyncDB(t, dbType)
+		defer cleanup()
+		ctx := t.Context()
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		event := room.CreateEvent(t, alice, spec.MRoomTopic, map[string]string{"topic": "😀"}, test.WithStateKey(""))
+		_, err := db.WriteEvent(ctx, event, []*rstypes.HeaderedEvent{event}, []string{event.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		expectedJSON, err := event.MarshalJSON()
+		require.NoError(t, err)
+		// The high surrogate is escaped text (\\uD800), so the following
+		// \uDC00 is a lone low surrogate, which PostgreSQL's jsonb rejects.
+		// The guard must detect it and fall back to exact text comparison
+		// instead of attempting the cast.
+		storedJSON := bytes.Replace(expectedJSON, []byte("😀"), []byte(`\\uD800\uDC00`), 1)
+		require.NotEqual(t, expectedJSON, storedJSON)
+		tx, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		for _, table := range []string{"syncapi_output_room_events", "syncapi_current_room_state"} {
+			_, err = tx.DB.ExecContext(ctx, "UPDATE "+table+" SET headered_event_json = $1 WHERE event_id = $2", string(storedJSON), event.EventID())
+			require.NoError(t, err)
+		}
+		require.NoError(t, tx.Commit())
+
+		require.NoError(t, event.SetUnsignedField("age", 1))
+		tx, err = db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		written, err := tx.OutputEvents.UpdateUnredactedEventJSON(ctx, nil, event.EventID(), storedJSON, event)
+		require.NoError(t, err, "the guard must not cast a detected lone surrogate to jsonb")
+		require.True(t, written, "exact text comparison should match the stored copy")
+		written, err = tx.CurrentRoomState.UpdateUnredactedEventJSON(ctx, nil, event.EventID(), storedJSON, event)
+		require.NoError(t, err, "the guard must not cast a detected lone surrogate to jsonb")
+		require.True(t, written, "exact text comparison should match the stored copy")
+		require.NoError(t, tx.Commit())
+	})
+}
+
 func TestReplaceEventJSONReindexesRestoredRelation(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, cleanup := newSyncDB(t, dbType)

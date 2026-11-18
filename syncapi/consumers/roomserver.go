@@ -544,7 +544,9 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// must not stop the event being stored.
 	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
-	s.resolveOldEventStateKey(ctx, ev)
+	if err := s.resolveOldEventStateKey(ctx, ev); err != nil {
+		return fmt.Errorf("resolve old event %s state key: %w", ev.EventID(), err)
+	}
 	classifier := func(ctx context.Context, state tables.EventStateReader) (bool, error) {
 		return excludeOldEventFromSync(ctx, state, ev)
 	}
@@ -626,9 +628,9 @@ type oldEventState = tables.EventStateReader
 
 // resolveOldEventStateKey translates pseudo-ID state keys before the old event
 // write. Classification itself runs inside WriteOldEvent's serialized txn.
-func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) {
-	if ev.StateKey() == nil {
-		return
+func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) error {
+	if ev.StateKey() == nil || ev.Type() != spec.MRoomMember || ev.Version() != gomatrixserverlib.RoomVersionPseudoIDs {
+		return nil
 	}
 	if ev.StateKeyResolved == nil {
 		stateKey := *ev.StateKey()
@@ -636,17 +638,28 @@ func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, e
 		// sync current-state table. Only pseudo-ID keys need translating.
 		if stateKey != "" {
 			if _, err := spec.NewUserID(stateKey, true); err != nil {
-				// Match updateStateEvents: resolving an unknown/non-user state key
-				// is best-effort. The original key remains usable if no mapping
-				// exists.
+				// Only pseudo-ID keys need translating. An arbitrary state key
+				// that is not a base64 public key stays unresolved, matching
+				// updateStateEvents' best-effort behavior.
+				var pseudoID spec.Base64Bytes
+				if decodeErr := pseudoID.Decode(stateKey); decodeErr != nil {
+					return nil
+				}
 				userID, err := s.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
-				if err == nil && userID != nil {
+				if err != nil {
+					// A transient lookup failure must not store the event with an
+					// unresolved membership key; NAK so it is retried with fresh
+					// state instead of being written permanently.
+					return err
+				}
+				if userID != nil {
 					resolved := userID.String()
 					ev.StateKeyResolved = &resolved
 				}
 			}
 		}
 	}
+	return nil
 }
 
 // excludeOldEventFromSync reports whether an old event must stay out of the

@@ -99,12 +99,12 @@ ORDER BY wrongly_hidden DESC;
 SELECT count(*) AS membership_events_needing_jsonb_verification
 FROM syncapi_output_room_events
 WHERE type = 'm.room.member'
-  AND headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})';
+  AND headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})';
 WITH last_join AS (
   SELECT room_id, max(id) AS join_id
   FROM syncapi_output_room_events
   WHERE type = 'm.room.member'
-    AND CASE WHEN headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+    AND CASE WHEN headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})'
              THEN NULL
              ELSE headered_event_json::jsonb #>> '{content,membership}' END = 'join'
   GROUP BY room_id
@@ -135,11 +135,11 @@ WITH raw AS (
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
 ), parsed AS (
   SELECT *,
-         rs_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' AS rs_unrepresentable,
-         sync_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' AS sync_unrepresentable,
-         CASE WHEN rs_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+         rs_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' AS rs_unrepresentable,
+         sync_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' AS sync_unrepresentable,
+         CASE WHEN rs_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})'
               THEN NULL ELSE rs_json::jsonb END AS rs_doc,
-         CASE WHEN sync_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+         CASE WHEN sync_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})'
               THEN NULL ELSE sync_json::jsonb END AS sync_doc
   FROM raw
 ), cmp AS (
@@ -184,8 +184,8 @@ FROM cmp;
 -- as empty_content_needs_verification in 2a and listed for verification in 2e.
 WITH parsed AS (
   SELECT o.type,
-         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
-         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
   FROM syncapi_output_room_events o
   JOIN roomserver_events e ON e.event_id = o.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
@@ -208,12 +208,12 @@ SELECT count(*) AS current_state_jsonb_unrepresentable_needs_verification
 FROM syncapi_current_room_state s
 JOIN roomserver_events e ON e.event_id = s.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
-   OR s.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})';
+WHERE j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+   OR s.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})';
 WITH parsed AS (
   SELECT s.type,
-         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
-         CASE WHEN s.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE s.headered_event_json::jsonb END AS sync_doc
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN s.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE s.headered_event_json::jsonb END AS sync_doc
   FROM syncapi_current_room_state s
   JOIN roomserver_events e ON e.event_id = s.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
@@ -234,8 +234,8 @@ ORDER BY locally_repairable_current_state DESC;
 \echo '=== 2d. per-room totals for the backlog (output rows) ==='
 WITH parsed AS (
   SELECT o.room_id,
-         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
-         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
   FROM syncapi_output_room_events o
   JOIN roomserver_events e ON e.event_id = o.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
@@ -262,8 +262,8 @@ ORDER BY affected_output_rows DESC;
 -- filtering candidates for a later dry_run=false request.
 WITH parsed AS (
   SELECT o.id, o.room_id, o.event_id, o.headered_event_json,
-         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
-         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
   FROM syncapi_output_room_events o
   JOIN roomserver_events e ON e.event_id = o.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
@@ -295,8 +295,8 @@ ORDER BY batch_number;
 -- content, report a local Sync API repair rather than a federation refetch.
 WITH parsed AS (
   SELECT o.type,
-         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
-         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
   FROM syncapi_output_room_events o
   JOIN roomserver_events e ON e.event_id = o.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
@@ -324,8 +324,8 @@ ORDER BY sync_api_repair_cases DESC;
 -- verification flow first.
 WITH parsed AS (
   SELECT o.id, o.room_id, o.event_id,
-         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
-         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!(?<!\\)(\\\\)*\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!(?:^|[^\\])(?:\\\\)*\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
   FROM syncapi_output_room_events o
   JOIN roomserver_events e ON e.event_id = o.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
