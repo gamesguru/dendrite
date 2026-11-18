@@ -212,15 +212,10 @@ func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
 func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition,
 ) (topoPos types.StreamPosition, err error) {
-	maxPrev := int64(-1)
-	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
-		if err = sqlutil.TxStmt(txn, s.selectMaxTopologyPositionStmt).QueryRowContext(
-			ctx, event.RoomID().String(), sqlutil.StringArray(prevs),
-		).Scan(&maxPrev); err != nil {
-			return 0, err
-		}
+	depth, err := s.ProspectiveEventPosition(ctx, txn, event)
+	if err != nil {
+		return 0, err
 	}
-	depth := depth.LiftAbovePrevEvents(event.Depth(), maxPrev)
 	err = sqlutil.TxStmt(txn, s.insertEventInTopologyStmt).QueryRowContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	).Scan(&topoPos)

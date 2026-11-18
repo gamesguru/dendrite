@@ -973,6 +973,7 @@ func (d *EventDatabase) storeEvent(
 	)
 
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		alreadyStored := false
 		if eventNID, stateNID, err = d.EventsTable.InsertEvent(
 			ctx,
 			txn,
@@ -985,6 +986,7 @@ func (d *EventDatabase) storeEvent(
 			isRejected,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
+				alreadyStored = true
 				// We've already inserted the event so select the numeric event ID
 				eventNID, stateNID, err = d.EventsTable.SelectEvent(ctx, txn, event.EventID())
 			} else if err != nil {
@@ -997,8 +999,21 @@ func (d *EventDatabase) storeEvent(
 
 		d.warnIfHashPruned(ctx, txn, event, roomInfo, !recordPrevEvents, recordPrevEvents)
 
-		if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
-			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
+		// A complete copy must never replace a stored event that a validated
+		// redaction covers, even if the stored JSON lacks redacted_because
+		// (for example a pruned outlier stored after the redaction arrived).
+		skipJSON := false
+		if alreadyStored && !event.Redacted() {
+			validated, vErr := d.RedactionsTable.HasValidatedRedactionForEvent(ctx, txn, event.EventID())
+			if vErr != nil {
+				return fmt.Errorf("d.RedactionsTable.HasValidatedRedactionForEvent: %w", vErr)
+			}
+			skipJSON = validated
+		}
+		if !skipJSON {
+			if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
+				return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
+			}
 		}
 
 		if prevEvents := event.PrevEventIDs(); recordPrevEvents && len(prevEvents) > 0 {

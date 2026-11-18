@@ -201,25 +201,12 @@ func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
 func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition,
 ) (types.StreamPosition, error) {
-	maxPrev := int64(-1)
-	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
-		args := make([]any, 0, len(prevs)+1)
-		args = append(args, event.RoomID().String())
-		for _, prev := range prevs {
-			args = append(args, prev)
-		}
-		query := strings.Replace(selectMaxTopologyPositionSQL, "($2)", sqlutil.QueryVariadicOffset(len(prevs), 1), 1)
-		row := s.db.QueryRowContext
-		if txn != nil {
-			row = txn.QueryRowContext
-		}
-		if err := row(ctx, query, args...).Scan(&maxPrev); err != nil {
-			return 0, err
-		}
+	depth, err := s.ProspectiveEventPosition(ctx, txn, event)
+	if err != nil {
+		return 0, err
 	}
-	depth := depth.LiftAbovePrevEvents(event.Depth(), maxPrev)
 	insertEventInTopologyStmt := sqlutil.TxStmt(txn, s.insertEventInTopologyStmt)
-	_, err := insertEventInTopologyStmt.ExecContext(
+	_, err = insertEventInTopologyStmt.ExecContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
 	)
 	return types.StreamPosition(depth), err

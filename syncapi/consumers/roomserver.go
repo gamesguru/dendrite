@@ -549,8 +549,8 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		// allowing the state classification to be retried with fresh DB state.
 		return fmt.Errorf("classify old event %s for sync: %w", ev.EventID(), err)
 	}
-	// Retried in place, as for new events.
 	var pduPos types.StreamPosition
+	// Retried in place, as for new events.
 	err = sqlutil.RetryTransient(ctx, "sync API write of "+ev.EventID(), func() (err error) {
 		noBackfill, err := s.rejectedPrevEventIDs(ctx, ev)
 		if err != nil {

@@ -142,9 +142,9 @@ ORDER BY hidden_state_after_last_join DESC;
 
 \echo ''
 \echo '=== 2a. content backlogs: roomserver pruned vs sync richer vs both pruned ==='
--- An empty roomserver content object is how many event types look after a
--- failed content-hash check. It needs verification, not an automatic refetch:
--- an event can legitimately have empty content. These rows are counted
+-- Empty content on both sides is how many event types look after a failed
+-- content-hash check, but an event can legitimately have empty content. These
+-- rows have no richer local copy to repair from, so they are counted
 -- separately and verified in 2e before they can become refetch requests.
 WITH cmp AS (
   SELECT o.event_id,
@@ -170,6 +170,7 @@ SELECT count(*) FILTER (
          WHERE rs_rb IS NULL AND sync_rb IS NULL
            AND jsonb_typeof(rs_content) = 'object'
            AND rs_content = '{}'::jsonb
+           AND sync_content = '{}'::jsonb
        ) AS empty_content_needs_verification,
        count(*) FILTER (
          WHERE (rs_rb IS NOT NULL OR sync_rb IS NOT NULL)
@@ -179,20 +180,17 @@ FROM cmp;
 
 \echo ''
 \echo '=== 2b. content repair candidates, by event type ==='
--- Includes empty-content copies even when both sides are empty: those are the
--- matching copies that the plain content comparison would otherwise miss.
+-- Only rows where the sync copy is strictly richer than the roomserver copy.
+-- Rows where both sides are empty have no richer local copy; they are counted
+-- as empty_content_needs_verification in 2a and listed for verification in 2e.
 SELECT o.type, count(*) AS locally_repairable
 FROM syncapi_output_room_events o
 JOIN roomserver_events e ON e.event_id = o.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
 WHERE j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
   AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND (
-    ((j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
-      AND (o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
-    OR (jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
-      AND (j.event_json::jsonb -> 'content') = '{}'::jsonb)
-  )
+  AND (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
+  AND (o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content')
 GROUP BY o.type
 ORDER BY locally_repairable DESC;
 
@@ -204,12 +202,8 @@ JOIN roomserver_events e ON e.event_id = s.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
 WHERE j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
   AND s.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND (
-    ((j.event_json::jsonb -> 'content') IS DISTINCT FROM (s.headered_event_json::jsonb -> 'content')
-      AND (s.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
-    OR (jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
-      AND (j.event_json::jsonb -> 'content') = '{}'::jsonb)
-  )
+  AND (j.event_json::jsonb -> 'content') IS DISTINCT FROM (s.headered_event_json::jsonb -> 'content')
+  AND (s.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content')
 GROUP BY s.type
 ORDER BY locally_repairable_current_state DESC;
 
@@ -248,6 +242,7 @@ WITH candidates AS (
     AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
     AND jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
     AND (j.event_json::jsonb -> 'content') = '{}'::jsonb
+    AND (o.headered_event_json::jsonb -> 'content') = '{}'::jsonb
 )
 SELECT (n / 100) + 1 AS batch_number,
        jsonb_build_object(
