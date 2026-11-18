@@ -703,11 +703,6 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	var err error
 	recentStreamEvents := dbEvents[delta.RoomID].Events
 	limited := dbEvents[delta.RoomID].Limited
-	if !r.Backwards {
-		// A room's create event is never new activity in a forward range: one
-		// stored late (backfill, re-fetch) only gets a recent stream position.
-		recentStreamEvents = withoutRoomCreate(recentStreamEvents)
-	}
 	checkUnPartialStated := func() (bool, error) {
 		unPartialStatedRooms, unPartialErr := snapshot.UnPartialStatedRoomsInRange(ctx, device.UserID, r)
 		if unPartialErr != nil {
@@ -1470,16 +1465,4 @@ func logAbandoned(req *types.SyncRequest, err error, roomID, kind string) {
 		return
 	}
 	logger.Warnf("Abandoning %s sync, the database is unavailable", kind)
-}
-
-// withoutRoomCreate drops m.room.create events from a forward timeline.
-func withoutRoomCreate(events []types.StreamEvent) []types.StreamEvent {
-	if !slices.ContainsFunc(events, isRoomCreate) {
-		return events
-	}
-	return slices.DeleteFunc(slices.Clone(events), isRoomCreate)
-}
-
-func isRoomCreate(ev types.StreamEvent) bool {
-	return ev.Type() == spec.MRoomCreate && ev.StateKeyEquals("")
 }
