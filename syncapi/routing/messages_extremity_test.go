@@ -38,18 +38,6 @@ func (s *eventMapSnapshot) EventPositionInTopology(_ context.Context, eventID st
 	return types.TopologyToken{}, context.Canceled
 }
 
-func (s *eventMapSnapshot) EventPositionsInTopology(_ context.Context, eventIDs []string) (map[string]types.TopologyToken, error) {
-	positions := make(map[string]types.TopologyToken, len(eventIDs))
-	for _, eventID := range eventIDs {
-		if depth, ok := s.positions[eventID]; ok {
-			positions[eventID] = types.TopologyToken{Depth: depth}
-		} else if event, ok := s.events[eventID]; ok {
-			positions[eventID] = types.TopologyToken{Depth: types.StreamPosition(event.Depth())}
-		}
-	}
-	return positions, nil
-}
-
 func (s *eventMapSnapshot) Events(_ context.Context, eventIDs []string) ([]*rstypes.HeaderedEvent, error) {
 	events := make([]*rstypes.HeaderedEvent, 0, len(eventIDs))
 	for _, eventID := range eventIDs {

@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strconv"
 	"strings"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -419,66 +418,6 @@ func (s *outputRoomEventsTopologyStatements) selectPositionsChunk(
 			return err
 		}
 		positions[eventID] = position
-	}
-	return rows.Err()
-}
-
-// SelectDeliveryBoundaries returns the highest topological position among
-// delivered events at or before atStreamPos, per room.
-func (s *outputRoomEventsTopologyStatements) SelectDeliveryBoundaries(
-	ctx context.Context, txn *sql.Tx, roomIDs []string, atStreamPos types.StreamPosition,
-) (map[string]types.StreamPosition, error) {
-	boundaries := make(map[string]types.StreamPosition, len(roomIDs))
-	if len(roomIDs) == 0 {
-		return boundaries, nil
-	}
-	for chunk := range slices.Chunk(roomIDs, selectEventsChunkSize) {
-		if err := s.selectDeliveryBoundariesChunk(ctx, txn, chunk, atStreamPos, boundaries); err != nil {
-			return nil, err
-		}
-	}
-	return boundaries, nil
-}
-
-// selectDeliveryBoundariesChunk reads one chunk of room IDs, kept under
-// SQLite's limit on bound variables per statement.
-func (s *outputRoomEventsTopologyStatements) selectDeliveryBoundariesChunk(
-	ctx context.Context, txn *sql.Tx, roomIDs []string, atStreamPos types.StreamPosition,
-	boundaries map[string]types.StreamPosition,
-) error {
-	args := make([]any, 0, len(roomIDs)+1)
-	for _, roomID := range roomIDs {
-		args = append(args, roomID)
-	}
-	args = append(args, atStreamPos)
-	// The room placeholders come first and the stream bound last: the SQLite
-	// driver binds numbered parameters in the order they first appear.
-	streamParam := len(roomIDs) + 1
-	query := "SELECT t.room_id, MAX(t.topological_position)" +
-		" FROM syncapi_output_room_events_topology t" +
-		" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
-		" WHERE t.room_id IN " + sqlutil.QueryVariadic(len(roomIDs)) +
-		" AND t.stream_position <= $" + strconv.Itoa(streamParam) +
-		" AND e.exclude_from_sync = 0" +
-		" GROUP BY t.room_id"
-	var rows *sql.Rows
-	var err error
-	if txn != nil {
-		rows, err = txn.QueryContext(ctx, query, args...)
-	} else {
-		rows, err = s.db.QueryContext(ctx, query, args...)
-	}
-	if err != nil {
-		return err
-	}
-	defer internal.CloseAndLogIfError(ctx, rows, "SelectDeliveryBoundaries: failed to close rows")
-	for rows.Next() {
-		var roomID string
-		var position types.StreamPosition
-		if err = rows.Scan(&roomID, &position); err != nil {
-			return err
-		}
-		boundaries[roomID] = position
 	}
 	return rows.Err()
 }

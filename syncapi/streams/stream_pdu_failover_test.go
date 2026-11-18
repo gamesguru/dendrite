@@ -60,20 +60,6 @@ func (s failoverSnapshot) UnPartialStatedRoomsInRange(context.Context, string, t
 	return nil, fmt.Errorf("unable to query un-partial-stated rooms: %w", driver.ErrBadConn)
 }
 
-// The connection is gone, so deciding whether an event predates the room's
-// live start fails the same way as the rest of the snapshot reads.
-func (s failoverSnapshot) RoomLiveStartPosition(context.Context, string) (types.StreamPosition, bool, error) {
-	return 0, false, fmt.Errorf("unable to query the room's live start: %w", driver.ErrBadConn)
-}
-
-func (s failoverSnapshot) EventPositionsInTopology(context.Context, []string) (map[string]types.TopologyToken, error) {
-	return nil, fmt.Errorf("unable to query event topology: %w", driver.ErrBadConn)
-}
-
-func (s failoverSnapshot) DeliveryBoundaries(context.Context, []string, types.StreamPosition) (map[string]types.StreamPosition, error) {
-	return nil, fmt.Errorf("unable to query delivery boundaries: %w", driver.ErrBadConn)
-}
-
 type noPartialStateRooms struct {
 	roomserverAPI.SyncRoomserverAPI
 }

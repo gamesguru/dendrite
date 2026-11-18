@@ -132,12 +132,6 @@ type DatabaseTransaction interface {
 	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (types.StreamPosition, error)
 	// EventPositionInTopology returns the depth and stream position of the given event.
 	EventPositionInTopology(ctx context.Context, eventID string) (types.TopologyToken, error)
-	// EventPositionsInTopology returns positions for stored events in one query.
-	EventPositionsInTopology(ctx context.Context, eventIDs []string) (map[string]types.TopologyToken, error)
-	// DeliveryBoundaries returns, per room, the highest topological position
-	// among events delivered to sync at or before atStreamPos. A forward sync
-	// uses it to tell late history from new activity.
-	DeliveryBoundaries(ctx context.Context, roomIDs []string, atStreamPos types.StreamPosition) (map[string]types.StreamPosition, error)
 	// EventPositionByStreamPosition resolves an event's current topology
 	// position from its stable stream position.
 	EventPositionByStreamPosition(ctx context.Context, roomID string, streamPos types.StreamPosition) (types.TopologyToken, error)

@@ -150,12 +150,6 @@ type Topology interface {
 	// SelectPositionsInTopology returns the stored positions for the requested
 	// events in one query. Events absent from topology are omitted.
 	SelectPositionsInTopology(ctx context.Context, txn *sql.Tx, eventIDs []string) (map[string]types.TopologyToken, error)
-	// SelectDeliveryBoundaries returns, for each room, the highest topological
-	// position among delivered events at or before atStreamPos. A forward
-	// incremental sync drops events below that boundary: their stream position
-	// is new but their place in the room is history. Rooms with no delivered
-	// event at or before atStreamPos are absent.
-	SelectDeliveryBoundaries(ctx context.Context, txn *sql.Tx, roomIDs []string, atStreamPos types.StreamPosition) (map[string]types.StreamPosition, error)
 	// SelectPositionByStreamPosition returns the current topology position for
 	// an event in the room with this stable stream position. It returns
 	// sql.ErrNoRows when no event in the room has that stream position.

@@ -26,16 +26,6 @@ type departingClientSnapshot struct {
 	gone   *atomic.Bool
 }
 
-// The connection is still up while the timeline loads; there is simply no
-// frontier to filter against, so the test reaches the timeline work.
-func (s departingClientSnapshot) DeliveryBoundaries(context.Context, []string, types.StreamPosition) (map[string]types.StreamPosition, error) {
-	return map[string]types.StreamPosition{}, nil
-}
-
-func (s departingClientSnapshot) EventPositionsInTopology(context.Context, []string) (map[string]types.TopologyToken, error) {
-	return map[string]types.TopologyToken{}, nil
-}
-
 func (s departingClientSnapshot) StreamEventsToEvents(ctx context.Context, device *userapi.Device, in []types.StreamEvent, rsAPI roomserverAPI.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
 	s.gone.Store(true)
 	s.cancel(context.Canceled)

@@ -83,23 +83,6 @@ const selectPositionsInTopologySQL = "" +
 	"SELECT event_id, topological_position, stream_position FROM syncapi_output_room_events_topology" +
 	" WHERE event_id = ANY($1)"
 
-// The boundary is the highest topological position among delivered events at
-// or before a sync token: the furthest place the client has already been sent
-// in that room. The latest stored event is not enough, because a backfill can
-// be stored last while belonging deep in the room. LATERAL walks each room's
-// topology index down until it finds a delivered event within the token.
-const selectDeliveryBoundariesSQL = "" +
-	"SELECT room_ids.room_id, boundary.topological_position" +
-	" FROM unnest($1::text[]) AS room_ids(room_id)" +
-	" CROSS JOIN LATERAL (" +
-	"  SELECT t.topological_position" +
-	"  FROM syncapi_output_room_events_topology t" +
-	"  JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
-	"  WHERE t.room_id = room_ids.room_id AND t.stream_position <= $2 AND e.exclude_from_sync = FALSE" +
-	"  ORDER BY t.topological_position DESC" +
-	"  LIMIT 1" +
-	") AS boundary"
-
 const selectStreamToTopologicalPositionAscSQL = "" +
 	"SELECT topological_position FROM syncapi_output_room_events_topology WHERE room_id = $1 AND stream_position >= $2 ORDER BY topological_position ASC LIMIT 1;"
 
@@ -160,7 +143,6 @@ type outputRoomEventsTopologyStatements struct {
 	selectLiveStartPositionStmt                   *sql.Stmt
 	selectPositionByStreamPositionStmt            *sql.Stmt
 	selectPositionsInTopologyStmt                 *sql.Stmt
-	selectDeliveryBoundariesStmt                  *sql.Stmt
 	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
 	selectStreamToTopologicalPositionDescStmt     *sql.Stmt
 	selectFirstSyncedDepthAfterStreamPositionStmt *sql.Stmt
@@ -187,7 +169,6 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectLiveStartPositionStmt, selectLiveStartPositionSQL},
 		{&s.selectPositionByStreamPositionStmt, selectPositionByStreamPositionSQL},
 		{&s.selectPositionsInTopologyStmt, selectPositionsInTopologySQL},
-		{&s.selectDeliveryBoundariesStmt, selectDeliveryBoundariesSQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
 		{&s.selectFirstSyncedDepthAfterStreamPositionStmt, selectFirstSyncedDepthAfterStreamPositionSQL},
@@ -412,31 +393,6 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionsInTopology(
 		positions[eventID] = position
 	}
 	return positions, rows.Err()
-}
-
-// SelectDeliveryBoundaries returns the highest topological position among
-// delivered events at or before atStreamPos, per room.
-func (s *outputRoomEventsTopologyStatements) SelectDeliveryBoundaries(
-	ctx context.Context, txn *sql.Tx, roomIDs []string, atStreamPos types.StreamPosition,
-) (map[string]types.StreamPosition, error) {
-	boundaries := make(map[string]types.StreamPosition, len(roomIDs))
-	if len(roomIDs) == 0 {
-		return boundaries, nil
-	}
-	rows, err := sqlutil.TxStmt(txn, s.selectDeliveryBoundariesStmt).QueryContext(ctx, roomIDs, atStreamPos)
-	if err != nil {
-		return nil, err
-	}
-	defer internal.CloseAndLogIfError(ctx, rows, "selectDeliveryBoundaries: rows.close() failed")
-	for rows.Next() {
-		var roomID string
-		var position types.StreamPosition
-		if err = rows.Scan(&roomID, &position); err != nil {
-			return nil, err
-		}
-		boundaries[roomID] = position
-	}
-	return boundaries, rows.Err()
 }
 
 // SelectStreamToTopologicalPosition returns the closest position of a given event

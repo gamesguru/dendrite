@@ -308,7 +308,7 @@ func (p *PDUStreamProvider) addLeftRoomsToCompleteSync(
 		if err != nil {
 			return fmt.Errorf("snapshot.RoomStateDelta: %w", err)
 		}
-		if _, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, r, delta, eventFilter, stateFilter, req, recent, 0, nil, bundler); err != nil {
+		if _, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, r, delta, eventFilter, stateFilter, req, recent, bundler); err != nil {
 			return fmt.Errorf("addRoomDeltaToResponse(%s): %w", delta.RoomID, err)
 		}
 	}
@@ -424,40 +424,6 @@ func (p *PDUStreamProvider) IncrementalSync(
 		return r.From
 	}
 
-	// Resolve, in two queries for the whole sync, which forward events are late
-	// history. The delivery boundary is each room's latest delivered event at or
-	// before the client's token; a candidate below it is behind the frontier the
-	// client has already seen, however new its stream position is.
-	var (
-		deliveryBoundaries map[string]types.StreamPosition
-		eventPositions     map[string]types.TopologyToken
-	)
-	if !r.Backwards {
-		roomIDs := make([]string, 0, len(stateDeltas))
-		eventIDs := make([]string, 0, len(dbEvents))
-		for _, delta := range stateDeltas {
-			if delta.NewlyJoined {
-				continue
-			}
-			roomIDs = append(roomIDs, delta.RoomID)
-			for _, event := range dbEvents[delta.RoomID].Events {
-				eventIDs = append(eventIDs, event.EventID())
-			}
-		}
-		if len(roomIDs) > 0 {
-			if deliveryBoundaries, err = snapshot.DeliveryBoundaries(ctx, roomIDs, r.From); err != nil {
-				req.Log.WithError(err).Error("unable to get room delivery boundaries")
-				return r.From
-			}
-		}
-		if len(eventIDs) > 0 {
-			if eventPositions, err = snapshot.EventPositionsInTopology(ctx, eventIDs); err != nil {
-				req.Log.WithError(err).Error("unable to get event topology positions")
-				return r.From
-			}
-		}
-	}
-
 	newPos = from
 	for _, delta := range stateDeltas {
 		// There is no point in building deltas for the remaining rooms if the
@@ -479,7 +445,7 @@ func (p *PDUStreamProvider) IncrementalSync(
 			}
 		}
 		var pos types.StreamPosition
-		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents, deliveryBoundaries[delta.RoomID], eventPositions, bundler); err != nil {
+		if pos, err = p.addRoomDeltaToResponse(ctx, snapshot, req.Device, newRange, delta, &eventFilter, &stateFilter, req, dbEvents, bundler); err != nil {
 			if req.Context.Err() != nil || abandonsSync(err) {
 				// Stay at from: a position past this room's events would
 				// tell the client it has seen events it was never sent.
@@ -721,62 +687,6 @@ func leftWithinRange(delta types.StateDelta, r types.Range) bool {
 // Limit the recent events to X when going backwards.
 const recentEventBackwardsLimit = 100
 
-func orderRoomTimelineEvents(events []*rstypes.HeaderedEvent, backwards bool) []*rstypes.HeaderedEvent {
-	if !backwards {
-		return events
-	}
-	recEvents := gomatrixserverlib.ReverseTopologicalOrdering(
-		gomatrixserverlib.ToPDUs(events),
-		gomatrixserverlib.TopologicalOrderByPrevEvents,
-	)
-	ordered := make([]*rstypes.HeaderedEvent, 0, len(recEvents))
-	for i := range recEvents {
-		he, ok := recEvents[i].(*rstypes.HeaderedEvent)
-		if !ok {
-			continue
-		}
-		ordered = append(ordered, he)
-	}
-	return ordered
-}
-
-// forwardTimelineEvents drops state events that are behind the room's
-// delivery boundary. Their stream positions are new, but their place in the
-// room's topology is below the frontier the client has already been sent, so
-// they are late history rather than new activity. The current state block
-// carries their effect, and complete-sync history and /messages still show
-// them. An event at the boundary is kept: it is concurrent with the frontier,
-// not behind it.
-//
-// Non-state events are always delivered. A message from a lagging or forked
-// server can have a lower position than the frontier while still being new
-// information, and there is no local signal that separates it from a backfill.
-// Withholding it would lose it from sync.
-//
-// The boundary trusts event depth, which the sender controls. An inflated
-// depth can raise a room's frontier and delay a late state event's appearance
-// in the timeline. It cannot hide the event from the state block, and it does
-// not affect non-state delivery, so the impact is limited to timeline order.
-func forwardTimelineEvents(
-	events []*rstypes.HeaderedEvent,
-	boundary types.StreamPosition,
-	positions map[string]types.TopologyToken,
-) []*rstypes.HeaderedEvent {
-	kept := events[:0:0]
-	for _, event := range events {
-		if event.StateKey() == nil {
-			kept = append(kept, event)
-			continue
-		}
-		position, ok := positions[event.EventID()]
-		if ok && position.Depth < boundary {
-			continue
-		}
-		kept = append(kept, event)
-	}
-	return kept
-}
-
 //nolint:gocyclo
 func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	ctx context.Context,
@@ -788,8 +698,6 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	stateFilter *synctypes.StateFilter,
 	req *types.SyncRequest,
 	dbEvents map[string]types.RecentEvents,
-	deliveryBoundary types.StreamPosition,
-	eventPositions map[string]types.TopologyToken,
 	bundler *syncBundler,
 ) (types.StreamPosition, error) {
 	var err error
@@ -821,17 +729,22 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// section (a complete sync or a newly joined room) are ordered by the room
 	// DAG instead, as /messages is: an event received late but deep
 	// in the past belongs in history, not at the end of the timeline.
-	recentEvents := orderRoomTimelineEvents(
-		snapshot.StreamEventsToEvents(ctx, device, recentStreamEvents, p.rsAPI),
-		r.Backwards,
-	)
-	// Loading the timeline is itself expensive, so stop here if the client has
-	// gone away rather than querying topology for a room nobody will receive.
-	if err = ctx.Err(); err != nil {
-		return r.From, err
-	}
-	if !r.Backwards {
-		recentEvents = forwardTimelineEvents(recentEvents, deliveryBoundary, eventPositions)
+	var recentEvents []*rstypes.HeaderedEvent
+	if r.Backwards {
+		recEvents := gomatrixserverlib.ReverseTopologicalOrdering(
+			gomatrixserverlib.ToPDUs(snapshot.StreamEventsToEvents(ctx, device, recentStreamEvents, p.rsAPI)),
+			gomatrixserverlib.TopologicalOrderByPrevEvents,
+		)
+		recentEvents = make([]*rstypes.HeaderedEvent, 0, len(recEvents))
+		for i := range recEvents {
+			he, ok := recEvents[i].(*rstypes.HeaderedEvent)
+			if !ok {
+				continue
+			}
+			recentEvents = append(recentEvents, he)
+		}
+	} else {
+		recentEvents = snapshot.StreamEventsToEvents(ctx, device, recentStreamEvents, p.rsAPI)
 	}
 
 	// A resync can finish without adding timeline events. The completion marker
@@ -901,7 +814,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	}
 
 	hasMembershipChange := unPartialStated
-	for _, recentEvent := range recentEvents {
+	for _, recentEvent := range recentStreamEvents {
 		if recentEvent.Type() == spec.MRoomMember && recentEvent.StateKey() != nil {
 			if membership, _ := recentEvent.Membership(); membership == spec.Join {
 				req.MembershipChanges[*recentEvent.StateKey()] = struct{}{}

@@ -531,16 +531,6 @@ func (s *extremitySnapshot) EventPositionInTopology(_ context.Context, eventID s
 	return pos, nil
 }
 
-func (s *extremitySnapshot) EventPositionsInTopology(_ context.Context, eventIDs []string) (map[string]types.TopologyToken, error) {
-	positions := make(map[string]types.TopologyToken, len(eventIDs))
-	for _, eventID := range eventIDs {
-		if pos, ok := s.positions[eventID]; ok {
-			positions[eventID] = pos
-		}
-	}
-	return positions, nil
-}
-
 func (s *extremitySnapshot) BackwardExtremitiesForRoom(context.Context, string) (map[string][]string, error) {
 	return s.extremities, nil
 }
@@ -673,16 +663,6 @@ func (s *fullPageSnapshot) EventPositionInTopology(_ context.Context, eventID st
 		return types.TopologyToken{}, errors.New("event not in topology")
 	}
 	return pos, nil
-}
-
-func (s *fullPageSnapshot) EventPositionsInTopology(_ context.Context, eventIDs []string) (map[string]types.TopologyToken, error) {
-	positions := make(map[string]types.TopologyToken, len(eventIDs))
-	for _, eventID := range eventIDs {
-		if pos, ok := s.positions[eventID]; ok {
-			positions[eventID] = pos
-		}
-	}
-	return positions, nil
 }
 
 func (s *fullPageSnapshot) StreamEventsToEvents(_ context.Context, _ *userapi.Device, in []types.StreamEvent, _ api.SyncRoomserverAPI) []*rstypes.HeaderedEvent {
