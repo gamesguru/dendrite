@@ -152,14 +152,26 @@ const selectMaxEventIDSQL = "" +
 const updateEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2"
 
+// nulSafeJSONB casts a text expression holding event JSON to jsonb. jsonb
+// rejects the \u0000 escape and lone surrogate escapes that valid event content
+// can contain, and one such row must not make a guarded update fail. Those
+// escapes are replaced by U+FFFD first; the result is used only to inspect the
+// top-level redaction marker. Expected-row comparison remains byte exact.
+func nulSafeJSONB(expr string) string {
+	return "(CASE WHEN " + expr + " LIKE '%\\\\u%'" +
+		" THEN regexp_replace(" + expr + ", '\\\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\\\uFFFD', 'g')" +
+		" ELSE " + expr + " END)::jsonb"
+}
+
 // The redacted_because guard makes the write conditional on the stored event
 // not being redacted; the check and the write are one statement. Read the same
 // JSON path as IsRedacted so that a redacted_because key in the event content
-// does not count as a redaction.
-const updateUnredactedEventJSONSQL = "" +
+// does not count as a redaction. Expected-row comparison remains byte exact,
+// so escaped NUL content neither fails the statement nor admits a different row.
+var updateUnredactedEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1, contains_url=$2, origin_server_ts=$3 WHERE event_id=$4" +
-	" AND headered_event_json::jsonb = $5::jsonb" +
-	" AND (headered_event_json::jsonb -> 'unsigned' -> 'redacted_because') IS NULL"
+	" AND headered_event_json = $5::text" +
+	" AND (" + nulSafeJSONB("headered_event_json") + " -> 'unsigned' -> 'redacted_because') IS NULL"
 
 // In order for us to apply the state updates correctly, rows need to be ordered in the order they were received (id).
 const selectStateInRangeFilteredSQL = "" +

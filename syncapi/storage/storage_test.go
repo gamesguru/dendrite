@@ -167,6 +167,33 @@ func TestUpdateUnredactedEventJSON(t *testing.T) {
 		require.Len(t, stored, 1)
 		require.Equal(t, int64(3), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
 
+		// Valid content can contain a NUL escape, which jsonb
+		// rejects. The guard must still match, and still protect.
+		nul := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "a\x00b"})
+		_, err = db.WriteEvent(ctx, nul, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		nulJSON, err := nul.MarshalJSON()
+		require.NoError(t, err)
+		var staleNul rstypes.HeaderedEvent
+		require.NoError(t, staleNul.UnmarshalJSON(nulJSON))
+		require.NoError(t, nul.SetUnsignedField("age", 5))
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), nulJSON, nul)
+		require.NoError(t, err, "a NUL in the stored JSON must not fail the guard")
+		require.True(t, written)
+		// The stored copy changed, so the old expectation no longer matches.
+		require.NoError(t, staleNul.SetUnsignedField("age", 6))
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), nulJSON, &staleNul)
+		require.NoError(t, err)
+		require.False(t, written, "a stale expectation must not match a NUL-bearing row")
+		// A redacted NUL-bearing row is still refused.
+		require.NoError(t, nul.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, db.UpdateEventJSON(ctx, nul.EventID(), nul))
+		redactedNulJSON, err := nul.MarshalJSON()
+		require.NoError(t, err)
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), redactedNulJSON, &staleNul)
+		require.NoError(t, err)
+		require.False(t, written, "a redacted NUL-bearing row must not be rewritten")
+
 		// A non-redaction rewrite after the repair read must not be overwritten.
 		changed := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "changed"})
 		_, err = db.WriteEvent(ctx, changed, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)

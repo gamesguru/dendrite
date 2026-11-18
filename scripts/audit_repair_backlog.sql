@@ -31,28 +31,18 @@
 
 \echo ''
 \echo '=== 1a. hidden output rows: repair candidates vs intentionally hidden ==='
--- Top-level state_key is detected in the text, not through JSON/JSONB: both
--- PostgreSQL JSON types reject \u0000 and lone-surrogate escapes that valid
--- event content may contain. Canonical JSON sorts keys, so top-level
--- sender/signatures precede state_key, which immediately precedes type;
--- content is before sender and unsigned after type, so neither can match.
+-- PostgreSQL rejects escaped NULs and lone surrogates in JSON, so sanitize
+-- those escapes before parsing. JSON extraction checks state_key only at the
+-- top level and cannot be confused by nested fields with the same name.
 WITH live_start AS (
   SELECT t.room_id, min(t.topological_position) AS live_start
   FROM syncapi_output_room_events_topology t
   JOIN syncapi_output_room_events e ON e.event_id = t.event_id
-  CROSS JOIN LATERAL (
-    SELECT right(
-             e.headered_event_json,
-             LEAST(
-               NULLIF(strpos(reverse(e.headered_event_json), reverse('"signatures":')), 0),
-               NULLIF(strpos(reverse(e.headered_event_json), reverse('"sender":')), 0)
-             )
-           ) AS suffix
-  ) sk
   WHERE e.exclude_from_sync = FALSE
     AND e.type <> 'm.room.create'
-    AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
-        ~ '"state_key":"([^"\\]|\\.)*",$'
+    AND CASE WHEN e.headered_event_json LIKE '%\\u%'
+             THEN regexp_replace(e.headered_event_json, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
+             ELSE e.headered_event_json END::json -> 'state_key' IS NOT NULL
   GROUP BY t.room_id
 ), hidden AS (
   SELECT o.id, o.room_id, o.event_id, o.type, t.topological_position, l.live_start,
@@ -82,19 +72,11 @@ WITH live_start AS (
   SELECT t.room_id, min(t.topological_position) AS live_start
   FROM syncapi_output_room_events_topology t
   JOIN syncapi_output_room_events e ON e.event_id = t.event_id
-  CROSS JOIN LATERAL (
-    SELECT right(
-             e.headered_event_json,
-             LEAST(
-               NULLIF(strpos(reverse(e.headered_event_json), reverse('"signatures":')), 0),
-               NULLIF(strpos(reverse(e.headered_event_json), reverse('"sender":')), 0)
-             )
-           ) AS suffix
-  ) sk
   WHERE e.exclude_from_sync = FALSE
     AND e.type <> 'm.room.create'
-    AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
-        ~ '"state_key":"([^"\\]|\\.)*",$'
+    AND CASE WHEN e.headered_event_json LIKE '%\\u%'
+             THEN regexp_replace(e.headered_event_json, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
+             ELSE e.headered_event_json END::json -> 'state_key' IS NOT NULL
   GROUP BY t.room_id
 )
 SELECT o.room_id, o.type, count(*) AS wrongly_hidden, min(o.id) AS first_id, max(o.id) AS last_id
@@ -123,19 +105,11 @@ SELECT o.room_id, count(*) AS hidden_state_after_last_join,
        min(o.id) AS first_id, max(o.id) AS last_id
 FROM syncapi_output_room_events o
 JOIN last_join lj ON lj.room_id = o.room_id
-CROSS JOIN LATERAL (
-  SELECT right(
-           o.headered_event_json,
-           LEAST(
-             NULLIF(strpos(reverse(o.headered_event_json), reverse('"signatures":')), 0),
-             NULLIF(strpos(reverse(o.headered_event_json), reverse('"sender":')), 0)
-           )
-         ) AS suffix
-) sk
 WHERE o.exclude_from_sync = TRUE
   AND o.type <> 'm.room.member'
-  AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
-      ~ '"state_key":"([^"\\]|\\.)*",$'
+    AND CASE WHEN o.headered_event_json LIKE '%\\u%'
+             THEN regexp_replace(o.headered_event_json, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
+             ELSE o.headered_event_json END::json -> 'state_key' IS NOT NULL
   AND o.id > lj.join_id
 GROUP BY o.room_id
 ORDER BY hidden_state_after_last_join DESC;

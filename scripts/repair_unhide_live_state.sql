@@ -56,32 +56,18 @@ LOCK TABLE syncapi_output_room_events,
 -- are absent, so no candidate is produced: this schema cannot infer a live
 -- state boundary from messages alone.
 --
--- Top-level state_key is checked in the text, not with JSON or JSONB: both
--- PostgreSQL JSON types reject a \u0000 or lone-surrogate escape that valid
--- event content may contain, and one such event must not abort the repair.
--- Canonical event JSON sorts keys, so top-level sender/signatures precede
--- top-level state_key, which immediately precedes type; unsigned comes after
--- type. Anchor at the last sender/signatures, then require the key immediately
--- before the first type. Nested content is before sender, and unsigned is
--- after type, so neither can match. This mirrors the text check used for
--- unsigned.redacted_because.
+-- PostgreSQL rejects escaped NULs and lone surrogates in JSON, so sanitize
+-- those escapes before parsing. JSON extraction checks state_key only at the
+-- top level and cannot be confused by nested fields with the same name.
 CREATE TEMP TABLE zz_live_start ON COMMIT DROP AS
 SELECT t.room_id, min(t.topological_position) AS live_start
 FROM syncapi_output_room_events_topology t
 JOIN syncapi_output_room_events e ON e.event_id = t.event_id
-CROSS JOIN LATERAL (
-  SELECT right(
-           e.headered_event_json,
-           LEAST(
-             NULLIF(strpos(reverse(e.headered_event_json), reverse('"signatures":')), 0),
-             NULLIF(strpos(reverse(e.headered_event_json), reverse('"sender":')), 0)
-           )
-         ) AS suffix
-) sk
 WHERE e.exclude_from_sync = FALSE
   AND e.type <> 'm.room.create'
-  AND substring(sk.suffix FROM 1 FOR NULLIF(strpos(sk.suffix, '"type":'), 0) - 1)
-      ~ '"state_key":"([^"\\]|\\.)*",$'
+  AND CASE WHEN e.headered_event_json LIKE '%\\u%'
+           THEN regexp_replace(e.headered_event_json, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
+           ELSE e.headered_event_json END::json -> 'state_key' IS NOT NULL
 GROUP BY t.room_id;
 
 -- Every row the repair would change. Current state is required, so a row that
