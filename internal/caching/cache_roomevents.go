@@ -44,7 +44,4 @@ func (c Caches) InvalidateRoomServerEvent(eventNID types.EventNID) {
 		w.Wait()
 	}
 	c.RoomServerEvents.Unset(int64(eventNID))
-	if w, ok := c.RoomServerEvents.(interface{ Wait() }); ok {
-		w.Wait()
-	}
 }

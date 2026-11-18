@@ -629,7 +629,7 @@ type oldEventState = tables.EventStateReader
 // resolveOldEventStateKey translates pseudo-ID state keys before the old event
 // write. Classification itself runs inside WriteOldEvent's serialized txn.
 func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) error {
-	if ev.StateKey() == nil || ev.Type() != spec.MRoomMember || ev.Version() != gomatrixserverlib.RoomVersionPseudoIDs {
+	if ev.StateKey() == nil || ev.Version() != gomatrixserverlib.RoomVersionPseudoIDs {
 		return nil
 	}
 	if ev.StateKeyResolved == nil {
