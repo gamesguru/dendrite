@@ -202,6 +202,10 @@ type Database interface {
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
 		historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 	) (types.StreamPosition, error)
+	// WriteOldEvent classifies an old event inside the transaction that stores
+	// its stream and topology positions. The classifier runs again on retries.
+	WriteOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent, historyVisibility gomatrixserverlib.HistoryVisibility,
+		classifier tables.EventSyncClassifier, purgePrevEventIDs ...string) (types.StreamPosition, error)
 	// UpdateEventJSON replaces the serialized event for an event already in the
 	// sync timeline, for example when backfill discovers its redaction later.
 	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error

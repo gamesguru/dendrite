@@ -428,8 +428,42 @@ func (d *Database) WriteEvent(
 	transactionID *api.TransactionID, excludeFromSync bool,
 	historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 ) (pduPosition types.StreamPosition, returnErr error) {
+	return d.writeEvent(ctx, ev, addStateEvents, addStateEventIDs, removeStateEventIDs, transactionID,
+		excludeFromSync, historyVisibility, nil, purgePrevEventIDs...)
+}
+
+func (d *Database) WriteOldEvent(
+	ctx context.Context,
+	ev *rstypes.HeaderedEvent,
+	historyVisibility gomatrixserverlib.HistoryVisibility,
+	classifier tables.EventSyncClassifier,
+	purgePrevEventIDs ...string,
+) (types.StreamPosition, error) {
+	return d.writeEvent(ctx, ev, nil, nil, nil, nil, false, historyVisibility, classifier, purgePrevEventIDs...)
+}
+
+func (d *Database) writeEvent(
+	ctx context.Context,
+	ev *rstypes.HeaderedEvent,
+	addStateEvents []*rstypes.HeaderedEvent,
+	addStateEventIDs, removeStateEventIDs []string,
+	transactionID *api.TransactionID,
+	excludeFromSync bool,
+	historyVisibility gomatrixserverlib.HistoryVisibility,
+	classifier tables.EventSyncClassifier,
+	purgePrevEventIDs ...string,
+) (pduPosition types.StreamPosition, returnErr error) {
 	returnErr = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		var err error
+		if err = d.Topology.LockRoomTopology(ctx, txn, ev.RoomID().String()); err != nil {
+			return fmt.Errorf("d.Topology.LockRoomTopology: %w", err)
+		}
+		if classifier != nil {
+			state := &DatabaseTransaction{Database: d, ctx: ctx, txn: txn}
+			if excludeFromSync, err = classifier(ctx, state); err != nil {
+				return fmt.Errorf("%w: %s: %w", tables.ErrEventSyncClassification, ev.EventID(), err)
+			}
+		}
 		ev.Visibility = historyVisibility
 		pos, err := d.OutputEvents.InsertEvent(
 			ctx, txn, ev, addStateEventIDs, removeStateEventIDs, transactionID, excludeFromSync, historyVisibility,

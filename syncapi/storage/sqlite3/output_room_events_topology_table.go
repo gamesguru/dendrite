@@ -93,6 +93,12 @@ const selectFirstSyncedDepthAfterStreamPositionSQL = "" +
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
+// SQLite has no row-level FOR UPDATE. A no-op update on a stable room event
+// acquires the database write lock before classification reads topology.
+const lockRoomTopologySQL = "" +
+	"UPDATE syncapi_output_room_events SET id = id WHERE id = (" +
+	"SELECT id FROM syncapi_output_room_events WHERE room_id = $1 ORDER BY id LIMIT 1)"
+
 // The highest topological position among the given events that are already in
 // the room's topology, or -1 if none is.
 const selectMaxTopologyPositionSQL = "" +
@@ -122,6 +128,7 @@ const selectRoomEventTopologySQL = "" +
 
 type outputRoomEventsTopologyStatements struct {
 	db                                            *sql.DB
+	lockRoomTopologyStmt                          *sql.Stmt
 	insertEventInTopologyStmt                     *sql.Stmt
 	selectEventIDsInRangeASCStmt                  *sql.Stmt
 	selectEventIDsInRangeDESCStmt                 *sql.Stmt
@@ -147,6 +154,7 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		return nil, err
 	}
 	return s, sqlutil.StatementList{
+		{&s.lockRoomTopologyStmt, lockRoomTopologySQL},
 		{&s.insertEventInTopologyStmt, insertEventInTopologySQL},
 		{&s.selectEventIDsInRangeASCStmt, selectEventIDsInRangeASCSQL},
 		{&s.selectEventIDsInRangeDESCStmt, selectEventIDsInRangeDESCSQL},
@@ -162,6 +170,11 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.purgeEventsTopologyStmt, purgeEventsTopologySQL},
 		{&s.deleteEventFromTopologyStmt, deleteEventFromTopologySQL},
 	}.Prepare(db)
+}
+
+func (s *outputRoomEventsTopologyStatements) LockRoomTopology(ctx context.Context, txn *sql.Tx, roomID string) error {
+	_, err := sqlutil.TxStmt(txn, s.lockRoomTopologyStmt).ExecContext(ctx, roomID)
+	return err
 }
 
 func (s *outputRoomEventsTopologyStatements) UpdateEventPosition(

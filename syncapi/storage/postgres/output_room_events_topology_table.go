@@ -98,6 +98,9 @@ const selectFirstSyncedDepthAfterStreamPositionSQL = "" +
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
+const lockRoomTopologySQL = "" +
+	"SELECT pg_advisory_xact_lock(hashtext($1))"
+
 // The highest topological position among the given events that are already in
 // the room's topology, or -1 if none is.
 const selectMaxTopologyPositionSQL = "" +
@@ -131,6 +134,7 @@ const selectRoomEventTopologySQL = "" +
 	" WHERE t.room_id = $1 AND t.topological_position >= $2 ORDER BY t.stream_position, t.event_id"
 
 type outputRoomEventsTopologyStatements struct {
+	lockRoomTopologyStmt                          *sql.Stmt
 	insertEventInTopologyStmt                     *sql.Stmt
 	selectEventIDsInRangeASCStmt                  *sql.Stmt
 	selectEventIDsInRangeDESCStmt                 *sql.Stmt
@@ -156,6 +160,7 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		return nil, err
 	}
 	return s, sqlutil.StatementList{
+		{&s.lockRoomTopologyStmt, lockRoomTopologySQL},
 		{&s.insertEventInTopologyStmt, insertEventInTopologySQL},
 		{&s.selectEventIDsInRangeASCStmt, selectEventIDsInRangeASCSQL},
 		{&s.selectEventIDsInRangeDESCStmt, selectEventIDsInRangeDESCSQL},
@@ -173,6 +178,11 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.updateEventPositionStmt, updateEventPositionSQL},
 		{&s.selectRoomEventTopologyStmt, selectRoomEventTopologySQL},
 	}.Prepare(db)
+}
+
+func (s *outputRoomEventsTopologyStatements) LockRoomTopology(ctx context.Context, txn *sql.Tx, roomID string) error {
+	_, err := sqlutil.TxStmt(txn, s.lockRoomTopologyStmt).ExecContext(ctx, roomID)
+	return err
 }
 
 func (s *outputRoomEventsTopologyStatements) UpdateEventPosition(

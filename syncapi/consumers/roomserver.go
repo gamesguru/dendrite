@@ -33,6 +33,7 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/notifier"
 	"codefloe.com/pat-s/zendrite/syncapi/producers"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/streams"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
@@ -543,11 +544,11 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// must not stop the event being stored.
 	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
-	excludeFromSync, err := s.excludeOldEvent(ctx, ev)
-	if err != nil {
-		// Return before WriteEvent. onMessage will NAK this output-log message,
-		// allowing the state classification to be retried with fresh DB state.
-		return fmt.Errorf("classify old event %s for sync: %w", ev.EventID(), err)
+	if err := s.resolveOldEventStateKey(ctx, ev); err != nil {
+		return fmt.Errorf("resolve old event %s state key: %w", ev.EventID(), err)
+	}
+	classifier := func(ctx context.Context, state tables.EventStateReader) (bool, error) {
+		return excludeOldEventFromSync(ctx, state, ev)
 	}
 	var pduPos types.StreamPosition
 	// Retried in place, as for new events.
@@ -556,7 +557,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 		if err != nil {
 			return err
 		}
-		pduPos, err = s.db.WriteEvent(ctx, ev, []*rstypes.HeaderedEvent{}, []string{}, []string{}, nil, excludeFromSync, msg.HistoryVisibility, noBackfill...)
+		pduPos, err = s.db.WriteOldEvent(ctx, ev, msg.HistoryVisibility, classifier, noBackfill...)
 		return err
 	})
 	if err != nil {
@@ -573,6 +574,11 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 			// Nothing was written, so redelivery recalculates the prev events
 			// to purge instead of leaving a false marker behind.
 			log.WithField("event_id", ev.EventID()).WithError(err).Warn("Failed to look up the prev events of the event, returning it for redelivery")
+			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
+		}
+		if errors.Is(err, tables.ErrEventSyncClassification) {
+			// The transaction rolled back, so redelivery classifies again
+			// against a fresh topology instead of guessing an exclusion.
 			return fmt.Errorf("write old event %s: %w", ev.EventID(), err)
 		}
 		// panic rather than continue with an inconsistent database
@@ -618,24 +624,13 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	return nil
 }
 
-// oldEventState is the part of the sync API's store that
-// excludeOldEventFromSync reads.
-type oldEventState interface {
-	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
-	// RoomLiveStartPosition is the first delivered non-create state event's
-	// topological position. ok is false when the room has none yet.
-	RoomLiveStartPosition(ctx context.Context, roomID string) (pos types.StreamPosition, ok bool, err error)
-	// ProspectiveEventPosition is the position InsertEventInTopology would
-	// assign, using the stored positions of the event's prev events.
-	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (pos types.StreamPosition, err error)
-}
+type oldEventState = tables.EventStateReader
 
-// excludeOldEvent decides whether an old event stays out of the sync timeline.
-// Only a state event needs the store, so the snapshot is opened for those
-// alone. A failed lookup is returned so the consumer can retry/redeliver it.
-func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent) (bool, error) {
+// resolveOldEventStateKey translates pseudo-ID state keys before the old event
+// write. Classification itself runs inside WriteOldEvent's serialized txn.
+func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) error {
 	if ev.StateKey() == nil {
-		return excludeOldEventFromSync(ctx, nil, ev)
+		return nil
 	}
 	if ev.StateKeyResolved == nil {
 		stateKey := *ev.StateKey()
@@ -654,12 +649,7 @@ func (s *OutputRoomEventConsumer) excludeOldEvent(ctx context.Context, ev *rstyp
 			}
 		}
 	}
-	snapshot, err := s.db.NewDatabaseSnapshot(ctx)
-	if err != nil {
-		return false, fmt.Errorf("open snapshot to classify old state event %s: %w", ev.EventID(), err)
-	}
-	defer snapshot.Rollback() //nolint:errcheck
-	return excludeOldEventFromSync(ctx, snapshot, ev)
+	return nil
 }
 
 // excludeOldEventFromSync reports whether an old event must stay out of the

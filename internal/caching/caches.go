@@ -7,6 +7,8 @@
 package caching
 
 import (
+	"sync"
+
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 
@@ -18,6 +20,7 @@ import (
 // interface.
 type Caches struct {
 	close                   func()
+	roomServerEventCacheMu  *sync.RWMutex
 	RoomVersions            Cache[string, gomatrixserverlib.RoomVersion]           // room ID -> room version
 	ServerKeys              Cache[string, gomatrixserverlib.PublicKeyLookupResult] // server name -> server keys
 	RoomServerRoomNIDs      Cache[string, types.RoomNID]                           // room ID -> room NID

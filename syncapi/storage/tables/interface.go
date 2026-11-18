@@ -9,6 +9,7 @@ package tables
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -96,7 +97,25 @@ type Events interface {
 
 // Topology keeps track of the depths and stream positions for all events.
 // These positions are used as types.TopologyToken when backfilling events locally.
+type EventStateReader interface {
+	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	RoomLiveStartPosition(ctx context.Context, roomID string) (pos types.StreamPosition, ok bool, err error)
+	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (pos types.StreamPosition, err error)
+}
+
+// EventSyncClassifier decides whether an old event should be excluded from
+// incremental sync using the state and topology view held by its write txn.
+type EventSyncClassifier func(ctx context.Context, state EventStateReader) (exclude bool, err error)
+
+// ErrEventSyncClassification marks a classification failure while writing an
+// old event. The write is rolled back and the output message must be
+// redelivered rather than stored with a guessed classification.
+var ErrEventSyncClassification = errors.New("classify old event for sync")
+
 type Topology interface {
+	// LockRoomTopology serializes writes that classify events against a room's
+	// topology and then insert into it.
+	LockRoomTopology(ctx context.Context, txn *sql.Tx, roomID string) error
 	// ProspectiveEventPosition returns the topological position that
 	// InsertEventInTopology would assign based on currently stored prev events.
 	ProspectiveEventPosition(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent) (types.StreamPosition, error)

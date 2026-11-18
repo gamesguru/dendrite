@@ -3,6 +3,7 @@ package shared_test
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -36,6 +37,64 @@ func newSyncDB(t *testing.T, dbType test.DBType) (storage.Database, func()) {
 	}
 
 	return syncDB, closeDB
+}
+
+func TestWriteOldEventClassifiesInWriteTransactionAndRetriesClassification(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, cleanup := newSyncDB(t, dbType)
+		defer cleanup()
+		ctx := t.Context()
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		initial := room.CreateEvent(t, alice, spec.MRoomTopic, map[string]string{"topic": "initial"}, test.WithStateKey(""))
+		_, err := db.WriteEvent(ctx, initial, []*rstypes.HeaderedEvent{initial}, []string{initial.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		oldEvent := room.CreateEvent(t, alice, spec.MRoomTopic, map[string]string{"topic": "old"}, test.WithStateKey(""))
+		classifications := 0
+		var expectedExclude bool
+		classifier := func(ctx context.Context, state tables.EventStateReader) (bool, error) {
+			classifications++
+			if classifications == 1 {
+				return false, driver.ErrBadConn
+			}
+			liveStart, ok, err := state.RoomLiveStartPosition(ctx, room.ID)
+			if err != nil {
+				return false, err
+			}
+			require.True(t, ok)
+			prospective, err := state.ProspectiveEventPosition(ctx, oldEvent)
+			if err != nil {
+				return false, err
+			}
+			current, err := state.GetStateEvent(ctx, room.ID, spec.MRoomTopic, "")
+			if err != nil {
+				return false, err
+			}
+			require.Equal(t, initial.EventID(), current.EventID())
+			require.GreaterOrEqual(t, prospective, liveStart)
+			expectedExclude = prospective < liveStart || current.Depth() >= oldEvent.Depth()
+			return expectedExclude, nil
+		}
+		err = sqlutil.RetryTransient(ctx, "test old-event write", func() error {
+			_, err := db.WriteOldEvent(ctx, oldEvent, gomatrixserverlib.HistoryVisibilityShared, classifier)
+			return err
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, classifications, "a retry must rerun classification in its new write transaction")
+
+		tx, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback() //nolint:errcheck
+		storedDepth, _, err := tx.Topology.SelectPositionInTopology(ctx, nil, oldEvent.EventID())
+		require.NoError(t, err)
+		var storedExclude bool
+		require.NoError(t, tx.DB.QueryRowContext(ctx, "SELECT exclude_from_sync FROM syncapi_output_room_events WHERE event_id = $1", oldEvent.EventID()).Scan(&storedExclude))
+		require.Equal(t, expectedExclude, storedExclude)
+		prospective, err := tx.Topology.ProspectiveEventPosition(ctx, nil, oldEvent)
+		require.NoError(t, err)
+		require.Equal(t, prospective, storedDepth)
+	})
 }
 
 func TestReplaceEventJSONPreservesLocalUnsignedAndCurrentStateGuard(t *testing.T) {

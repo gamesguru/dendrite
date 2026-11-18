@@ -94,11 +94,19 @@ ORDER BY wrongly_hidden DESC;
 \echo '=== 1c. hidden state rows after each room''s latest join, by room ==='
 -- These are the ones a gap-fill/resync could have created. Not proof; the
 -- stream ids and the room's membership history decide, so review per room.
+-- Count join rows whose JSONB cast is unsafe separately; never normalize the
+-- content before comparison, since escaped NUL and U+FFFD are distinct.
+SELECT count(*) AS join_events_needing_jsonb_verification
+FROM syncapi_output_room_events
+WHERE type = 'm.room.member'
+  AND headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})';
 WITH last_join AS (
   SELECT room_id, max(id) AS join_id
   FROM syncapi_output_room_events
   WHERE type = 'm.room.member'
-    AND headered_event_json::jsonb #>> '{content,membership}' = 'join'
+    AND CASE WHEN headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+             THEN NULL
+             ELSE headered_event_json::jsonb #>> '{content,membership}' END = 'join'
   GROUP BY room_id
 )
 SELECT o.room_id, count(*) AS hidden_state_after_last_join,
@@ -120,25 +128,41 @@ ORDER BY hidden_state_after_last_join DESC;
 -- content-hash check, but an event can legitimately have empty content. These
 -- rows have no richer local copy to repair from, so they are counted
 -- separately and verified in 2e before they can become refetch requests.
-WITH cmp AS (
-  SELECT o.event_id,
-         (j.event_json::jsonb -> 'content') AS rs_content,
-         (o.headered_event_json::jsonb -> 'content') AS sync_content,
-         j.event_json::jsonb #> '{unsigned,redacted_because}' AS rs_rb,
-         o.headered_event_json::jsonb #> '{unsigned,redacted_because}' AS sync_rb
+WITH raw AS (
+  SELECT o.event_id, j.event_json AS rs_json, o.headered_event_json AS sync_json
   FROM syncapi_output_room_events o
   JOIN roomserver_events e ON e.event_id = o.event_id
   JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+), parsed AS (
+  SELECT *,
+         rs_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' AS rs_unrepresentable,
+         sync_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' AS sync_unrepresentable,
+         CASE WHEN rs_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+              THEN NULL ELSE rs_json::jsonb END AS rs_doc,
+         CASE WHEN sync_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+              THEN NULL ELSE sync_json::jsonb END AS sync_doc
+  FROM raw
+), cmp AS (
+  SELECT event_id, rs_unrepresentable, sync_unrepresentable,
+         rs_doc -> 'content' AS rs_content,
+         sync_doc -> 'content' AS sync_content,
+         rs_doc #> '{unsigned,redacted_because}' AS rs_rb,
+         sync_doc #> '{unsigned,redacted_because}' AS sync_rb
+  FROM parsed
 )
 SELECT count(*) FILTER (
          WHERE rs_rb IS NULL AND sync_rb IS NULL
            AND rs_content IS DISTINCT FROM sync_content
            AND sync_content @> rs_content
+           AND NOT COALESCE(jsonb_path_exists(rs_content, 'strict $.** ? (@.type() == "array")'), FALSE)
+           AND NOT COALESCE(jsonb_path_exists(sync_content, 'strict $.** ? (@.type() == "array")'), FALSE)
        ) AS locally_repairable,
        count(*) FILTER (
          WHERE rs_rb IS NULL AND sync_rb IS NULL
            AND rs_content IS DISTINCT FROM sync_content
-           AND NOT (sync_content @> rs_content)
+           AND (NOT (sync_content @> rs_content)
+             OR COALESCE(jsonb_path_exists(rs_content, 'strict $.** ? (@.type() == "array")'), FALSE)
+             OR COALESCE(jsonb_path_exists(sync_content, 'strict $.** ? (@.type() == "array")'), FALSE))
        ) AS needs_review,
        count(*) FILTER (
          WHERE rs_rb IS NULL AND sync_rb IS NULL
@@ -149,7 +173,8 @@ SELECT count(*) FILTER (
        count(*) FILTER (
          WHERE (rs_rb IS NOT NULL OR sync_rb IS NOT NULL)
            AND rs_content IS DISTINCT FROM sync_content
-       ) AS genuine_redaction_mismatch
+       ) AS genuine_redaction_mismatch,
+       count(*) FILTER (WHERE rs_unrepresentable OR sync_unrepresentable) AS jsonb_unrepresentable_needs_verification
 FROM cmp;
 
 \echo ''
@@ -157,66 +182,103 @@ FROM cmp;
 -- Only rows where the sync copy is strictly richer than the roomserver copy.
 -- Rows where both sides are empty have no richer local copy; they are counted
 -- as empty_content_needs_verification in 2a and listed for verification in 2e.
-SELECT o.type, count(*) AS locally_repairable
-FROM syncapi_output_room_events o
-JOIN roomserver_events e ON e.event_id = o.event_id
-JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
-  AND (o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content')
-GROUP BY o.type
+WITH parsed AS (
+  SELECT o.type,
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+)
+SELECT type, count(*) AS locally_repairable
+FROM parsed
+WHERE rs_doc IS NOT NULL AND sync_doc IS NOT NULL
+  AND rs_doc #> '{unsigned,redacted_because}' IS NULL
+  AND sync_doc #> '{unsigned,redacted_because}' IS NULL
+  AND (rs_doc -> 'content') IS DISTINCT FROM (sync_doc -> 'content')
+  AND (sync_doc -> 'content') @> (rs_doc -> 'content')
+  AND NOT COALESCE(jsonb_path_exists(rs_doc -> 'content', 'strict $.** ? (@.type() == "array")'), FALSE)
+  AND NOT COALESCE(jsonb_path_exists(sync_doc -> 'content', 'strict $.** ? (@.type() == "array")'), FALSE)
+GROUP BY type
 ORDER BY locally_repairable DESC;
 
 \echo ''
 \echo '=== 2c. same, for current state (these change what /state returns) ==='
-SELECT s.type, count(*) AS locally_repairable_current_state
+SELECT count(*) AS current_state_jsonb_unrepresentable_needs_verification
 FROM syncapi_current_room_state s
 JOIN roomserver_events e ON e.event_id = s.event_id
 JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND s.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND (j.event_json::jsonb -> 'content') IS DISTINCT FROM (s.headered_event_json::jsonb -> 'content')
-  AND (s.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content')
-GROUP BY s.type
+WHERE j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})'
+   OR s.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})';
+WITH parsed AS (
+  SELECT s.type,
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN s.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE s.headered_event_json::jsonb END AS sync_doc
+  FROM syncapi_current_room_state s
+  JOIN roomserver_events e ON e.event_id = s.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+)
+SELECT type, count(*) AS locally_repairable_current_state
+FROM parsed
+WHERE rs_doc IS NOT NULL AND sync_doc IS NOT NULL
+  AND rs_doc #> '{unsigned,redacted_because}' IS NULL
+  AND sync_doc #> '{unsigned,redacted_because}' IS NULL
+  AND (rs_doc -> 'content') IS DISTINCT FROM (sync_doc -> 'content')
+  AND (sync_doc -> 'content') @> (rs_doc -> 'content')
+  AND NOT COALESCE(jsonb_path_exists(rs_doc -> 'content', 'strict $.** ? (@.type() == "array")'), FALSE)
+  AND NOT COALESCE(jsonb_path_exists(sync_doc -> 'content', 'strict $.** ? (@.type() == "array")'), FALSE)
+GROUP BY type
 ORDER BY locally_repairable_current_state DESC;
 
 \echo ''
 \echo '=== 2d. per-room totals for the backlog (output rows) ==='
-SELECT o.room_id, count(*) AS affected_output_rows
-FROM syncapi_output_room_events o
-JOIN roomserver_events e ON e.event_id = o.event_id
-JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-WHERE o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-  AND (
-    ((j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content'))
-    OR (jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
-      AND (j.event_json::jsonb -> 'content') = '{}'::jsonb)
-  )
-GROUP BY o.room_id
+WITH parsed AS (
+  SELECT o.room_id,
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+)
+SELECT room_id, count(*) AS affected_output_rows
+FROM parsed
+WHERE rs_doc IS NOT NULL AND sync_doc IS NOT NULL
+  AND sync_doc #> '{unsigned,redacted_because}' IS NULL
+  AND rs_doc #> '{unsigned,redacted_because}' IS NULL
+  AND ((rs_doc -> 'content') IS DISTINCT FROM (sync_doc -> 'content')
+    OR (jsonb_typeof(rs_doc -> 'content') = 'object' AND (rs_doc -> 'content') = '{}'::jsonb))
+GROUP BY room_id
 ORDER BY affected_output_rows DESC;
 
 \echo ''
 \echo '=== 2e. empty-content copies: verification requests (dry run) ==='
 -- These are the matching empty-content copies from 2a. SQL cannot recompute
 -- the content hash, so this batch only asks the roomserver to run its
--- stored-copy check. Results of already_full are not pruned and must not be
--- sent again; only would_refetch/refetched results are confirmed hash-pruned
--- and may be repeated with dry_run false.
-WITH candidates AS (
+-- stored-copy check. already_full is not pruned and must not be sent again.
+-- Treat would_refetched and refetched as successful hash-pruned results;
+-- would_refetched_signature_unverified and refetched_signature_unverified
+-- also passed the content-hash check, but carry a signature warning. Preserve
+-- these statuses as returned, and include both successful statuses when
+-- filtering candidates for a later dry_run=false request.
+WITH parsed AS (
+  SELECT o.id, o.room_id, o.event_id, o.headered_event_json,
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+), candidates AS (
   SELECT o.id,
          o.room_id,
          o.event_id,
          row_number() OVER (ORDER BY o.id) - 1 AS n
-  FROM syncapi_output_room_events o
-  JOIN roomserver_events e ON e.event_id = o.event_id
-  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-  WHERE o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-    AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-    AND jsonb_typeof(j.event_json::jsonb -> 'content') = 'object'
-    AND (j.event_json::jsonb -> 'content') = '{}'::jsonb
-    AND (o.headered_event_json::jsonb -> 'content') = '{}'::jsonb
+  FROM parsed o
+  WHERE o.rs_doc IS NOT NULL AND o.sync_doc IS NOT NULL
+    AND o.sync_doc #> '{unsigned,redacted_because}' IS NULL
+    AND o.rs_doc #> '{unsigned,redacted_because}' IS NULL
+    AND jsonb_typeof(o.rs_doc -> 'content') = 'object'
+    AND (o.rs_doc -> 'content') = '{}'::jsonb
+    AND (o.sync_doc -> 'content') = '{}'::jsonb
 )
 SELECT (n / 100) + 1 AS batch_number,
        jsonb_build_object(
@@ -228,24 +290,58 @@ GROUP BY n / 100
 ORDER BY batch_number;
 
 \echo ''
-\echo '=== 2f. event IDs for POST /_zendrite/admin/refetchPruned (batches of 100) ==='
--- Each result is a complete request body and has at most 100 event objects.
--- Locally repairable rows are excluded: sync content already contains the
--- roomserver content, so these do not need a federation refetch. Empty-content
--- copies are excluded here too; 2e must confirm they are hash-pruned first.
-WITH candidates AS (
+\echo '=== 2f. verified local Sync API content repairs, by type ==='
+-- A full m.room.message copy in roomserver passed the content-hash check.
+-- If Sync has empty content, report a local Sync API repair rather than a
+-- federation refetch.
+WITH parsed AS (
+  SELECT o.type,
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+)
+SELECT type, count(*) AS sync_api_repair_cases
+FROM parsed
+WHERE rs_doc IS NOT NULL AND sync_doc IS NOT NULL
+  AND type = 'm.room.message'
+  AND jsonb_typeof(rs_doc -> 'content') = 'object'
+  AND rs_doc -> 'content' <> '{}'::jsonb
+  AND jsonb_typeof(sync_doc -> 'content') = 'object'
+  AND sync_doc -> 'content' = '{}'::jsonb
+  AND sync_doc #> '{unsigned,redacted_because}' IS NULL
+  AND rs_doc #> '{unsigned,redacted_because}' IS NULL
+GROUP BY type
+ORDER BY sync_api_repair_cases DESC;
+
+\echo ''
+\echo '=== 2g. event IDs for POST /_zendrite/admin/refetchPruned (batches of 100) ==='
+-- Refetch candidates are limited to cases where roomserver content itself is
+-- empty, Sync has content, and Sync content does not contain the roomserver
+-- copy. A Sync object contains the empty object, so that copy is locally
+-- repairable and is listed by 2b instead; only non-object Sync content that
+-- cannot supply an object repair reaches this list. Empty on both sides is
+-- sent through 2e's verification flow first.
+WITH parsed AS (
+  SELECT o.id, o.room_id, o.event_id,
+         CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
+         CASE WHEN o.headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE o.headered_event_json::jsonb END AS sync_doc
+  FROM syncapi_output_room_events o
+  JOIN roomserver_events e ON e.event_id = o.event_id
+  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
+), candidates AS (
   SELECT o.id,
          o.room_id,
          o.event_id,
          row_number() OVER (ORDER BY o.id) - 1 AS n
-  FROM syncapi_output_room_events o
-  JOIN roomserver_events e ON e.event_id = o.event_id
-  JOIN roomserver_event_json j ON j.event_nid = e.event_nid
-  WHERE (j.event_json::jsonb -> 'content') IS DISTINCT FROM (o.headered_event_json::jsonb -> 'content')
-    AND NOT ((o.headered_event_json::jsonb -> 'content') @> (j.event_json::jsonb -> 'content'))
-    AND (j.event_json::jsonb -> 'content') IS DISTINCT FROM '{}'::jsonb
-    AND o.headered_event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
-    AND j.event_json::jsonb #> '{unsigned,redacted_because}' IS NULL
+  FROM parsed o
+  WHERE o.rs_doc IS NOT NULL AND o.sync_doc IS NOT NULL
+    AND jsonb_typeof(o.rs_doc -> 'content') = 'object'
+    AND o.rs_doc -> 'content' = '{}'::jsonb
+    AND NOT COALESCE((o.sync_doc -> 'content') @> (o.rs_doc -> 'content'), FALSE)
+    AND o.sync_doc #> '{unsigned,redacted_because}' IS NULL
+    AND o.rs_doc #> '{unsigned,redacted_because}' IS NULL
 )
 SELECT (n / 100) + 1 AS batch_number,
        jsonb_build_object(

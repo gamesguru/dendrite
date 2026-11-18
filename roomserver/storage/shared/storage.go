@@ -702,6 +702,10 @@ func (d *EventDatabase) events(
 		}
 		return results, nil
 	}
+	if txn == nil {
+		unlockEventCache := d.Cache.LockRoomServerEventCacheRead()
+		defer unlockEventCache()
+	}
 	eventJSONs, err := d.EventJSONTable.BulkSelectEventJSON(ctx, txn, eventNIDs)
 	if err != nil {
 		return nil, err
@@ -724,7 +728,7 @@ func (d *EventDatabase) events(
 		if err != nil {
 			return nil, err
 		}
-		if event := events[eventJSON.EventNID]; event != nil {
+		if event := events[eventJSON.EventNID]; event != nil && txn == nil {
 			d.Cache.StoreRoomServerEvent(eventJSON.EventNID, &types.HeaderedEvent{PDU: event})
 		}
 	}

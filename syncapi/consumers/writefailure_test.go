@@ -18,7 +18,7 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
-	"codefloe.com/pat-s/zendrite/syncapi/storage/shared"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
 )
@@ -36,15 +36,11 @@ type classificationFailureDatabase struct {
 	err        error
 }
 
-func (d classificationFailureDatabase) NewDatabaseSnapshot(context.Context) (*shared.DatabaseTransaction, error) {
-	return nil, d.err
-}
-
-func (d classificationFailureDatabase) WriteEvent(context.Context, *rstypes.HeaderedEvent, []*rstypes.HeaderedEvent, []string, []string, *api.TransactionID, bool, gomatrixserverlib.HistoryVisibility, ...string) (types.StreamPosition, error) {
+func (d classificationFailureDatabase) WriteOldEvent(context.Context, *rstypes.HeaderedEvent, gomatrixserverlib.HistoryVisibility, tables.EventSyncClassifier, ...string) (types.StreamPosition, error) {
 	if d.writeCalls != nil {
 		d.writeCalls.Add(1)
 	}
-	return 0, nil
+	return 0, fmt.Errorf("%w: %v", tables.ErrEventSyncClassification, d.err)
 }
 
 // errDatabaseUnavailable is transient: the connection failed, not the write.
@@ -124,7 +120,7 @@ func TestOldEventClassificationFailureIsRedelivered(t *testing.T) {
 	}
 	msg := &nats.Msg{Subject: "OutputRoomEvent", Data: data}
 	require.False(t, s.onMessage(t.Context(), []*nats.Msg{msg}), "classification failure must NAK the message")
-	require.Zero(t, writeCalls.Load(), "WriteEvent must not run with a guessed classification")
+	require.Positive(t, writeCalls.Load(), "the write path must report the classification failure")
 }
 
 // TestReceiptWriteFailureIsRedelivered checks that a receipt the database

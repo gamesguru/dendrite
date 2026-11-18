@@ -9,6 +9,7 @@ package caching
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -72,7 +73,8 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 		})
 	}
 	return &Caches{
-		close: cache.Close,
+		close:                  cache.Close,
+		roomServerEventCacheMu: &sync.RWMutex{},
 		RoomVersions: &RistrettoCachePartition[string, gomatrixserverlib.RoomVersion]{ // room ID -> room version
 			cache:  cache,
 			Prefix: roomVersionsCache,
