@@ -3,6 +3,7 @@ package caching
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
@@ -30,14 +31,17 @@ func TestRoomServerEventCacheRejectsStaleFill(t *testing.T) {
 		RoomServerEvents:       &roomEventTestCache{entries: make(map[int64]*types.HeaderedEvent)},
 		roomServerEventCacheMu: &sync.RWMutex{},
 	}
-
 	unlock := cache.LockRoomServerEventCacheRead()
 	cache.StoreRoomServerEvent(eventNID, &types.HeaderedEvent{})
 	invalidated := make(chan struct{})
+	started := make(chan struct{})
 	go func() {
+		close(started)
 		cache.InvalidateRoomServerEvent(eventNID)
 		close(invalidated)
 	}()
+	<-started
+	time.Sleep(50 * time.Millisecond)
 	select {
 	case <-invalidated:
 		t.Fatal("invalidation did not wait for the in-flight cache fill")

@@ -188,6 +188,18 @@ func TestClearPartialStateMarksStoredSnapshotsIncomplete(t *testing.T) {
 	})
 }
 
+func TestClearPartialStateForMissingRoomIsNoop(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		streamID, err := db.ClearRoomPartialState(ctx, 42)
+		assert.NoError(t, err)
+		assert.Zero(t, streamID)
+	})
+}
+
 func Test_GetUsersSharingRoomWithLocal(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {

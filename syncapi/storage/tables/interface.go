@@ -95,8 +95,7 @@ type Events interface {
 	SelectMaxStreamPositionsForRooms(ctx context.Context, txn *sql.Tx, roomIDs []string) (map[string]types.StreamPosition, error)
 }
 
-// Topology keeps track of the depths and stream positions for all events.
-// These positions are used as types.TopologyToken when backfilling events locally.
+// EventStateReader provides state and topology reads for old-event classification.
 type EventStateReader interface {
 	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
 	RoomLiveStartPosition(ctx context.Context, roomID string) (pos types.StreamPosition, ok bool, err error)
@@ -112,6 +111,8 @@ type EventSyncClassifier func(ctx context.Context, state EventStateReader) (excl
 // redelivered rather than stored with a guessed classification.
 var ErrEventSyncClassification = errors.New("classify old event for sync")
 
+// Topology keeps track of the depths and stream positions for all events.
+// These positions are used as types.TopologyToken when backfilling events locally.
 type Topology interface {
 	// LockRoomTopology serializes writes that classify events against a room's
 	// topology and then insert into it.

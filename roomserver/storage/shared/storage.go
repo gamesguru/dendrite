@@ -1366,14 +1366,15 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("d.AnnotationsTable.DeleteAnnotation: %w", err)
 		}
 
-		// We remove the entry from the cache, as if we just "StoreRoomServerEvent", we can't be
-		// certain that the cached entry actually is updated, since ristretto is eventual-persistent.
-		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
-
 		return nil
 	})
 	if wErr != nil {
 		return nil, nil, wErr
+	}
+	if redactedEvent != nil {
+		// Invalidate after commit. This takes the cache write lock, waits for any
+		// pre-commit fill to finish, then removes it before later reads proceed.
+		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
 	}
 	if ignoreRedaction || redactionEvent == nil || redactedEvent == nil {
 		return nil, nil, nil
@@ -2862,6 +2863,14 @@ func (d *Database) lockRoomByNID(ctx context.Context, txn *sql.Tx, roomNID types
 	return nil
 }
 
+func (d *Database) roomExists(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error) {
+	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{roomNID})
+	if err != nil {
+		return false, err
+	}
+	return len(roomIDs) > 0, nil
+}
+
 // GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
 // we did, as opposed to those listed in the state we joined with, and all the users
 // currently joined to it.
@@ -2901,6 +2910,9 @@ func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.Room
 	var deviceListStreamID int64
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		if err := d.lockRoomByNID(ctx, txn, roomNID); err != nil {
+			if exists, checkErr := d.roomExists(ctx, txn, roomNID); checkErr == nil && !exists {
+				return nil
+			}
 			return err
 		}
 		var err error

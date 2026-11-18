@@ -94,9 +94,9 @@ ORDER BY wrongly_hidden DESC;
 \echo '=== 1c. hidden state rows after each room''s latest join, by room ==='
 -- These are the ones a gap-fill/resync could have created. Not proof; the
 -- stream ids and the room's membership history decide, so review per room.
--- Count join rows whose JSONB cast is unsafe separately; never normalize the
--- content before comparison, since escaped NUL and U+FFFD are distinct.
-SELECT count(*) AS join_events_needing_jsonb_verification
+-- Count membership rows whose JSONB cast is unsafe separately; their
+-- membership is unknown. Never normalize escaped NUL or U+FFFD.
+SELECT count(*) AS membership_events_needing_jsonb_verification
 FROM syncapi_output_room_events
 WHERE type = 'm.room.member'
   AND headered_event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})';
@@ -291,9 +291,8 @@ ORDER BY batch_number;
 
 \echo ''
 \echo '=== 2f. verified local Sync API content repairs, by type ==='
--- A full m.room.message copy in roomserver passed the content-hash check.
--- If Sync has empty content, report a local Sync API repair rather than a
--- federation refetch.
+-- A full roomserver copy passed the content-hash check. If Sync has empty
+-- content, report a local Sync API repair rather than a federation refetch.
 WITH parsed AS (
   SELECT o.type,
          CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,
@@ -305,7 +304,6 @@ WITH parsed AS (
 SELECT type, count(*) AS sync_api_repair_cases
 FROM parsed
 WHERE rs_doc IS NOT NULL AND sync_doc IS NOT NULL
-  AND type = 'm.room.message'
   AND jsonb_typeof(rs_doc -> 'content') = 'object'
   AND rs_doc -> 'content' <> '{}'::jsonb
   AND jsonb_typeof(sync_doc -> 'content') = 'object'
@@ -318,11 +316,12 @@ ORDER BY sync_api_repair_cases DESC;
 \echo ''
 \echo '=== 2g. event IDs for POST /_zendrite/admin/refetchPruned (batches of 100) ==='
 -- Refetch candidates are limited to cases where roomserver content itself is
--- empty, Sync has content, and Sync content does not contain the roomserver
--- copy. A Sync object contains the empty object, so that copy is locally
--- repairable and is listed by 2b instead; only non-object Sync content that
--- cannot supply an object repair reaches this list. Empty on both sides is
--- sent through 2e's verification flow first.
+-- empty and Sync cannot supply a local object repair: Sync either has no
+-- content key or has content that does not contain the roomserver copy. A Sync
+-- object contains the empty object, so that copy is locally repairable and is
+-- listed by 2b instead; only non-object Sync content that cannot supply an
+-- object repair reaches this list. Empty on both sides is sent through 2e's
+-- verification flow first.
 WITH parsed AS (
   SELECT o.id, o.room_id, o.event_id,
          CASE WHEN j.event_json ~ '(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2})' THEN NULL ELSE j.event_json::jsonb END AS rs_doc,

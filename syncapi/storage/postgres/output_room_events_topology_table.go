@@ -181,6 +181,9 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 }
 
 func (s *outputRoomEventsTopologyStatements) LockRoomTopology(ctx context.Context, txn *sql.Tx, roomID string) error {
+	if txn == nil {
+		return errors.New("LockRoomTopology called without a transaction")
+	}
 	_, err := sqlutil.TxStmt(txn, s.lockRoomTopologyStmt).ExecContext(ctx, roomID)
 	return err
 }

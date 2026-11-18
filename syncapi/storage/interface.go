@@ -204,6 +204,8 @@ type Database interface {
 	) (types.StreamPosition, error)
 	// WriteOldEvent classifies an old event inside the transaction that stores
 	// its stream and topology positions. The classifier runs again on retries.
+	// Classification failures are wrapped with tables.ErrEventSyncClassification
+	// and roll back the write. Like WriteEvent, it must be called serially.
 	WriteOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent, historyVisibility gomatrixserverlib.HistoryVisibility,
 		classifier tables.EventSyncClassifier, purgePrevEventIDs ...string) (types.StreamPosition, error)
 	// UpdateEventJSON replaces the serialized event for an event already in the

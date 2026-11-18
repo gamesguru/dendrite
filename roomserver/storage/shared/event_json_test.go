@@ -155,8 +155,9 @@ func TestStoreEventDoesNotReplaceFullJSONWithPrunedCopy(t *testing.T) {
 }
 
 // A pruned copy stored after its redaction arrived carries no redacted_because
-// marker, so the SQL guard alone would let a later complete copy overwrite it
-// and undo the redaction. storeEvent must consult the validated redaction.
+// marker, so the SQL guard alone would let a later complete copy overwrite it.
+// Undoing the redaction must be prevented by consulting the validated
+// redaction in storeEvent.
 func TestStoreEventKeepsPrunedJSONCoveredByValidatedRedaction(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
@@ -168,11 +169,11 @@ func TestStoreEventKeepsPrunedJSONCoveredByValidatedRedaction(t *testing.T) {
 		defer closeDB()
 		caches := caching.NewRistrettoCache(8*1024*1024, time.Hour, caching.DisableMetrics)
 		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
-		db, err := storage.Open(ctx, cm, &config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}, caches) //nolint:contextcheck
+		db, err := storage.Open(ctx, cm, &config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}, caches)
 		require.NoError(t, err)
 		raw, err := sqlutil.Open(&config.DatabaseOptions{ConnectionString: config.DataSource(connStr)}, sqlutil.NewExclusiveWriter())
 		require.NoError(t, err)
-		defer raw.Close() //nolint:errcheck
+		defer func() { require.NoError(t, raw.Close()) }()
 		insertRedaction := func(t *testing.T, redactsEventID, redactionEventID string, validated bool) {
 			t.Helper()
 			_, execErr := raw.ExecContext(ctx,

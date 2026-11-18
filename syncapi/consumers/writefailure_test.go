@@ -40,7 +40,7 @@ func (d classificationFailureDatabase) WriteOldEvent(context.Context, *rstypes.H
 	if d.writeCalls != nil {
 		d.writeCalls.Add(1)
 	}
-	return 0, fmt.Errorf("%w: %v", tables.ErrEventSyncClassification, d.err)
+	return 0, fmt.Errorf("%w: %w", tables.ErrEventSyncClassification, d.err)
 }
 
 // errDatabaseUnavailable is transient: the connection failed, not the write.

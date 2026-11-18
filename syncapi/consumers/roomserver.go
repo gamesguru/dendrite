@@ -544,9 +544,7 @@ func (s *OutputRoomEventConsumer) onOldRoomEvent(
 	// must not stop the event being stored.
 	internal.SetHistoricalPrevState(ctx, s.rsAPI, ev)
 
-	if err := s.resolveOldEventStateKey(ctx, ev); err != nil {
-		return fmt.Errorf("resolve old event %s state key: %w", ev.EventID(), err)
-	}
+	s.resolveOldEventStateKey(ctx, ev)
 	classifier := func(ctx context.Context, state tables.EventStateReader) (bool, error) {
 		return excludeOldEventFromSync(ctx, state, ev)
 	}
@@ -628,9 +626,9 @@ type oldEventState = tables.EventStateReader
 
 // resolveOldEventStateKey translates pseudo-ID state keys before the old event
 // write. Classification itself runs inside WriteOldEvent's serialized txn.
-func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) error {
+func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) {
 	if ev.StateKey() == nil {
-		return nil
+		return
 	}
 	if ev.StateKeyResolved == nil {
 		stateKey := *ev.StateKey()
@@ -649,7 +647,6 @@ func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, e
 			}
 		}
 	}
-	return nil
 }
 
 // excludeOldEventFromSync reports whether an old event must stay out of the
