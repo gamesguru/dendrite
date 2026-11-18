@@ -427,7 +427,8 @@ func (d *DatabaseTransaction) EventPositionByStreamPosition(
 }
 
 // EventPositionsInTopology returns current positions for multiple events in a
-// single query, omitting IDs that are not stored in topology.
+// single query. IDs not stored in topology are omitted; callers must handle
+// missing map entries.
 func (d *DatabaseTransaction) EventPositionsInTopology(
 	ctx context.Context, eventIDs []string,
 ) (map[string]types.TopologyToken, error) {
