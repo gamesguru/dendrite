@@ -434,6 +434,14 @@ func (d *DatabaseTransaction) EventPositionsInTopology(
 	return d.Topology.SelectPositionsInTopology(ctx, d.txn, eventIDs)
 }
 
+// DeliveryBoundaries returns, per room, the highest topological position among
+// events delivered to sync at or before atStreamPos.
+func (d *DatabaseTransaction) DeliveryBoundaries(
+	ctx context.Context, roomIDs []string, atStreamPos types.StreamPosition,
+) (map[string]types.StreamPosition, error) {
+	return d.Topology.SelectDeliveryBoundaries(ctx, d.txn, roomIDs, atStreamPos)
+}
+
 func (d *DatabaseTransaction) StreamToTopologicalPosition(
 	ctx context.Context, roomID string, streamPos types.StreamPosition, backwardOrdering bool,
 ) (types.TopologyToken, error) {

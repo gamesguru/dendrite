@@ -76,6 +76,16 @@ func (s unPartialSnapshot) GetBackwardTopologyPos(context.Context, []*rstypes.He
 	return types.TopologyToken{}, nil
 }
 
+// This fake has no stored timeline rows, so there is no frontier to filter
+// against and no event positions to resolve.
+func (s unPartialSnapshot) DeliveryBoundaries(context.Context, []string, types.StreamPosition) (map[string]types.StreamPosition, error) {
+	return map[string]types.StreamPosition{}, nil
+}
+
+func (s unPartialSnapshot) EventPositionsInTopology(context.Context, []string) (map[string]types.TopologyToken, error) {
+	return map[string]types.TopologyToken{}, nil
+}
+
 func (s unPartialSnapshot) GetRoomSummary(context.Context, string, string) (*types.Summary, error) {
 	return &types.Summary{}, nil
 }

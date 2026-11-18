@@ -47,6 +47,10 @@ func (leaveTestRoomserver) QuerySenderIDForUser(_ context.Context, _ spec.RoomID
 	return &s, nil
 }
 
+func (leaveTestRoomserver) QueryErasedUsers(context.Context, []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
+
 // A complete sync reads a snapshot taken after the request arrived, and its
 // next_batch moves past everything in it. A ban that landed in between would
 // then never reach the client: the room is not joined any more, so it is not
