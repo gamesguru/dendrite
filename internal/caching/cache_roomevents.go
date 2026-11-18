@@ -36,10 +36,11 @@ func (c Caches) InvalidateRoomServerEvent(eventNID types.EventNID) {
 		c.roomServerEventCacheMu.Lock()
 		defer c.roomServerEventCacheMu.Unlock()
 	}
-	// Ristretto applies writes asynchronously. A fill that finished before the
-	// write lock was taken can still be buffered, and would be visible until
-	// it is applied. Drain prior writes before deleting so stale fills cannot
-	// become visible after invalidation returns.
+	// Ristretto applies fills asynchronously. A fill that finished before the
+	// write lock was taken can still be buffered and would become visible after
+	// the delete if it were applied later. Drain prior writes before deleting.
+	// Unset itself removes the entry synchronously, so no drain is needed after
+	// it; the queued delete marker cannot re-add the entry.
 	if w, ok := c.RoomServerEvents.(interface{ Wait() }); ok {
 		w.Wait()
 	}

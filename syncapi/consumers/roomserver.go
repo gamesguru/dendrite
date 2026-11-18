@@ -628,6 +628,8 @@ type oldEventState = tables.EventStateReader
 
 // resolveOldEventStateKey translates pseudo-ID state keys before the old event
 // write. Classification itself runs inside WriteOldEvent's serialized txn.
+// All state event types are resolved to match updateStateEvents; keys that are
+// already user IDs or are not valid base64 pseudo-IDs are left alone.
 func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, ev *rstypes.HeaderedEvent) error {
 	if ev.StateKey() == nil || ev.Version() != gomatrixserverlib.RoomVersionPseudoIDs {
 		return nil
@@ -648,8 +650,8 @@ func (s *OutputRoomEventConsumer) resolveOldEventStateKey(ctx context.Context, e
 				userID, err := s.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
 				if err != nil {
 					// A transient lookup failure must not store the event with an
-					// unresolved membership key; NAK so it is retried with fresh
-					// state instead of being written permanently.
+					// unresolved state key; NAK so it is retried with fresh state
+					// instead of being written permanently.
 					return err
 				}
 				if userID != nil {
