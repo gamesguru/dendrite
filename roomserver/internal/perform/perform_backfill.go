@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -127,12 +128,18 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// (so we don't need to hit /state_ids which the test has no listener for)
 	// Specifically the test "Outbound federation can backfill events"
 	fromEventIDs := prioritiseBackfillFromEventIDs(ctx, req.RoomID, req.PrevEventIDs(), requester.ServersAtEvent)
+	phaseStarted := time.Now()
 	events, err := gomatrixserverlib.RequestBackfill(
 		ctx, req.VirtualHost, requester,
 		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, maxBackfillEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 			return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
 		},
 	)
+	logrus.WithFields(logrus.Fields{
+		"room_id":  req.RoomID,
+		"events":   len(events),
+		"duration": time.Since(phaseStarted),
+	}).Info("Backfill federation fetch and verification finished")
 	returned := make(map[string]struct{}, len(events))
 	for _, ev := range events {
 		returned[ev.EventID()] = struct{}{}
@@ -182,7 +189,14 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	logrus.WithError(err).WithField("room_id", req.RoomID).Infof("backfilled %d events", len(events))
 
 	// persist these new events - auth checks have already been done
+	phaseStarted = time.Now()
 	roomNID, storedEvents := persistEvents(ctx, r.DB, r.Querier, events)
+	logrus.WithFields(logrus.Fields{
+		"room_id":       req.RoomID,
+		"events":        len(events),
+		"stored_events": len(storedEvents),
+		"duration":      time.Since(phaseStarted),
+	}).Info("Backfill event persistence finished")
 
 	// The history visibility of a backfilled event comes from the state before
 	// that event, not from the backfill anchor: one batch can cross a
@@ -198,6 +212,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// are left out of the response, so sync does not store a redaction that
 	// never redacted its target; a retry fetches and validates them again.
 	unvalidatedRedactions := make(map[string]struct{})
+	phaseStarted = time.Now()
 	markUnvalidated := func(ev gomatrixserverlib.PDU) {
 		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
 			unvalidatedRedactions[ev.EventID()] = struct{}{}
@@ -207,6 +222,13 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
 		if !ok {
+			stateIDsStarted := time.Now()
+			logrus.WithFields(logrus.Fields{
+				"room_id":    req.RoomID,
+				"event_id":   ev.EventID(),
+				"event_type": ev.Type(),
+				"prev_count": len(ev.PrevEventIDs()),
+			}).Info("Backfill event has no state IDs from federation verification; resolving")
 			// RequestBackfill keeps events that only failed signature
 			// verification. Those skip the auth-at-state check, so they reach
 			// here without a before-state even though the event is stored.
@@ -214,11 +236,22 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			// no snapshot, so every later /messages page fetches and discards
 			// the same event again.
 			if _, resolveErr := requester.StateIDsBeforeEvent(ctx, ev.PDU); resolveErr != nil {
-				logrus.WithError(resolveErr).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to resolve state IDs for stored backfill event")
+				logrus.WithError(resolveErr).WithFields(logrus.Fields{
+					"room_id":  req.RoomID,
+					"event_id": ev.EventID(),
+					"duration": time.Since(stateIDsStarted),
+				}).Error("backfillViaFederation: failed to resolve state IDs for stored backfill event")
 				markUnvalidated(ev.PDU)
 				continue
 			}
 			stateIDs, ok = requester.eventIDToBeforeStateIDs[ev.EventID()]
+			logrus.WithFields(logrus.Fields{
+				"room_id":   req.RoomID,
+				"event_id":  ev.EventID(),
+				"resolved":  ok,
+				"state_ids": len(stateIDs),
+				"duration":  time.Since(stateIDsStarted),
+			}).Info("Backfill missing state IDs resolution finished")
 		}
 		if !ok {
 			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to find state IDs for stored backfill event")
@@ -271,6 +304,11 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			}
 		}
 	}
+	logrus.WithFields(logrus.Fields{
+		"room_id":  req.RoomID,
+		"events":   len(storedEvents),
+		"duration": time.Since(phaseStarted),
+	}).Info("Backfill before-state persistence finished")
 
 	// TODO: update backwards extremities, as that should be moved from syncapi to roomserver at some point.
 
