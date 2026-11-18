@@ -1233,7 +1233,7 @@ func (d *EventDatabase) MaybeRedactEvent(
 		err                           error
 		validated                     bool
 		ignoreRedaction               bool
-		redactionJSONWritten          bool
+		redactedEventMutated          bool
 	)
 
 	wErr := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -1322,6 +1322,9 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return nil
 		}
 
+		// From here the possibly cached event is modified in place, so the cache
+		// entry is stale whether or not the transaction commits.
+		redactedEventMutated = true
 		// mark the event as redacted
 		if redactionsArePermanent {
 			redactedEvent.Redact()
@@ -1355,7 +1358,6 @@ func (d *EventDatabase) MaybeRedactEvent(
 		if err != nil {
 			return fmt.Errorf("d.EventJSONTable.OverwriteEventJSON: %w", err)
 		}
-		redactionJSONWritten = true
 
 		err = d.RedactionsTable.MarkRedactionValidated(ctx, txn, redactionEvent.EventID(), true)
 		if err != nil {
@@ -1370,13 +1372,14 @@ func (d *EventDatabase) MaybeRedactEvent(
 
 		return nil
 	})
+	if redactedEventMutated {
+		// Invalidate after the transaction ends, on success and failure. This takes
+		// the cache write lock, waits for any pre-commit fill to finish, then removes
+		// it before later reads proceed. A rollback leaves the in-place edits cached.
+		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
+	}
 	if wErr != nil {
 		return nil, nil, wErr
-	}
-	if redactionJSONWritten {
-		// Invalidate after commit. This takes the cache write lock, waits for any
-		// pre-commit fill to finish, then removes it before later reads proceed.
-		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
 	}
 	if ignoreRedaction || redactionEvent == nil || redactedEvent == nil {
 		return nil, nil, nil
