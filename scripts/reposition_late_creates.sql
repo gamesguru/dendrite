@@ -306,43 +306,40 @@ FROM
 WHERE
     s.event_id = m.event_id;
 -- Keep sliding-sync room ordering metadata coherent if it points at a moved
--- create. Recalculate from the now-corrected event rows only when its cached
--- value was exactly the old position; other values may be timestamps.
+-- create. The metadata worker writes BOTH columns from the room's newest
+-- bump-type event (extractRoomMetadata via MaxStreamPositionsForRooms), hidden
+-- rows included, so recompute that one value after the move and use it for
+-- both. Only a column whose cached value was exactly an old create position
+-- is touched; other values may be timestamps.
 UPDATE
     syncapi_sliding_sync_joined_rooms s
 SET
     event_stream_ordering = CASE WHEN s.event_stream_ordering = ANY (r.old_ids) THEN
-    (
-        SELECT
-            max(e.id)
-        FROM
-            syncapi_output_room_events e
-        WHERE
-            e.room_id = s.room_id
-            AND e.type = ANY (ARRAY['m.room.create', 'm.room.message', 'm.room.encrypted', 'm.sticker', 'm.call.invite', 'm.poll.start', 'm.beacon_info']))
+        r.bump_max
     ELSE
         s.event_stream_ordering
     END,
     bump_stamp = CASE WHEN s.bump_stamp = ANY (r.old_ids) THEN
-    (
-        SELECT
-            max(e.id)
-        FROM
-            syncapi_output_room_events e
-        WHERE
-            e.room_id = s.room_id
-            AND e.type = ANY (ARRAY['m.room.create', 'm.room.message', 'm.room.encrypted', 'm.sticker', 'm.call.invite', 'm.poll.start', 'm.beacon_info']))
+        r.bump_max
     ELSE
         s.bump_stamp
     END
 FROM (
     SELECT
-        room_id,
-        array_agg(old_id) AS old_ids
-    FROM
-        zz_bak_reposition_creates
-    GROUP BY
-        room_id) r
+        b.room_id,
+        array_agg(b.old_id) AS old_ids,
+        (
+            SELECT
+                max(e.id)
+            FROM
+                syncapi_output_room_events e
+            WHERE
+                e.room_id = b.room_id
+                AND e.type = ANY (ARRAY['m.room.create', 'm.room.message', 'm.room.encrypted', 'm.sticker', 'm.call.invite', 'm.poll.start', 'm.beacon_info'])) AS bump_max
+        FROM
+            zz_bak_reposition_creates b
+        GROUP BY
+            b.room_id) r
 WHERE
     s.room_id = r.room_id
     AND (s.event_stream_ordering = ANY (r.old_ids)
