@@ -54,7 +54,10 @@ FROM
     JOIN zz_first_event f ON f.room_id = o.room_id
 WHERE
     o.type = 'm.room.create'
-    AND o.id > f.first_id;
+    AND o.id > f.first_id
+    -- !YRsw's create is stored under an orphaned roomserver incarnation (room
+    -- NID 3, live room NID 11). Left in place until that is settled.
+    AND o.room_id <> '!YRswYZcqh4FWoo1LLk:nutra.tk';
 -- Unused PDU positions below each affected room's first id, nearest first.
 -- Un-partial-state markers share the PDU token coordinate, so their IDs are
 -- occupied too even though they are in another table.
@@ -147,6 +150,13 @@ BEGIN
     IF bad_rows <> 0 THEN
         RAISE EXCEPTION 'plan has % rows without exactly one topology/current-state row or not before first_id; ROLLBACK', bad_rows;
     END IF;
+    IF EXISTS (
+        SELECT
+            1
+        FROM
+            zz_plan
+        WHERE
+            event_id = '$-DqZ28jVQgUybnxxq35vUXqAiaJpAfXO0eXzv9LQu9s') THEN
     SELECT
         room_nid
     INTO
@@ -169,6 +179,7 @@ BEGIN
     IF NOT FOUND OR create_room_nid <> live_room_nid THEN
         RAISE EXCEPTION '!YRsw create does not belong to its live room NID; ROLLBACK';
     END IF;
+END IF;
 END
 $$;
 \echo '--- plan: every row considered (new_id NULL = SKIPPED, no free id) ---'
