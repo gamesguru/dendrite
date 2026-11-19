@@ -223,7 +223,7 @@ sync_state_roll AS (
                 coalesce(sc.creates_missing_from_roomserver, 0) AS creates_missing_from_roomserver,
                 (coalesce(sc.sync_create_rows, 0) = 1
                 AND coalesce(sc.hidden_sync_creates, 0) = 0
-                AND coalesce(sr.sync_visible_events, 0) BETWEEN 2 AND 20
+                AND coalesce(sr.sync_visible_events, 0) BETWEEN 2 AND 10
                 AND coalesce(sc.topology_late_creates, 0) = 0
                 AND coalesce(sc.creates_with_visible_history_before, 0) = 0
                 AND coalesce(sc.creates_with_hidden_history_after, 0) > 0) AS default_window_mismatch_candidate,
