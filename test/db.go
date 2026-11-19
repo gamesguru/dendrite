@@ -171,6 +171,8 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 		if err != nil {
 			t.Fatalf("failed to connect to postgres to drop test db '%s': %s", dbName, err)
 		}
+		// t.Fatalf below exits the goroutine, so close via defer.
+		defer db.Close()
 		_, _ = db.Exec(
 			`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
 			dbName,
@@ -178,7 +180,6 @@ func PrepareDBConnectionString(t *testing.T, dbType DBType) (connStr string, clo
 		if _, err = db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
 			t.Fatalf("failed to drop postgres test db '%s': %s", dbName, err)
 		}
-		_ = db.Close()
 	}
 }
 
