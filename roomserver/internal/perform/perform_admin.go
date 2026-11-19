@@ -610,6 +610,11 @@ func (r *Admin) fetchStateToInstall(
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 			}); err != nil {
+				logrus.WithError(err).WithFields(logrus.Fields{
+					"room_id":  roomID,
+					"event_id": authEvent.EventID(),
+					"type":     authEvent.Type(),
+				}).Warn("downloadState: skipping auth event that failed signature verification")
 				continue
 			}
 			authEventMap[authEvent.EventID()] = authEvent
@@ -618,6 +623,11 @@ func (r *Admin) fetchStateToInstall(
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, stateEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 			}); err != nil {
+				logrus.WithError(err).WithFields(logrus.Fields{
+					"room_id":  roomID,
+					"event_id": stateEvent.EventID(),
+					"type":     stateEvent.Type(),
+				}).Warn("downloadState: skipping state event that failed signature verification")
 				continue
 			}
 			sk := stateEvent.StateKey()
