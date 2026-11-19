@@ -1134,10 +1134,72 @@ func topologicalRecentEvents(
 			res.Limited = true
 		}
 		slices.Reverse(picked)
+		// A visible create at the head of the window with hidden events after it
+		// would anchor prev_batch at the newest event, so those hidden events
+		// paginate in above the create and clients can lose the creation summary.
+		// Leave the create in state and let backward pagination deliver it at the
+		// true start of history. Do this here, before the response builder removes
+		// timeline state events from the state block and runs lazy member loading.
+		if len(picked) > 1 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
+			createPos, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
+			if err != nil {
+				return nil, err
+			}
+			hasHiddenAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createPos)
+			if err != nil {
+				return nil, err
+			}
+			if hasHiddenAfterCreate {
+				picked = picked[1:]
+				res.Limited = true
+			}
+		}
 		res.Events = picked
 		result[roomID] = res
 	}
 	return result, nil
+}
+
+// stripSplitCreate removes a leading m.room.create from a complete-sync
+// timeline when events excluded from sync lie between it and the next
+// delivered event. Such a window is not the start of the room: keeping the
+// create in it makes the prev_batch shortcut below anchor at the newest event,
+// so backwards pagination replays the hidden history above the create and
+// clients stop rendering the create as the room's first event. Delivering the
+// create through /messages instead puts it after the hidden history, where it
+// belongs, while the state block still carries it.
+func stripSplitCreate(
+	ctx context.Context,
+	snapshot storage.DatabaseTransaction,
+	roomID string,
+	events []types.StreamEvent,
+) ([]types.StreamEvent, *rstypes.HeaderedEvent, bool, error) {
+	if len(events) < 2 {
+		return events, nil, false, nil
+	}
+	create, next := events[0], events[1]
+	if create.Type() != spec.MRoomCreate || !create.StateKeyEquals("") {
+		return events, nil, false, nil
+	}
+	createDepth, createStream, err := snapshot.PositionInTopology(ctx, create.EventID())
+	if err != nil {
+		return events, nil, false, fmt.Errorf("PositionInTopology(%s): %w", create.EventID(), err)
+	}
+	nextDepth, nextStream, err := snapshot.PositionInTopology(ctx, next.EventID())
+	if err != nil {
+		return events, nil, false, fmt.Errorf("PositionInTopology(%s): %w", next.EventID(), err)
+	}
+	split, err := snapshot.HasBackfilledEventBetween(ctx, roomID,
+		types.TopologyToken{Depth: createDepth, PDUPosition: createStream},
+		types.TopologyToken{Depth: nextDepth, PDUPosition: nextStream},
+	)
+	if err != nil {
+		return events, nil, false, fmt.Errorf("HasBackfilledEventBetween: %w", err)
+	}
+	if !split {
+		return events, nil, false, nil
+	}
+	return events[1:], create.HeaderedEvent, true, nil
 }
 
 func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
@@ -1157,6 +1219,20 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	jr = types.NewJoinResponse()
 	// TODO: When filters are added, we may need to call this multiple times to get enough events.
 	//       See: https://github.com/matrix-org/synapse/blob/v0.19.3/synapse/handlers/sync.py#L316
+
+	// A create that is separated from the live window by hidden history belongs
+	// to history, not to the window. Remove it before the timeline and state are
+	// split below, so it stays in the state block, and mark the window limited
+	// so clients paginate from before the first event they were given.
+	var createdEvent *rstypes.HeaderedEvent
+	var createdSuppressed bool
+	recentStreamEvents, createdEvent, createdSuppressed, err = stripSplitCreate(ctx, snapshot, roomID, recentStreamEvents)
+	if err != nil {
+		return jr, err
+	}
+	if createdSuppressed {
+		limited = true
+	}
 
 	// Work our way through the timeline events and pick out the event IDs
 	// of any state events that appear in the timeline. We'll specifically
@@ -1204,6 +1280,11 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			}
 			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
 		}
+	}
+	if createdSuppressed && len(events) == 0 && createdEvent != nil {
+		// History visibility removed every event after the create. Do not
+		// strand the client with an empty window and no cursor: keep the create.
+		events = append(events, createdEvent)
 	}
 
 	if !stateAfter {

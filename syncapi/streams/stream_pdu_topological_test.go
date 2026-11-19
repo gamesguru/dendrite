@@ -112,3 +112,55 @@ func TestTopologicalRecentEventsSkipsBackfilledBatches(t *testing.T) {
 			"the deepest sync-visible event is returned")
 	})
 }
+
+// A visible create followed by hidden events must be left out of the complete
+// sync timeline, which would otherwise anchor prev_batch at the newest event and
+// make the hidden events paginate in above the create. Without a hidden gap the
+// create stays in the timeline.
+func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		for _, hideGap := range []bool{true, false} {
+			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+			cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+			db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+			require.NoError(t, err)
+			ctx := t.Context()
+
+			alice := test.NewUser(t)
+			r := test.NewRoom(t, alice)
+			setupEvents := len(r.Events())
+			m1 := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "one"})
+			m2 := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "two"})
+
+			for i, ev := range r.Events() {
+				exclude := hideGap && i > 0 && i < setupEvents
+				var addState []string
+				if ev.StateKey() != nil {
+					addState = []string{ev.EventID()}
+				}
+				_, err := db.WriteEvent(ctx, ev, nil, addState, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, err)
+			}
+
+			snapshot, err := db.NewDatabaseSnapshot(ctx)
+			require.NoError(t, err)
+			to, err := snapshot.MaxStreamPositionForPDUs(ctx)
+			require.NoError(t, err)
+
+			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
+			require.NoError(t, err)
+			events := recent[r.ID].Events
+			if hideGap {
+				require.Len(t, events, 2, "create left out when hidden events follow it")
+				require.Equal(t, m1.EventID(), events[0].EventID())
+				require.Equal(t, m2.EventID(), events[1].EventID())
+				require.True(t, recent[r.ID].Limited)
+			} else {
+				require.Equal(t, r.Events()[0].EventID(), events[0].EventID(), "create stays first without a gap")
+				require.False(t, recent[r.ID].Limited)
+			}
+			snapshot.Rollback() //nolint:errcheck
+			closeDB()
+		}
+	})
+}
