@@ -211,18 +211,29 @@ ORDER BY
     o.room_id;
 
 \echo '--- late creates already hidden from sync (reposition leaves these alone) ---'
+WITH room_first AS (
+    SELECT
+        room_id,
+        min(id) AS first_id
+    FROM
+        syncapi_output_room_events
+    GROUP BY
+        room_id
+)
 SELECT
-    d.room_id,
-    d.event_id,
-    d.create_id,
-    d.first_id,
-    to_timestamp(d.create_ts / 1000.0) AT TIME ZONE 'UTC' AS create_ts,
-    to_timestamp(d.first_ts / 1000.0) AT TIME ZONE 'UTC' AS first_ts
+    o.room_id,
+    o.event_id,
+    o.id AS create_id,
+    f.first_id,
+    to_timestamp(o.origin_server_ts / 1000.0) AT TIME ZONE 'UTC' AS create_ts
 FROM
-    zz_diag d
+    syncapi_output_room_events o
+    JOIN room_first f ON f.room_id = o.room_id
 WHERE
-    NOT d.visible
+    o.type = 'm.room.create'
+    AND o.id > f.first_id
+    AND o.exclude_from_sync = TRUE
 ORDER BY
-    d.create_id;
+    o.id;
 
 ROLLBACK;
