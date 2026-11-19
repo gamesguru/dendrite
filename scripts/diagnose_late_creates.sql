@@ -1,6 +1,8 @@
 -- READ-ONLY diagnosis: list every room whose m.room.create was stored after
 -- the room's first sync event, and whether scripts/reposition_late_creates.sql
--- can fix it. Changes nothing; the transaction is READ ONLY and rolled back.
+-- can fix it. Changes no real table; it creates only TEMP tables inside a
+-- transaction that is rolled back. (READ ONLY is not used: Postgres rejects
+-- CREATE TABLE AS, even TEMP, in a read-only transaction.)
 --
 --     psql -X -f scripts/diagnose_late_creates.sql <dsn>
 --
@@ -15,9 +17,7 @@
 \pset pager off
 \set ON_ERROR_STOP on
 \set FREE_WINDOW 1000
-BEGIN
-    READ ONLY;
-
+BEGIN;
 CREATE TEMP TABLE zz_first_event ON COMMIT DROP AS
 SELECT
     room_id, min(id) AS first_id
@@ -25,7 +25,6 @@ FROM
     syncapi_output_room_events
 GROUP BY
     room_id;
-
 CREATE TEMP TABLE zz_diag ON COMMIT DROP AS
 SELECT
     o.room_id, o.event_id, o.id AS create_id, f.first_id, o.exclude_from_sync = FALSE AS visible, o.origin_server_ts AS create_ts, (
@@ -41,7 +40,6 @@ FROM
 WHERE
     o.type = 'm.room.create'
     AND o.id > f.first_id;
-
 \echo '--- summary ---'
 SELECT
     count(*) AS late_creates,
@@ -51,7 +49,6 @@ SELECT
     count(*) FILTER (WHERE rn > 1) AS extra_creates_in_same_room
 FROM
     zz_diag;
-
 \echo '--- rooms (visible late creates, the ones to fix) ---'
 SELECT
     d.room_id,
@@ -115,7 +112,6 @@ WHERE
     d.visible
 ORDER BY
     d.create_id;
-
 \echo '--- visible late creates that reposition cannot fix (no free id) ---'
 SELECT
     d.room_id,
@@ -140,7 +136,6 @@ WHERE
                     x.id = g))
     ORDER BY
         d.room_id;
-
 \echo '--- rooms with more than one late create (need one free id each) ---'
 SELECT
     room_id,
@@ -153,5 +148,4 @@ GROUP BY
     room_id
 HAVING
     count(*) > 1;
-
 ROLLBACK;
