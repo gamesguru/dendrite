@@ -45,7 +45,7 @@ FROM
 GROUP BY
     room_id;
 -- Late creates stored after the room's first event, visible or already
--- hidden. exclude_from_sync is left exactly as it is; only the position moves.
+-- hidden. a hidden one is unhidden after it moves (see below).
 CREATE TEMP TABLE zz_late_creates ON COMMIT DROP AS
 SELECT
     o.id AS old_id, o.room_id, o.event_id, f.first_id, row_number() OVER (PARTITION BY o.room_id ORDER BY o.id) AS rn
@@ -130,7 +130,14 @@ SELECT
             syncapi_current_room_state s
         WHERE
             s.event_id = p.event_id
-            AND s.room_id = p.room_id) AS old_added_at
+            AND s.room_id = p.room_id) AS old_added_at,
+    (
+        SELECT
+            o.exclude_from_sync
+        FROM
+            syncapi_output_room_events o
+        WHERE
+            o.id = p.old_id) AS old_exclude_from_sync
 FROM
     zz_plan p
 WHERE
@@ -192,6 +199,19 @@ FROM
     zz_moved m
 WHERE
     s.event_id = m.event_id;
+-- A moved create now sits before the room's first event, so it is history,
+-- not new activity: make it visible to sync at its corrected position. This
+-- unhides creates the ingest classifier had hidden (old_exclude_from_sync in
+-- the backup records which).
+UPDATE
+    syncapi_output_room_events o
+SET
+    exclude_from_sync = FALSE
+FROM
+    zz_moved m
+WHERE
+    o.event_id = m.event_id
+    AND o.exclude_from_sync = TRUE;
 DO $$
 DECLARE
     planned bigint;
