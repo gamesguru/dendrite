@@ -55,8 +55,9 @@ FROM
 WHERE
     o.type = 'm.room.create'
     AND o.id > f.first_id;
--- Unused ids below each affected room's first id, nearest first. The sequence
--- has already passed them, so they are never handed out again.
+-- Unused PDU positions below each affected room's first id, nearest first.
+-- Un-partial-state markers share the PDU token coordinate, so their IDs are
+-- occupied too even though they are in another table.
 CREATE TEMP TABLE zz_free_ids ON COMMIT DROP AS
 SELECT
     r.room_id, g AS free_id, row_number() OVER (PARTITION BY r.room_id ORDER BY g DESC) AS rn
@@ -71,7 +72,14 @@ WHERE
         FROM
             syncapi_output_room_events x
         WHERE
-            x.id = g);
+            x.id = g)
+    AND NOT EXISTS (
+        SELECT
+            1
+        FROM
+            syncapi_unpartialstated_rooms u
+        WHERE
+            u.id = g);
 CREATE TEMP TABLE zz_plan ON COMMIT DROP AS
 SELECT
     c.old_id, f.free_id AS new_id, c.room_id, c.event_id, c.first_id
@@ -79,6 +87,90 @@ FROM
     zz_late_creates c
     LEFT JOIN zz_free_ids f ON f.room_id = c.room_id
         AND f.rn = c.rn;
+-- GUARDS: refuse ambiguous plans, stream-position collisions, or moving the
+-- known !YRsw create if it is not attached to the live room incarnation.
+DO $$
+DECLARE
+    duplicate_ids bigint;
+    marker_collisions bigint;
+    bad_rows bigint;
+    live_room_nid bigint;
+    create_room_nid bigint;
+BEGIN
+    SELECT
+        count(*) - count(DISTINCT new_id)
+    INTO
+        duplicate_ids
+    FROM
+        zz_plan
+    WHERE
+        new_id IS NOT NULL;
+    IF duplicate_ids <> 0 THEN
+        RAISE EXCEPTION 'plan reuses % new stream IDs across rooms; ROLLBACK and review', duplicate_ids;
+    END IF;
+    SELECT
+        count(*)
+    INTO
+        marker_collisions
+    FROM
+        zz_plan p
+        JOIN syncapi_unpartialstated_rooms u ON u.id = p.new_id
+    WHERE
+        p.new_id IS NOT NULL;
+    IF marker_collisions <> 0 THEN
+        RAISE EXCEPTION 'plan collides with % un-partial-state PDU markers; ROLLBACK and review', marker_collisions;
+    END IF;
+    SELECT
+        count(*)
+    INTO
+        bad_rows
+    FROM
+        zz_plan p
+    WHERE
+        p.new_id IS NOT NULL
+        AND ((
+                SELECT
+                    count(*)
+                FROM
+                    syncapi_output_room_events_topology t
+                WHERE
+                    t.event_id = p.event_id) <> 1
+                OR (
+                    SELECT
+                        count(*)
+                    FROM
+                        syncapi_current_room_state s
+                    WHERE
+                        s.event_id = p.event_id
+                        AND s.room_id = p.room_id) <> 1
+                    OR p.new_id >= p.first_id);
+    IF bad_rows <> 0 THEN
+        RAISE EXCEPTION 'plan has % rows without exactly one topology/current-state row or not before first_id; ROLLBACK', bad_rows;
+    END IF;
+    SELECT
+        room_nid
+    INTO
+        live_room_nid
+    FROM
+        roomserver_rooms
+    WHERE
+        room_id = '!YRswYZcqh4FWoo1LLk:nutra.tk';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'live !YRsw room is absent from roomserver_rooms; ROLLBACK';
+    END IF;
+    SELECT
+        room_nid
+    INTO
+        create_room_nid
+    FROM
+        roomserver_events
+    WHERE
+        event_id = '$-DqZ28jVQgUybnxxq35vUXqAiaJpAfXO0eXzv9LQu9s';
+    IF NOT FOUND OR create_room_nid <> live_room_nid THEN
+        RAISE EXCEPTION '!YRsw create does not belong to its live room NID; ROLLBACK';
+    END IF;
+END
+$$;
 \echo '--- plan: every row considered (new_id NULL = SKIPPED, no free id) ---'
 SELECT
     p.old_id,
@@ -137,7 +229,21 @@ SELECT
         FROM
             syncapi_output_room_events o
         WHERE
-            o.id = p.old_id) AS old_exclude_from_sync
+            o.id = p.old_id) AS old_exclude_from_sync,
+    (
+        SELECT
+            s.event_stream_ordering
+        FROM
+            syncapi_sliding_sync_joined_rooms s
+        WHERE
+            s.room_id = p.room_id) AS old_sliding_event_stream_ordering,
+    (
+        SELECT
+            s.bump_stamp
+        FROM
+            syncapi_sliding_sync_joined_rooms s
+        WHERE
+            s.room_id = p.room_id) AS old_sliding_bump_stamp
 FROM
     zz_plan p
 WHERE
@@ -199,6 +305,48 @@ FROM
     zz_moved m
 WHERE
     s.event_id = m.event_id;
+-- Keep sliding-sync room ordering metadata coherent if it points at a moved
+-- create. Recalculate from the now-corrected event rows only when its cached
+-- value was exactly the old position; other values may be timestamps.
+UPDATE
+    syncapi_sliding_sync_joined_rooms s
+SET
+    event_stream_ordering = CASE WHEN s.event_stream_ordering = ANY (r.old_ids) THEN
+    (
+        SELECT
+            max(e.id)
+        FROM
+            syncapi_output_room_events e
+        WHERE
+            e.room_id = s.room_id
+            AND e.type = ANY (ARRAY['m.room.create', 'm.room.message', 'm.room.encrypted', 'm.sticker', 'm.call.invite', 'm.poll.start', 'm.beacon_info']))
+    ELSE
+        s.event_stream_ordering
+    END,
+    bump_stamp = CASE WHEN s.bump_stamp = ANY (r.old_ids) THEN
+    (
+        SELECT
+            max(e.id)
+        FROM
+            syncapi_output_room_events e
+        WHERE
+            e.room_id = s.room_id
+            AND e.type = ANY (ARRAY['m.room.create', 'm.room.message', 'm.room.encrypted', 'm.sticker', 'm.call.invite', 'm.poll.start', 'm.beacon_info']))
+    ELSE
+        s.bump_stamp
+    END
+FROM (
+    SELECT
+        room_id,
+        array_agg(old_id) AS old_ids
+    FROM
+        zz_bak_reposition_creates
+    GROUP BY
+        room_id) r
+WHERE
+    s.room_id = r.room_id
+    AND (s.event_stream_ordering = ANY (r.old_ids)
+        OR s.bump_stamp = ANY (r.old_ids));
 -- A moved create now sits before the room's first event, so it is history,
 -- not new activity: make it visible to sync at its corrected position. This
 -- unhides creates the ingest classifier had hidden (old_exclude_from_sync in
@@ -211,12 +359,13 @@ FROM
     zz_moved m
 WHERE
     o.event_id = m.event_id
-    AND o.exclude_from_sync = TRUE;
+    AND o.exclude_from_sync IS DISTINCT FROM FALSE;
 DO $$
 DECLARE
     planned bigint;
     moved bigint;
     stale bigint;
+    visible bigint;
 BEGIN
     SELECT
         count(*)
@@ -254,6 +403,18 @@ BEGIN
                 AND x.event_id <> b.event_id);
     IF stale <> 0 THEN
         RAISE EXCEPTION 'post-update check failed for % rows. ROLLBACK', stale;
+    END IF;
+    SELECT
+        count(*)
+    INTO
+        visible
+    FROM
+        zz_bak_reposition_creates b
+        JOIN syncapi_output_room_events o ON o.event_id = b.event_id
+    WHERE
+        o.exclude_from_sync IS DISTINCT FROM FALSE;
+    IF visible <> 0 THEN
+        RAISE EXCEPTION 'post-update check failed: % moved creates remain hidden. ROLLBACK', visible;
     END IF;
 END
 $$;
