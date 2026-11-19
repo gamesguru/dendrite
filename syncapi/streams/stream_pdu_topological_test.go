@@ -208,7 +208,7 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			}
 		})
 
-		t.Run("visible history is unchanged", func(t *testing.T) {
+		t.Run("large limit still splits hidden config history", func(t *testing.T) {
 			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 			defer closeDB()
 			cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)

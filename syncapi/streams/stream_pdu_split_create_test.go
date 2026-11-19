@@ -167,6 +167,14 @@ func TestCompleteSyncKeepsCreateWhenNoBackfillGap(t *testing.T) {
 
 		jr := completeSyncRoom(t, db, alice.ID, room.ID)
 
+		var want, got []string
+		for _, ev := range room.Events() {
+			want = append(want, ev.EventID())
+		}
+		for _, ev := range jr.Timeline.Events {
+			got = append(got, ev.EventID)
+		}
+		require.Equal(t, want, got, "the whole room comes back in order")
 		require.True(t, containsClientEventType(jr.Timeline.Events, spec.MRoomCreate),
 			"with no hidden gap the create stays in the window")
 		require.False(t, jr.Timeline.Limited)
