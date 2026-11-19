@@ -155,7 +155,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, false,
-			events.Events, events.Limited, events.SuppressedCreateEventID, eventFormat, to, bundler,
+			events.Events, events.Limited, eventFormat, to, bundler,
 		)
 		if jerr != nil {
 			if req.Context.Err() != nil || abandonsSync(jerr) {
@@ -218,7 +218,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
 				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, true,
-				events.Events, events.Limited, events.SuppressedCreateEventID, eventFormat, to, bundler,
+				events.Events, events.Limited, eventFormat, to, bundler,
 			)
 			if err != nil {
 				if req.Context.Err() != nil || abandonsSync(err) {
@@ -1134,28 +1134,6 @@ func topologicalRecentEvents(
 			res.Limited = true
 		}
 		slices.Reverse(picked)
-		// A visible create at the head of the window with excluded (backfilled)
-		// events later in the room is not the start of the
-		// room's live window. Keeping it would make the prev_batch shortcut in the
-		// response builder anchor at the newest event, so backward pagination
-		// would replay the hidden history above the create and clients would stop
-		// rendering it as the room's first event. Leave the create for the state
-		// block and let pagination deliver it at the true start of history.
-		if len(picked) > 1 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
-			createDepth, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
-			if err != nil {
-				return nil, err
-			}
-			hasExcludedAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createDepth)
-			if err != nil {
-				return nil, err
-			}
-			if hasExcludedAfterCreate {
-				res.SuppressedCreateEventID = picked[0].EventID()
-				picked = picked[1:]
-				res.Limited = true
-			}
-		}
 		res.Events = picked
 		result[roomID] = res
 	}
@@ -1172,7 +1150,6 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	isPeek bool,
 	recentStreamEvents []types.StreamEvent,
 	limited bool,
-	suppressedCreateEventID string,
 	eventFormat synctypes.ClientEventFormat,
 	sentAt types.StreamPosition,
 	bundler *syncBundler,
@@ -1228,30 +1205,6 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
 		}
 	}
-	// History visibility can remove every event of a window whose create was
-	// left to the state. Give the client a cursor rather than an empty timeline:
-	// run the create through the same filter and, if visible, move it from the
-	// state to the timeline. On a filter error leave the timeline empty.
-	if !isPeek && err == nil && len(events) == 0 && suppressedCreateEventID != "" {
-		for _, se := range stateEvents {
-			if se.EventID() != suppressedCreateEventID {
-				continue
-			}
-			visible, visErr := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, []*rstypes.HeaderedEvent{se}, internal.SyncEndpoint)
-			if visErr != nil {
-				if abandonsSync(visErr) {
-					return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", visErr)
-				}
-				logrus.WithError(visErr).WithField("room_id", roomID).Error("unable to filter create for empty window")
-			} else if len(visible) == 1 {
-				events = visible
-				limited = true
-				stateEvents = removeDuplicates(stateEvents, events)
-			}
-			break
-		}
-	}
-
 	if !stateAfter {
 		stateEvents = removeDuplicates(stateEvents, events)
 	}
@@ -1280,11 +1233,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if len(events) > 0 {
 		var backwardTopologyPos, backwardStreamPos types.StreamPosition
 		event := events[0]
-		// If this is the beginning of the room, we can't go back further. We're going to return
-		// the TopologyToken from the last event instead. (Synapse returns the /sync next_Batch)
-		if event.Type() == spec.MRoomCreate && event.StateKeyEquals("") {
-			event = events[len(events)-1]
-		}
+		// A create at the start of the timeline is the room's history boundary.
+		// Anchor prev_batch there so excluded backfill after it cannot paginate
+		// above the create and bury it in the client's timeline.
 		backwardTopologyPos, backwardStreamPos, err = snapshot.PositionInTopology(ctx, event.EventID())
 		if err != nil {
 			return jr, err

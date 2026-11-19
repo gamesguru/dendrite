@@ -397,14 +397,6 @@ func (d *DatabaseTransaction) RoomLiveStartPosition(
 	return d.Topology.SelectLiveStartPosition(ctx, d.txn, roomID)
 }
 
-// HasExcludedEventsAfterTopologyPosition reports whether an event excluded
-// from sync has a greater topological position in the room.
-func (d *DatabaseTransaction) HasExcludedEventsAfterTopologyPosition(
-	ctx context.Context, roomID string, position types.StreamPosition,
-) (bool, error) {
-	return d.Topology.HasExcludedEventsAfterTopologyPosition(ctx, d.txn, roomID, position)
-}
-
 func (d *DatabaseTransaction) ProspectiveEventPosition(
 	ctx context.Context, event *rstypes.HeaderedEvent,
 ) (types.StreamPosition, error) {

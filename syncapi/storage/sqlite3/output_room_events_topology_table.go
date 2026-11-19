@@ -115,13 +115,6 @@ const selectLiveStartPositionSQL = "" +
 	" AND e.type <> 'm.room.create' AND json_type(e.headered_event_json, '$.state_key') IS NOT NULL" +
 	" ORDER BY t.topological_position ASC LIMIT 1"
 
-// Whether a backfilled event has a greater topological position in the room.
-const selectExcludedEventsAfterTopologyPositionSQL = "" +
-	"SELECT EXISTS (SELECT 1 FROM syncapi_output_room_events_topology t" +
-	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
-	" WHERE t.room_id = $1 AND e.exclude_from_sync = TRUE" +
-	" AND t.topological_position > $2)"
-
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
@@ -142,7 +135,6 @@ type outputRoomEventsTopologyStatements struct {
 	selectEventIDsBeforeStreamPositionStmt        *sql.Stmt
 	selectPositionInTopologyStmt                  *sql.Stmt
 	selectLiveStartPositionStmt                   *sql.Stmt
-	selectExcludedEventsAfterTopologyPositionStmt *sql.Stmt
 	selectPositionByStreamPositionStmt            *sql.Stmt
 	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
 	selectStreamToTopologicalPositionDescStmt     *sql.Stmt
@@ -169,7 +161,6 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectEventIDsBeforeStreamPositionStmt, selectEventIDsBeforeStreamPositionSQL},
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
 		{&s.selectLiveStartPositionStmt, selectLiveStartPositionSQL},
-		{&s.selectExcludedEventsAfterTopologyPositionStmt, selectExcludedEventsAfterTopologyPositionSQL},
 		{&s.selectPositionByStreamPositionStmt, selectPositionByStreamPositionSQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
@@ -350,18 +341,6 @@ func (s *outputRoomEventsTopologyStatements) SelectLiveStartPosition(
 		return 0, false, err
 	}
 	return types.StreamPosition(pos.Int64), true, nil
-}
-
-// HasExcludedEventsAfterTopologyPosition reports whether an event excluded
-// from sync has a greater topological position in the room.
-func (s *outputRoomEventsTopologyStatements) HasExcludedEventsAfterTopologyPosition(
-	ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition,
-) (bool, error) {
-	var exists bool
-	err := sqlutil.TxStmt(txn, s.selectExcludedEventsAfterTopologyPositionStmt).QueryRowContext(
-		ctx, roomID, position,
-	).Scan(&exists)
-	return exists, err
 }
 
 // ProspectiveEventPosition returns the topological position that

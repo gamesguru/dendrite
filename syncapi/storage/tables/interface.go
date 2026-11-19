@@ -145,10 +145,6 @@ type Topology interface {
 	// delivered, non-create state event (not excluded from sync). ok is false when
 	// the room has none. Older state events sit below this position.
 	SelectLiveStartPosition(ctx context.Context, txn *sql.Tx, roomID string) (pos types.StreamPosition, ok bool, err error)
-	// HasExcludedEventsAfterTopologyPosition reports whether an event excluded
-	// from sync has a greater topological position. Such events are reachable
-	// only through /messages.
-	HasExcludedEventsAfterTopologyPosition(ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition) (bool, error)
 	// SelectPositionInTopology returns the depth and stream position of a given event in the topology of the room it belongs to.
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)
 	// SelectPositionsInTopology returns the stored positions for the requested

@@ -127,9 +127,6 @@ type DatabaseTransaction interface {
 	// RoomLiveStartPosition returns the first delivered non-create state event's
 	// topological position, and false when the room has no such event.
 	RoomLiveStartPosition(ctx context.Context, roomID string) (types.StreamPosition, bool, error)
-	// HasExcludedEventsAfterTopologyPosition reports whether the room has an
-	// event excluded from sync at a greater topological position.
-	HasExcludedEventsAfterTopologyPosition(ctx context.Context, roomID string, position types.StreamPosition) (bool, error)
 	// ProspectiveEventPosition returns the topological position the event would
 	// receive from the stored positions of its prev events.
 	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (types.StreamPosition, error)
