@@ -6,7 +6,6 @@
 package streams
 
 import (
-	"codefloe.com/pat-s/zendrite/syncapi/notifier"
 	"context"
 	"slices"
 	"testing"
@@ -18,6 +17,7 @@ import (
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/notifier"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
@@ -52,7 +52,7 @@ func storeRoomEvents(
 	}
 }
 
-func completeSyncRoom(t *testing.T, db storage.Database, userID, roomID string) *types.JoinResponse {
+func completeSyncRoom(t *testing.T, db storage.Database, userID, roomID string, timelineLimit ...int) *types.JoinResponse {
 	t.Helper()
 	ctx := t.Context()
 	snapshot, err := db.NewDatabaseSnapshot(ctx)
@@ -62,12 +62,16 @@ func completeSyncRoom(t *testing.T, db storage.Database, userID, roomID string) 
 	pos, err := snapshot.MaxStreamPositionForPDUs(ctx)
 	require.NoError(t, err)
 
+	filter := synctypes.DefaultFilter()
+	if len(timelineLimit) > 0 {
+		filter.Room.Timeline.Limit = timelineLimit[0]
+	}
 	req := &types.SyncRequest{
 		Context:              ctx,
 		Device:               &userapi.Device{UserID: userID},
 		Rooms:                map[string]string{},
 		Response:             types.NewResponse(),
-		Filter:               synctypes.DefaultFilter(),
+		Filter:               filter,
 		Log:                  logrus.NewEntry(logrus.StandardLogger()),
 		MembershipChanges:    map[string]struct{}{},
 		NewlyJoinedRooms:     map[string]struct{}{},
@@ -167,4 +171,48 @@ func TestCompleteSyncKeepsCreateWhenNoBackfillGap(t *testing.T) {
 			"with no hidden gap the create stays in the window")
 		require.False(t, jr.Timeline.Limited)
 	})
+}
+
+func TestCompleteSyncLargeLimitSplitsCreateWhenExcludedEventFollowsWindow(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		for range 25 {
+			room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "visible"})
+		}
+		hiddenTopic := room.CreateAndInsert(t, alice, "m.room.topic", map[string]any{"topic": "backfilled later"})
+		storeRoomEvents(t, db, room, func(ev *rstypes.HeaderedEvent) bool {
+			return ev.EventID() == hiddenTopic.EventID()
+		})
+
+		jr := completeSyncRoom(t, db, alice.ID, room.ID, 100)
+
+		require.True(t, jr.Timeline.Limited)
+		var want, got []string
+		for _, ev := range room.Events() {
+			if ev.EventID() != room.Events()[0].EventID() && ev.EventID() != hiddenTopic.EventID() {
+				want = append(want, ev.EventID())
+			}
+		}
+		for _, ev := range jr.Timeline.Events {
+			got = append(got, ev.EventID)
+		}
+		require.Equal(t, want, got, "large limit preserves all visible events in order")
+		require.NotContains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
+		require.Contains(t, clientEventTypes(jr.State.Events), spec.MRoomCreate)
+	})
+}
+
+func clientEventTypes(events []synctypes.ClientEvent) []string {
+	result := make([]string, 0, len(events))
+	for _, ev := range events {
+		result = append(result, ev.Type)
+	}
+	return result
 }

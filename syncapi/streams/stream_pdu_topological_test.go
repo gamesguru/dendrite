@@ -218,21 +218,27 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 
 			alice := test.NewUser(t)
 			r := test.NewRoom(t, alice)
-			for _, ev := range r.Events() {
-				var addState []string
-				if ev.StateKey() != nil {
-					addState = []string{ev.EventID()}
-				}
-				_, err := db.WriteEvent(ctx, ev, nil, addState, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
-				require.NoError(t, err)
-			}
+			setupEvents := append([]*rstypes.HeaderedEvent(nil), r.Events()...)
 			var messages []*rstypes.HeaderedEvent
 			for i := range 25 {
 				messages = append(messages, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
 			}
+			write := func(ev *rstypes.HeaderedEvent, exclude bool) {
+				var addStateEvents []*rstypes.HeaderedEvent
+				var addStateIDs []string
+				if ev.StateKey() != nil {
+					addStateEvents = []*rstypes.HeaderedEvent{ev}
+					addStateIDs = []string{ev.EventID()}
+				}
+				_, writeErr := db.WriteEvent(ctx, ev, addStateEvents, addStateIDs, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, writeErr)
+			}
+			write(setupEvents[0], false)
 			for _, ev := range messages {
-				_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
-				require.NoError(t, err)
+				write(ev, false)
+			}
+			for _, ev := range setupEvents[1:] {
+				write(ev, true)
 			}
 
 			snapshot, err := db.NewDatabaseSnapshot(ctx)
@@ -243,9 +249,8 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
 			require.NoError(t, err)
 			events := recent[r.ID].Events
-			all := r.Events()
 			var want []string
-			for _, ev := range all[len(all)-20:] {
+			for _, ev := range messages[len(messages)-20:] {
 				want = append(want, ev.EventID())
 			}
 			var got []string
@@ -255,8 +260,8 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			require.Equal(t, want, got, "exactly the newest 20 events, in order")
 			require.True(t, recent[r.ID].Limited)
 
-			// A client limit large enough to reach the create keeps it first when
-			// no excluded events follow it.
+			// A large client limit reaches the create, but the excluded history
+			// between it and the messages still requires the split behavior.
 			recent, err = topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 100})
 			require.NoError(t, err)
 			got = nil
@@ -264,11 +269,11 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 				got = append(got, ev.EventID())
 			}
 			want = nil
-			for _, ev := range all {
+			for _, ev := range messages {
 				want = append(want, ev.EventID())
 			}
-			require.Equal(t, want, got, "the whole room, create first")
-			require.False(t, recent[r.ID].Limited)
+			require.Equal(t, want, got, "hidden config history does not enter the sync timeline")
+			require.True(t, recent[r.ID].Limited)
 		})
 
 		t.Run("create-only room remains unchanged", func(t *testing.T) {

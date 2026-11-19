@@ -70,8 +70,9 @@ type StreamEvent struct {
 }
 
 type RecentEvents struct {
-	Limited bool
-	Events  []StreamEvent
+	Limited                 bool
+	Events                  []StreamEvent
+	SuppressedCreateEventID string
 }
 
 // Range represents a range between two stream positions.

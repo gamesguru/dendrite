@@ -155,7 +155,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, false,
-			events.Events, events.Limited, eventFormat, to, bundler,
+			events.Events, events.Limited, events.SuppressedCreateEventID, eventFormat, to, bundler,
 		)
 		if jerr != nil {
 			if req.Context.Err() != nil || abandonsSync(jerr) {
@@ -218,7 +218,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
 				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, true,
-				events.Events, events.Limited, eventFormat, to, bundler,
+				events.Events, events.Limited, events.SuppressedCreateEventID, eventFormat, to, bundler,
 			)
 			if err != nil {
 				if req.Context.Err() != nil || abandonsSync(err) {
@@ -1151,6 +1151,7 @@ func topologicalRecentEvents(
 				return nil, err
 			}
 			if hasExcludedAfterCreate {
+				res.SuppressedCreateEventID = picked[0].EventID()
 				picked = picked[1:]
 				res.Limited = true
 			}
@@ -1171,6 +1172,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	isPeek bool,
 	recentStreamEvents []types.StreamEvent,
 	limited bool,
+	suppressedCreateEventID string,
 	eventFormat synctypes.ClientEventFormat,
 	sentAt types.StreamPosition,
 	bundler *syncBundler,
@@ -1230,9 +1232,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	// left to the state. Give the client a cursor rather than an empty timeline:
 	// run the create through the same filter and, if visible, move it from the
 	// state to the timeline. On a filter error leave the timeline empty.
-	if !isPeek && len(events) == 0 && len(recentStreamEvents) > 0 {
+	if !isPeek && err == nil && len(events) == 0 && suppressedCreateEventID != "" {
 		for _, se := range stateEvents {
-			if se.Type() != spec.MRoomCreate || !se.StateKeyEquals("") {
+			if se.EventID() != suppressedCreateEventID {
 				continue
 			}
 			visible, visErr := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, []*rstypes.HeaderedEvent{se}, internal.SyncEndpoint)
@@ -1244,6 +1246,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			} else if len(visible) == 1 {
 				events = visible
 				limited = true
+				stateEvents = removeDuplicates(stateEvents, events)
 			}
 			break
 		}
