@@ -16,6 +16,7 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/test/testrig"
 )
@@ -119,8 +120,9 @@ func TestTopologicalRecentEventsSkipsBackfilledBatches(t *testing.T) {
 // create stays in the timeline.
 func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
-		for _, hideGap := range []bool{true, false} {
+		t.Run("hidden history after create", func(t *testing.T) {
 			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+			defer closeDB()
 			cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
 			db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
 			require.NoError(t, err)
@@ -128,39 +130,171 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 
 			alice := test.NewUser(t)
 			r := test.NewRoom(t, alice)
-			setupEvents := len(r.Events())
+			setupEvents := append([]*rstypes.HeaderedEvent(nil), r.Events()...)
+			create := setupEvents[0]
 			m1 := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "one"})
 			m2 := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "two"})
 
-			for i, ev := range r.Events() {
-				exclude := hideGap && i > 0 && i < setupEvents
+			write := func(ev *rstypes.HeaderedEvent, exclude bool) types.StreamPosition {
 				var addState []string
+				var addStateEvents []*rstypes.HeaderedEvent
 				if ev.StateKey() != nil {
 					addState = []string{ev.EventID()}
+					addStateEvents = []*rstypes.HeaderedEvent{ev}
 				}
-				_, err := db.WriteEvent(ctx, ev, nil, addState, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
-				require.NoError(t, err)
+				position, writeErr := db.WriteEvent(ctx, ev, addStateEvents, addState, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, writeErr)
+				return position
+			}
+
+			// Persist the visible timeline before its hidden parents/configuration,
+			// matching a room that was joined before its history was backfilled.
+			write(create, false)
+			m1Pos := write(m1, false)
+			write(m2, false)
+			var hiddenConfig []*rstypes.HeaderedEvent
+			for _, ev := range setupEvents[1:] {
+				write(ev, true)
+				hiddenConfig = append(hiddenConfig, ev)
 			}
 
 			snapshot, err := db.NewDatabaseSnapshot(ctx)
 			require.NoError(t, err)
+			defer snapshot.Rollback() //nolint:errcheck
 			to, err := snapshot.MaxStreamPositionForPDUs(ctx)
 			require.NoError(t, err)
 
 			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
 			require.NoError(t, err)
 			events := recent[r.ID].Events
-			if hideGap {
-				require.Len(t, events, 2, "create left out when hidden events follow it")
-				require.Equal(t, m1.EventID(), events[0].EventID())
-				require.Equal(t, m2.EventID(), events[1].EventID())
-				require.True(t, recent[r.ID].Limited)
-			} else {
-				require.Equal(t, r.Events()[0].EventID(), events[0].EventID(), "create stays first without a gap")
-				require.False(t, recent[r.ID].Limited)
+			require.Len(t, events, 2, "the create is left for backward pagination across the hidden gap")
+			require.Equal(t, m1.EventID(), events[0].EventID())
+			require.Equal(t, m2.EventID(), events[1].EventID())
+			require.True(t, recent[r.ID].Limited)
+
+			// The create remains in the state snapshot; removing it from the
+			// timeline must not lose it from a complete sync response.
+			stateFilter := synctypes.DefaultStateFilter()
+			state, err := snapshot.CurrentState(ctx, r.ID, &stateFilter, nil)
+			require.NoError(t, err)
+			stateIDs := make(map[string]struct{}, len(state))
+			for _, ev := range state {
+				stateIDs[ev.EventID()] = struct{}{}
 			}
-			snapshot.Rollback() //nolint:errcheck
-			closeDB()
-		}
+			require.Contains(t, stateIDs, create.EventID())
+
+			// The prev_batch is immediately before the first retained event.
+			depth, streamPos, err := snapshot.PositionInTopology(ctx, events[0].EventID())
+			require.NoError(t, err)
+			prevBatch := types.TopologyToken{Depth: depth, PDUPosition: streamPos}
+			prevBatch.Decrement()
+			require.Equal(t, m1Pos-1, prevBatch.PDUPosition)
+
+			// Exercise the stream-token backfill path: hidden config rows were
+			// persisted after m1, but are topologically between m1 and the create.
+			page, _, _, err := snapshot.GetEventsBeforeStreamPosition(
+				ctx, prevBatch.PDUPosition, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 50}, true,
+			)
+			require.NoError(t, err)
+			pageIDs := make([]string, 0, len(page))
+			for _, ev := range page {
+				pageIDs = append(pageIDs, ev.EventID())
+			}
+			require.Len(t, pageIDs, len(hiddenConfig)+1)
+			require.Equal(t, create.EventID(), pageIDs[len(pageIDs)-1], "the create is last in the backward page")
+			for _, ev := range hiddenConfig {
+				require.Contains(t, pageIDs, ev.EventID(), "hidden config stored after the cursor remains pageable")
+			}
+		})
+
+		t.Run("visible history is unchanged", func(t *testing.T) {
+			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+			defer closeDB()
+			cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+			db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+			require.NoError(t, err)
+			ctx := t.Context()
+
+			alice := test.NewUser(t)
+			r := test.NewRoom(t, alice)
+			for _, ev := range r.Events() {
+				var addState []string
+				if ev.StateKey() != nil {
+					addState = []string{ev.EventID()}
+				}
+				_, err := db.WriteEvent(ctx, ev, nil, addState, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, err)
+			}
+			var messages []*rstypes.HeaderedEvent
+			for i := range 25 {
+				messages = append(messages, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("%d", i)}))
+			}
+			for _, ev := range messages {
+				_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+				require.NoError(t, err)
+			}
+
+			snapshot, err := db.NewDatabaseSnapshot(ctx)
+			require.NoError(t, err)
+			defer snapshot.Rollback() //nolint:errcheck
+			to, err := snapshot.MaxStreamPositionForPDUs(ctx)
+			require.NoError(t, err)
+			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
+			require.NoError(t, err)
+			events := recent[r.ID].Events
+			all := r.Events()
+			var want []string
+			for _, ev := range all[len(all)-20:] {
+				want = append(want, ev.EventID())
+			}
+			var got []string
+			for _, ev := range events {
+				got = append(got, ev.EventID())
+			}
+			require.Equal(t, want, got, "exactly the newest 20 events, in order")
+			require.True(t, recent[r.ID].Limited)
+
+			// A client limit large enough to reach the create keeps it first when
+			// no excluded events follow it.
+			recent, err = topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 100})
+			require.NoError(t, err)
+			got = nil
+			for _, ev := range recent[r.ID].Events {
+				got = append(got, ev.EventID())
+			}
+			want = nil
+			for _, ev := range all {
+				want = append(want, ev.EventID())
+			}
+			require.Equal(t, want, got, "the whole room, create first")
+			require.False(t, recent[r.ID].Limited)
+		})
+
+		t.Run("create-only room remains unchanged", func(t *testing.T) {
+			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+			defer closeDB()
+			cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+			db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+			require.NoError(t, err)
+			ctx := t.Context()
+
+			alice := test.NewUser(t)
+			r := test.NewRoom(t, alice)
+			create := r.Events()[0]
+			_, err = db.WriteEvent(ctx, create, []*rstypes.HeaderedEvent{create}, []string{create.EventID()}, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+
+			snapshot, err := db.NewDatabaseSnapshot(ctx)
+			require.NoError(t, err)
+			defer snapshot.Rollback() //nolint:errcheck
+			to, err := snapshot.MaxStreamPositionForPDUs(ctx)
+			require.NoError(t, err)
+			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
+			require.NoError(t, err)
+			require.Len(t, recent[r.ID].Events, 1)
+			require.Equal(t, create.EventID(), recent[r.ID].Events[0].EventID())
+			require.False(t, recent[r.ID].Limited)
+		})
 	})
 }

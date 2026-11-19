@@ -1134,22 +1134,23 @@ func topologicalRecentEvents(
 			res.Limited = true
 		}
 		slices.Reverse(picked)
-		// A visible create at the head of the window with hidden events after it
-		// would anchor prev_batch at the newest event, so those hidden events
-		// paginate in above the create and clients can lose the creation summary.
-		// Leave the create in state and let backward pagination deliver it at the
-		// true start of history. Do this here, before the response builder removes
-		// timeline state events from the state block and runs lazy member loading.
+		// A visible create at the head of the window with excluded (backfilled)
+		// events later in the room is not the start of the
+		// room's live window. Keeping it would make the prev_batch shortcut in the
+		// response builder anchor at the newest event, so backward pagination
+		// would replay the hidden history above the create and clients would stop
+		// rendering it as the room's first event. Leave the create for the state
+		// block and let pagination deliver it at the true start of history.
 		if len(picked) > 1 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
-			createPos, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
+			createDepth, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
 			if err != nil {
 				return nil, err
 			}
-			hasHiddenAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createPos)
+			hasExcludedAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createDepth)
 			if err != nil {
 				return nil, err
 			}
-			if hasHiddenAfterCreate {
+			if hasExcludedAfterCreate {
 				picked = picked[1:]
 				res.Limited = true
 			}
@@ -1158,48 +1159,6 @@ func topologicalRecentEvents(
 		result[roomID] = res
 	}
 	return result, nil
-}
-
-// stripSplitCreate removes a leading m.room.create from a complete-sync
-// timeline when events excluded from sync lie between it and the next
-// delivered event. Such a window is not the start of the room: keeping the
-// create in it makes the prev_batch shortcut below anchor at the newest event,
-// so backwards pagination replays the hidden history above the create and
-// clients stop rendering the create as the room's first event. Delivering the
-// create through /messages instead puts it after the hidden history, where it
-// belongs, while the state block still carries it.
-func stripSplitCreate(
-	ctx context.Context,
-	snapshot storage.DatabaseTransaction,
-	roomID string,
-	events []types.StreamEvent,
-) ([]types.StreamEvent, *rstypes.HeaderedEvent, bool, error) {
-	if len(events) < 2 {
-		return events, nil, false, nil
-	}
-	create, next := events[0], events[1]
-	if create.Type() != spec.MRoomCreate || !create.StateKeyEquals("") {
-		return events, nil, false, nil
-	}
-	createDepth, createStream, err := snapshot.PositionInTopology(ctx, create.EventID())
-	if err != nil {
-		return events, nil, false, fmt.Errorf("PositionInTopology(%s): %w", create.EventID(), err)
-	}
-	nextDepth, nextStream, err := snapshot.PositionInTopology(ctx, next.EventID())
-	if err != nil {
-		return events, nil, false, fmt.Errorf("PositionInTopology(%s): %w", next.EventID(), err)
-	}
-	split, err := snapshot.HasBackfilledEventBetween(ctx, roomID,
-		types.TopologyToken{Depth: createDepth, PDUPosition: createStream},
-		types.TopologyToken{Depth: nextDepth, PDUPosition: nextStream},
-	)
-	if err != nil {
-		return events, nil, false, fmt.Errorf("HasBackfilledEventBetween: %w", err)
-	}
-	if !split {
-		return events, nil, false, nil
-	}
-	return events[1:], create.HeaderedEvent, true, nil
 }
 
 func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
@@ -1219,20 +1178,6 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	jr = types.NewJoinResponse()
 	// TODO: When filters are added, we may need to call this multiple times to get enough events.
 	//       See: https://github.com/matrix-org/synapse/blob/v0.19.3/synapse/handlers/sync.py#L316
-
-	// A create that is separated from the live window by hidden history belongs
-	// to history, not to the window. Remove it before the timeline and state are
-	// split below, so it stays in the state block, and mark the window limited
-	// so clients paginate from before the first event they were given.
-	var createdEvent *rstypes.HeaderedEvent
-	var createdSuppressed bool
-	recentStreamEvents, createdEvent, createdSuppressed, err = stripSplitCreate(ctx, snapshot, roomID, recentStreamEvents)
-	if err != nil {
-		return jr, err
-	}
-	if createdSuppressed {
-		limited = true
-	}
 
 	// Work our way through the timeline events and pick out the event IDs
 	// of any state events that appear in the timeline. We'll specifically
@@ -1281,10 +1226,27 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
 		}
 	}
-	if createdSuppressed && len(events) == 0 && createdEvent != nil {
-		// History visibility removed every event after the create. Do not
-		// strand the client with an empty window and no cursor: keep the create.
-		events = append(events, createdEvent)
+	// History visibility can remove every event of a window whose create was
+	// left to the state. Give the client a cursor rather than an empty timeline:
+	// run the create through the same filter and, if visible, move it from the
+	// state to the timeline. On a filter error leave the timeline empty.
+	if !isPeek && len(events) == 0 && len(recentStreamEvents) > 0 {
+		for _, se := range stateEvents {
+			if se.Type() != spec.MRoomCreate || !se.StateKeyEquals("") {
+				continue
+			}
+			visible, visErr := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, []*rstypes.HeaderedEvent{se}, internal.SyncEndpoint)
+			if visErr != nil {
+				if abandonsSync(visErr) {
+					return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", visErr)
+				}
+				logrus.WithError(visErr).WithField("room_id", roomID).Error("unable to filter create for empty window")
+			} else if len(visible) == 1 {
+				events = visible
+				limited = true
+			}
+			break
+		}
 	}
 
 	if !stateAfter {
