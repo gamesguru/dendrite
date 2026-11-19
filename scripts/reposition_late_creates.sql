@@ -44,7 +44,8 @@ FROM
     syncapi_output_room_events
 GROUP BY
     room_id;
--- Late creates: visible to sync and stored after the room's first event.
+-- Late creates stored after the room's first event, visible or already
+-- hidden. exclude_from_sync is left exactly as it is; only the position moves.
 CREATE TEMP TABLE zz_late_creates ON COMMIT DROP AS
 SELECT
     o.id AS old_id, o.room_id, o.event_id, f.first_id, row_number() OVER (PARTITION BY o.room_id ORDER BY o.id) AS rn
@@ -53,7 +54,6 @@ FROM
     JOIN zz_first_event f ON f.room_id = o.room_id
 WHERE
     o.type = 'm.room.create'
-    AND o.exclude_from_sync = FALSE
     AND o.id > f.first_id;
 -- Unused ids below each affected room's first id, nearest first. The sequence
 -- has already passed them, so they are never handed out again.
@@ -168,7 +168,6 @@ WITH moved AS (
         p.new_id IS NOT NULL
         AND o.id = p.old_id
         AND o.event_id = p.event_id
-        AND o.exclude_from_sync = FALSE
     RETURNING
         o.event_id,
         o.id AS new_id
