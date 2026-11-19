@@ -236,4 +236,83 @@ WHERE
 ORDER BY
     o.id;
 
+\echo '--- other create misplacement: topology, missing topology row, timestamp, duplicates ---'
+-- The reposition script fixes stream order only. A create that is also late
+-- topologically (topo_late) or has no topology row (no_topo_row) is not fixed
+-- by it. ts_after_first_event is a hint only; partial-state joins can cause it.
+WITH rf AS (
+    SELECT
+        room_id,
+        min(id) AS first_id,
+        min(origin_server_ts) AS first_ts,
+        count(*) AS n_events
+    FROM
+        syncapi_output_room_events
+    GROUP BY
+        room_id
+),
+rt AS (
+    SELECT
+        room_id,
+        min(topological_position) AS min_topo
+    FROM
+        syncapi_output_room_events_topology
+    GROUP BY
+        room_id
+),
+cr AS (
+    SELECT
+        o.room_id,
+        o.event_id,
+        o.id,
+        o.exclude_from_sync,
+        o.origin_server_ts,
+        t.topological_position AS topo,
+        count(*) OVER (PARTITION BY o.room_id) AS creates_in_room
+    FROM
+        syncapi_output_room_events o
+        LEFT JOIN syncapi_output_room_events_topology t USING (event_id)
+    WHERE
+        o.type = 'm.room.create'
+)
+SELECT
+    cr.room_id,
+    cr.event_id,
+    cr.id,
+    rf.first_id,
+    cr.exclude_from_sync AS hidden,
+    (cr.id > rf.first_id) AS stream_late,
+    (cr.topo IS NULL) AS no_topo_row,
+    (cr.topo > rt.min_topo) AS topo_late,
+    (cr.origin_server_ts > rf.first_ts) AS ts_after_first_event,
+    (cr.creates_in_room > 1) AS multiple_creates,
+    to_timestamp(cr.origin_server_ts / 1000.0) AT TIME ZONE 'UTC' AS create_ts,
+    rf.n_events
+FROM
+    cr
+    JOIN rf USING (room_id)
+    LEFT JOIN rt USING (room_id)
+WHERE
+    cr.id > rf.first_id
+    OR cr.topo IS NULL
+    OR cr.topo > rt.min_topo
+    OR cr.origin_server_ts > rf.first_ts
+    OR cr.creates_in_room > 1
+ORDER BY
+    stream_late DESC,
+    cr.id;
+
+\echo '--- rooms with events but no create row (not misplaced; no create to show) ---'
+SELECT
+    e.room_id,
+    count(*) AS n_events
+FROM
+    syncapi_output_room_events e
+GROUP BY
+    e.room_id
+HAVING
+    NOT bool_or(e.type = 'm.room.create')
+ORDER BY
+    n_events DESC;
+
 ROLLBACK;
