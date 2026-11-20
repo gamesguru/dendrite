@@ -1134,6 +1134,25 @@ func topologicalRecentEvents(
 			res.Limited = true
 		}
 		slices.Reverse(picked)
+		// A create at the head of the window with excluded (backfilled)
+		// events after it is not the start of the room's delivered history.
+		// Keeping it would anchor prev_batch at the create, leaving the
+		// backfilled events unreachable. Leave the create to state and let
+		// backward pagination deliver it at the end of the history.
+		if len(picked) > 1 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
+			createDepth, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
+			if err != nil {
+				return nil, err
+			}
+			hasExcludedAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createDepth)
+			if err != nil {
+				return nil, err
+			}
+			if hasExcludedAfterCreate {
+				picked = picked[1:]
+				res.Limited = true
+			}
+		}
 		res.Events = picked
 		result[roomID] = res
 	}
@@ -1233,29 +1252,15 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if len(events) > 0 {
 		var backwardTopologyPos, backwardStreamPos types.StreamPosition
 		event := events[0]
+		// If this is the beginning of the room, we can't go back further. Return
+		// the position of the last event instead, as Synapse does with /sync
+		// next_batch, so /members?at treats the response as complete.
+		if event.Type() == spec.MRoomCreate && event.StateKeyEquals("") {
+			event = events[len(events)-1]
+		}
 		backwardTopologyPos, backwardStreamPos, err = snapshot.PositionInTopology(ctx, event.EventID())
 		if err != nil {
 			return jr, err
-		}
-		// If the window begins with the room's create and nothing excluded from
-		// sync follows it, the whole room history is in the timeline. Return the
-		// last event's position, as Synapse does with /sync next_batch, so a
-		// client or /members?at treats the response as complete.
-		// When excluded backfill follows the create, anchor prev_batch at the
-		// create instead: it is the room's history boundary, and backward
-		// pagination cannot replay the hidden events above it.
-		if event.Type() == spec.MRoomCreate && event.StateKeyEquals("") {
-			hasExcludedAfterCreate, qerr := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, backwardTopologyPos)
-			if qerr != nil {
-				return jr, qerr
-			}
-			if !hasExcludedAfterCreate {
-				event = events[len(events)-1]
-				backwardTopologyPos, backwardStreamPos, err = snapshot.PositionInTopology(ctx, event.EventID())
-				if err != nil {
-					return jr, err
-				}
-			}
 		}
 		prevBatch = &types.TopologyToken{
 			Depth:       backwardTopologyPos,

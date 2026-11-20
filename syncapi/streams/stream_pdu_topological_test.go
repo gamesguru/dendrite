@@ -16,6 +16,7 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
 	"codefloe.com/pat-s/zendrite/test/testrig"
 )
@@ -113,10 +114,11 @@ func TestTopologicalRecentEventsSkipsBackfilledBatches(t *testing.T) {
 	})
 }
 
-// A visible create followed by hidden backfill stays in the timeline. Complete
-// sync anchors prev_batch at the create, preventing the hidden events from
-// paginating above it.
-func TestTopologicalRecentEventsKeepsCreateOnHiddenGap(t *testing.T) {
+// A visible create followed by hidden events must be left out of the complete
+// sync timeline, which would otherwise anchor prev_batch at the newest event and
+// make the hidden events paginate in above the create. Without a hidden gap the
+// create stays in the timeline.
+func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		t.Run("hidden history after create", func(t *testing.T) {
 			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
@@ -133,24 +135,27 @@ func TestTopologicalRecentEventsKeepsCreateOnHiddenGap(t *testing.T) {
 			m1 := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "one"})
 			m2 := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "two"})
 
-			write := func(ev *rstypes.HeaderedEvent, exclude bool) {
+			write := func(ev *rstypes.HeaderedEvent, exclude bool) types.StreamPosition {
 				var addState []string
 				var addStateEvents []*rstypes.HeaderedEvent
 				if ev.StateKey() != nil {
 					addState = []string{ev.EventID()}
 					addStateEvents = []*rstypes.HeaderedEvent{ev}
 				}
-				_, writeErr := db.WriteEvent(ctx, ev, addStateEvents, addState, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
+				position, writeErr := db.WriteEvent(ctx, ev, addStateEvents, addState, nil, nil, exclude, gomatrixserverlib.HistoryVisibilityShared)
 				require.NoError(t, writeErr)
+				return position
 			}
 
 			// Persist the visible timeline before its hidden parents/configuration,
 			// matching a room that was joined before its history was backfilled.
 			write(create, false)
-			write(m1, false)
+			m1Pos := write(m1, false)
 			write(m2, false)
+			var hiddenConfig []*rstypes.HeaderedEvent
 			for _, ev := range setupEvents[1:] {
 				write(ev, true)
+				hiddenConfig = append(hiddenConfig, ev)
 			}
 
 			snapshot, err := db.NewDatabaseSnapshot(ctx)
@@ -162,14 +167,13 @@ func TestTopologicalRecentEventsKeepsCreateOnHiddenGap(t *testing.T) {
 			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
 			require.NoError(t, err)
 			events := recent[r.ID].Events
-			require.Len(t, events, 3)
-			require.Equal(t, create.EventID(), events[0].EventID())
-			require.Equal(t, m1.EventID(), events[1].EventID())
-			require.Equal(t, m2.EventID(), events[2].EventID())
-			require.False(t, recent[r.ID].Limited)
+			require.Len(t, events, 2, "the create is left for backward pagination across the hidden gap")
+			require.Equal(t, m1.EventID(), events[0].EventID())
+			require.Equal(t, m2.EventID(), events[1].EventID())
+			require.True(t, recent[r.ID].Limited)
 
-			// The create remains in current state, so the response builder can
-			// deduplicate it against the copy retained in the timeline.
+			// The create remains in the state snapshot; removing it from the
+			// timeline must not lose it from a complete sync response.
 			stateFilter := synctypes.DefaultStateFilter()
 			state, err := snapshot.CurrentState(ctx, r.ID, &stateFilter, nil)
 			require.NoError(t, err)
@@ -178,9 +182,33 @@ func TestTopologicalRecentEventsKeepsCreateOnHiddenGap(t *testing.T) {
 				stateIDs[ev.EventID()] = struct{}{}
 			}
 			require.Contains(t, stateIDs, create.EventID())
+
+			// The prev_batch is immediately before the first retained event.
+			depth, streamPos, err := snapshot.PositionInTopology(ctx, events[0].EventID())
+			require.NoError(t, err)
+			prevBatch := types.TopologyToken{Depth: depth, PDUPosition: streamPos}
+			prevBatch.Decrement()
+			require.Equal(t, m1Pos-1, prevBatch.PDUPosition)
+
+			// Exercise the stream-token backfill path: hidden config rows were
+			// persisted after m1, but are topologically between m1 and the create.
+			page, _, _, err := snapshot.GetEventsBeforeStreamPosition(
+				ctx, prevBatch.PDUPosition, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 50}, true,
+			)
+			require.NoError(t, err)
+			pageIDs := make([]string, 0, len(page))
+			for _, ev := range page {
+				pageIDs = append(pageIDs, ev.EventID())
+			}
+			require.Len(t, pageIDs, len(hiddenConfig)+1)
+			require.Equal(t, create.EventID(), pageIDs[len(pageIDs)-1], "the create is last in the backward page")
+			for _, ev := range hiddenConfig {
+				require.Contains(t, pageIDs, ev.EventID(), "hidden config stored after the cursor remains pageable")
+			}
 		})
 
-		t.Run("large limit keeps create despite hidden config history", func(t *testing.T) {
+		t.Run("large limit still splits hidden config history", func(t *testing.T) {
 			cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 			defer closeDB()
 			cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
@@ -232,8 +260,8 @@ func TestTopologicalRecentEventsKeepsCreateOnHiddenGap(t *testing.T) {
 			require.Equal(t, want, got, "exactly the newest 20 events, in order")
 			require.True(t, recent[r.ID].Limited)
 
-			// A large client limit reaches the create. Hidden config remains
-			// excluded without causing the visible timeline to split.
+			// A large client limit reaches the create, but the excluded history
+			// between it and the messages still requires the split behavior.
 			recent, err = topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 100})
 			require.NoError(t, err)
 			got = nil
@@ -241,12 +269,11 @@ func TestTopologicalRecentEventsKeepsCreateOnHiddenGap(t *testing.T) {
 				got = append(got, ev.EventID())
 			}
 			want = nil
-			want = append(want, setupEvents[0].EventID())
 			for _, ev := range messages {
 				want = append(want, ev.EventID())
 			}
 			require.Equal(t, want, got, "hidden config history does not enter the sync timeline")
-			require.False(t, recent[r.ID].Limited)
+			require.True(t, recent[r.ID].Limited)
 		})
 
 		t.Run("create-only room remains unchanged", func(t *testing.T) {

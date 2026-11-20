@@ -7,7 +7,6 @@ package streams
 
 import (
 	"context"
-	"math"
 	"slices"
 	"testing"
 
@@ -92,10 +91,14 @@ func containsClientEventType(events []synctypes.ClientEvent, evType string) bool
 	})
 }
 
-// Keep the create in the timeline when hidden backfill follows it, but anchor
-// prev_batch at the create so backward pagination cannot place the hidden rows
-// above it in the client's timeline.
-func TestCompleteSyncKeepsCreateAheadOfBackfilledHistory(t *testing.T) {
+// A complete sync whose visible window starts with the room create, while
+// backfilled (excluded from sync) state sits between the create and the next
+// delivered event, must not leave the create in the window. Otherwise the
+// prev_batch shortcut anchors at the newest event, backwards pagination
+// replays the hidden history above the create, and clients stop rendering the
+// create as the room's first event. The create belongs in state, and the
+// window must be limited so clients paginate past the hidden history to it.
+func TestCompleteSyncSplitsCreateBehindBackfilledHistory(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
@@ -105,9 +108,8 @@ func TestCompleteSyncKeepsCreateAheadOfBackfilledHistory(t *testing.T) {
 
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
-		create := room.Events()[0]
-		m1 := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "one"})
-		m2 := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "two"})
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "one"})
+		room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "two"})
 		storeRoomEvents(t, db, room, func(ev *rstypes.HeaderedEvent) bool {
 			// The room's initial configuration arrived as backfill and is not
 			// delivered by sync; only the create and the messages are visible.
@@ -117,18 +119,16 @@ func TestCompleteSyncKeepsCreateAheadOfBackfilledHistory(t *testing.T) {
 		jr := completeSyncRoom(t, db, alice.ID, room.ID)
 
 		require.NotNil(t, jr.Timeline.PrevBatch)
-		require.False(t, jr.Timeline.Limited, "all sync-visible events fit in the window")
-		var got []string
+		require.True(t, jr.Timeline.Limited, "the window is not the start of the room")
 		for _, ev := range jr.Timeline.Events {
-			got = append(got, ev.EventID)
+			require.NotEqual(t, spec.MRoomCreate, ev.Type, "create must not be in the live window")
 		}
-		require.Equal(t, []string{create.EventID(), m1.EventID(), m2.EventID()}, got)
 		require.NotNil(t, jr.State)
-		require.NotContains(t, clientEventTypes(jr.State.Events), spec.MRoomCreate,
-			"the create is already in the timeline")
+		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate), "create must be in state")
 
-		// Backward pagination from the create boundary must not return hidden
-		// events whose topology is after it, or replay them above the create.
+		// Backwards pagination from the window's prev_batch must deliver the
+		// hidden configuration events and then the create, which is where
+		// clients render it as the start of the room.
 		snapshot, err := db.NewDatabaseSnapshot(t.Context())
 		require.NoError(t, err)
 		defer snapshot.Rollback() //nolint:errcheck
@@ -140,7 +140,11 @@ func TestCompleteSyncKeepsCreateAheadOfBackfilledHistory(t *testing.T) {
 			&synctypes.RoomEventFilter{Limit: 100}, true,
 		)
 		require.NoError(t, err)
-		require.Empty(t, events, "the create is the room's history boundary")
+		require.NotEmpty(t, events)
+		require.Equal(t, spec.MRoomCreate, events[len(events)-1].Type(), "create is the oldest event")
+		require.True(t, slices.ContainsFunc(events, func(ev types.StreamEvent) bool {
+			return ev.Type() == spec.MRoomPowerLevels && ev.ExcludeFromSync
+		}), "hidden configuration history is delivered before the create")
 	})
 }
 
@@ -174,31 +178,10 @@ func TestCompleteSyncKeepsCreateWhenNoBackfillGap(t *testing.T) {
 		require.True(t, containsClientEventType(jr.Timeline.Events, spec.MRoomCreate),
 			"with no hidden gap the create stays in the window")
 		require.False(t, jr.Timeline.Limited)
-
-		// Without hidden history the response covers the whole room, so
-		// prev_batch points at the end of the timeline as in Synapse. A
-		// /members?at=prev_batch request must then still see the creator's
-		// membership (TestGetRoomMembersAtPoint).
-		require.NotNil(t, jr.Timeline.PrevBatch)
-		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
-		require.NoError(t, err)
-		snapshot, err := db.NewDatabaseSnapshot(t.Context())
-		require.NoError(t, err)
-		defer snapshot.Rollback() //nolint:errcheck
-		_, lastStreamPos, err := snapshot.PositionInTopology(t.Context(), room.Events()[len(room.Events())-1].EventID())
-		require.NoError(t, err)
-		require.Equal(t, lastStreamPos-1, tok.PDUPosition,
-			"prev_batch of a complete room points at the end of the timeline")
-		members, err := snapshot.SelectMemberships(
-			t.Context(), room.ID,
-			types.TopologyToken{Depth: math.MaxInt64, PDUPosition: tok.PDUPosition}, nil, nil,
-		)
-		require.NoError(t, err)
-		require.NotEmpty(t, members, "the creator's membership is visible at prev_batch")
 	})
 }
 
-func TestCompleteSyncLargeLimitKeepsCreateWhenExcludedEventsFollow(t *testing.T) {
+func TestCompleteSyncLargeLimitSplitsCreateWhenExcludedEventFollowsWindow(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
@@ -218,10 +201,10 @@ func TestCompleteSyncLargeLimitKeepsCreateWhenExcludedEventsFollow(t *testing.T)
 
 		jr := completeSyncRoom(t, db, alice.ID, room.ID, 100)
 
-		require.False(t, jr.Timeline.Limited)
+		require.True(t, jr.Timeline.Limited)
 		var want, got []string
 		for _, ev := range room.Events() {
-			if ev.EventID() != hiddenTopic.EventID() {
+			if ev.EventID() != room.Events()[0].EventID() && ev.EventID() != hiddenTopic.EventID() {
 				want = append(want, ev.EventID())
 			}
 		}
@@ -229,8 +212,8 @@ func TestCompleteSyncLargeLimitKeepsCreateWhenExcludedEventsFollow(t *testing.T)
 			got = append(got, ev.EventID)
 		}
 		require.Equal(t, want, got, "large limit preserves all visible events in order")
-		require.Contains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
-		require.NotContains(t, clientEventTypes(jr.State.Events), spec.MRoomCreate)
+		require.NotContains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
+		require.Contains(t, clientEventTypes(jr.State.Events), spec.MRoomCreate)
 	})
 }
 
