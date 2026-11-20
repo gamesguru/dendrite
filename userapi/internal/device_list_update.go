@@ -284,13 +284,6 @@ func (u *DeviceListUpdater) bumpUpdateGenerationLocked(userID string) {
 // ManualUpdate invalidates the device list for the given user and fetches the latest and tracks it.
 // Blocks until the device list is synced or the timeout is reached.
 func (u *DeviceListUpdater) ManualUpdate(ctx context.Context, serverName spec.ServerName, userID string) error {
-	// A manual refresh can be started by /keys/query when we have no cached
-	// device list. While a room has partial state, that fetch can cache an
-	// incomplete view of a user's devices just like a fetch triggered by a
-	// device-list update, so hold it until the room has been resynced.
-	if u.deferWhilePartialState(ctx, userID) {
-		return nil
-	}
 	mu := u.mutex(userID)
 	mu.Lock()
 	u.bumpUpdateGenerationLocked(userID)
