@@ -1233,12 +1233,29 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if len(events) > 0 {
 		var backwardTopologyPos, backwardStreamPos types.StreamPosition
 		event := events[0]
-		// A create at the start of the timeline is the room's history boundary.
-		// Anchor prev_batch there so excluded backfill after it cannot paginate
-		// above the create and bury it in the client's timeline.
 		backwardTopologyPos, backwardStreamPos, err = snapshot.PositionInTopology(ctx, event.EventID())
 		if err != nil {
 			return jr, err
+		}
+		// If the window begins with the room's create and nothing excluded from
+		// sync follows it, the whole room history is in the timeline. Return the
+		// last event's position, as Synapse does with /sync next_batch, so a
+		// client or /members?at treats the response as complete.
+		// When excluded backfill follows the create, anchor prev_batch at the
+		// create instead: it is the room's history boundary, and backward
+		// pagination cannot replay the hidden events above it.
+		if event.Type() == spec.MRoomCreate && event.StateKeyEquals("") {
+			hasExcludedAfterCreate, qerr := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, backwardTopologyPos)
+			if qerr != nil {
+				return jr, qerr
+			}
+			if !hasExcludedAfterCreate {
+				event = events[len(events)-1]
+				backwardTopologyPos, backwardStreamPos, err = snapshot.PositionInTopology(ctx, event.EventID())
+				if err != nil {
+					return jr, err
+				}
+			}
 		}
 		prevBatch = &types.TopologyToken{
 			Depth:       backwardTopologyPos,

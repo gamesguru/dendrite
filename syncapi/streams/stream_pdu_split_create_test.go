@@ -7,6 +7,7 @@ package streams
 
 import (
 	"context"
+	"math"
 	"slices"
 	"testing"
 
@@ -173,6 +174,27 @@ func TestCompleteSyncKeepsCreateWhenNoBackfillGap(t *testing.T) {
 		require.True(t, containsClientEventType(jr.Timeline.Events, spec.MRoomCreate),
 			"with no hidden gap the create stays in the window")
 		require.False(t, jr.Timeline.Limited)
+
+		// Without hidden history the response covers the whole room, so
+		// prev_batch points at the end of the timeline as in Synapse. A
+		// /members?at=prev_batch request must then still see the creator's
+		// membership (TestGetRoomMembersAtPoint).
+		require.NotNil(t, jr.Timeline.PrevBatch)
+		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
+		require.NoError(t, err)
+		snapshot, err := db.NewDatabaseSnapshot(t.Context())
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+		_, lastStreamPos, err := snapshot.PositionInTopology(t.Context(), room.Events()[len(room.Events())-1].EventID())
+		require.NoError(t, err)
+		require.Equal(t, lastStreamPos-1, tok.PDUPosition,
+			"prev_batch of a complete room points at the end of the timeline")
+		members, err := snapshot.SelectMemberships(
+			t.Context(), room.ID,
+			types.TopologyToken{Depth: math.MaxInt64, PDUPosition: tok.PDUPosition}, nil, nil,
+		)
+		require.NoError(t, err)
+		require.NotEmpty(t, members, "the creator's membership is visible at prev_batch")
 	})
 }
 
