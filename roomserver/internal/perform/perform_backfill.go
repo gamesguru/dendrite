@@ -576,7 +576,19 @@ func newBackfillRequester(
 	}
 }
 
-func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent gomatrixserverlib.PDU) ([]string, error) {
+func (b *backfillRequester) StateIDsBeforeEvent(
+	ctx context.Context, targetEvent gomatrixserverlib.PDU,
+) ([]string, error) {
+	return b.stateIDsBeforeEvent(ctx, targetEvent, 0)
+}
+
+// maxStateChainDepth bounds local ancestor resolution. A parent chain longer
+// than this falls back to federation rather than recursing without limit.
+const maxStateChainDepth = 128
+
+func (b *backfillRequester) stateIDsBeforeEvent(
+	ctx context.Context, targetEvent gomatrixserverlib.PDU, depth int,
+) ([]string, error) {
 	b.eventIDMap[targetEvent.EventID()] = targetEvent
 	if ids, ok := b.eventIDToBeforeStateIDs[targetEvent.EventID()]; ok {
 		return ids, nil
@@ -585,7 +597,7 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 	// this event was resolved and stored by an earlier page, its before-state
 	// snapshot is already authoritative locally; do not ask federation for it
 	// again.
-	if ids, ok := b.stateIDsFromStoredEvent(ctx, targetEvent); ok {
+	if ids, ok, _ := b.stateIDsFromStoredEvent(ctx, targetEvent); ok {
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = ids
 		return ids, nil
 	}
@@ -619,8 +631,9 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 			goto FederationHit
 		}
 		prevEventStateIDs, ok := b.eventIDToBeforeStateIDs[prevEventID]
+		rejectedSnapshot := false
 		if !ok {
-			if prevEventStateIDs, ok = b.stateIDsFromStoredEvent(ctx, prevEvent); ok {
+			if prevEventStateIDs, ok, rejectedSnapshot = b.stateIDsFromStoredEvent(ctx, prevEvent); ok {
 				b.eventIDToBeforeStateIDs[prevEventID] = prevEventStateIDs
 			}
 		}
@@ -628,6 +641,17 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 			// The create event is the root of the DAG: the state before it is
 			// empty by definition, and it has no stored before-state to read.
 			prevEventStateIDs, ok = []string{}, true
+		}
+		if !ok && rejectedSnapshot && depth < maxStateChainDepth {
+			// The parent's stored snapshot may itself be one of the shared
+			// snapshots the guard rejected. Resolve the parent from its own
+			// parent instead of asking federation for every event in a chain
+			// of bad snapshots.
+			if ancestorStateIDs, ancestorErr := b.stateIDsBeforeEvent(ctx, prevEvent, depth+1); ancestorErr == nil {
+				prevEventStateIDs = ancestorStateIDs
+				ok = true
+				b.eventIDToBeforeStateIDs[prevEventID] = ancestorStateIDs
+			}
 		}
 		if !ok {
 			if b.localStateUsable(ctx) {
@@ -687,17 +711,19 @@ FederationHit:
 
 // stateIDsFromStoredEvent returns an event's persisted before-state. A false
 // result means the event has no usable local snapshot and federation may be
-// needed. State snapshots are persisted as HAMTs, with state blocks retained
-// as a fallback for databases that predate HAMT persistence.
+// needed. When the snapshot exists but omits an auth event, rejected is true:
+// the caller can then resolve the parent locally instead of asking federation.
+// State snapshots are persisted as HAMTs, with state blocks retained as a
+// fallback for databases that predate HAMT persistence.
 func (b *backfillRequester) stateIDsFromStoredEvent(
 	ctx context.Context, event gomatrixserverlib.PDU,
-) ([]string, bool) {
+) (ids []string, ok bool, rejected bool) {
 	if !b.localStateUsable(ctx) {
-		return nil, false
+		return nil, false, false
 	}
 	states, err := b.db.StateAtEventIDs(ctx, []string{event.EventID()})
 	if err != nil || len(states) != 1 || states[0].IsRejected || states[0].BeforeStateSnapshotNID == 0 {
-		return nil, false
+		return nil, false, false
 	}
 
 	// LoadStateAtSnapshot reads the HAMT, falls back to the legacy state
@@ -705,12 +731,12 @@ func (b *backfillRequester) stateIDsFromStoredEvent(
 	resolver := state.NewStateResolution(b.db, nil, b.querier)
 	entries, err := resolver.LoadStateAtSnapshot(ctx, states[0].BeforeStateSnapshotNID)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	// The room may have entered partial state while the snapshot was loading.
 	// Re-read the durable flags before trusting entries from the snapshot.
 	if !b.recheckLocalStateUsable(ctx) {
-		return nil, false
+		return nil, false, false
 	}
 
 	eventNIDs := make([]types.EventNID, 0, len(entries))
@@ -719,13 +745,13 @@ func (b *backfillRequester) stateIDsFromStoredEvent(
 	}
 	eventIDs, err := b.db.EventIDs(ctx, eventNIDs)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
-	ids := make([]string, 0, len(entries))
+	ids = make([]string, 0, len(entries))
 	for _, entry := range entries {
 		id, ok := eventIDs[entry.EventNID]
 		if !ok {
-			return nil, false
+			return nil, false, false
 		}
 		ids = append(ids, id)
 	}
@@ -742,9 +768,9 @@ func (b *backfillRequester) stateIDsFromStoredEvent(
 			"missing_auth":    len(missing),
 			"missing_auth_id": missing[0],
 		}).Info("Ignoring stored before-state that omits an auth event")
-		return nil, false
+		return nil, false, true
 	}
-	return ids, true
+	return ids, true, false
 }
 
 // missingStateIDs returns the IDs that are not present in stateIDs.

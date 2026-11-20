@@ -433,6 +433,54 @@ func TestStateIDsBeforeEventRejectsSharedParentSnapshot(t *testing.T) {
 	require.Zero(t, fed.stateIDLookups, "the parent is stored, so the correct state can be computed locally")
 }
 
+// A chain of events can share one bad snapshot. Resolving the newest event
+// must walk back to the last good snapshot and roll the whole chain forward,
+// without asking federation for each event.
+func TestStateIDsBeforeEventRepairsBadSnapshotChain(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	create := newEvent(`{"type":"m.room.create","room_id":"!r:test","sender":"@b:test","state_key":"",` +
+		`"content":{"creator":"@b:test","room_version":"10"},"origin_server_ts":1,"depth":1,` +
+		`"prev_events":[],"auth_events":[]}`)
+	join := newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test",`+
+		`"state_key":"@b:test","content":{"membership":"join"},"origin_server_ts":2,"depth":2,`+
+		`"prev_events":[%q],"auth_events":[%q]}`, create.EventID(), create.EventID()))
+	powerLevels := newEvent(fmt.Sprintf(`{"type":"m.room.power_levels","room_id":"!r:test","sender":"@b:test",`+
+		`"state_key":"","content":{},"origin_server_ts":3,"depth":3,`+
+		`"prev_events":[%q],"auth_events":[%q]}`, join.EventID(), join.EventID()))
+	joinRules := newEvent(fmt.Sprintf(`{"type":"m.room.join_rules","room_id":"!r:test","sender":"@b:test",`+
+		`"state_key":"","content":{"join_rule":"public"},"origin_server_ts":4,"depth":4,`+
+		`"prev_events":[%q],"auth_events":[%q,%q]}`,
+		powerLevels.EventID(), powerLevels.EventID(), join.EventID()))
+
+	// Every event after the join was stored with the join's before-state.
+	db := newStoredEventsDB(create, join, powerLevels, joinRules)
+	db.beforeState = map[string]types.StateSnapshotNID{
+		join.EventID():        7,
+		powerLevels.EventID(): 7,
+		joinRules.EventID():   7,
+	}
+	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
+
+	fed := &countingFedClient{}
+	requester := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
+		db:                      db,
+		roomVersion:             gomatrixserverlib.RoomVersionV10,
+		eventIDToBeforeStateIDs: map[string][]string{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{},
+	}
+	got, err := requester.StateIDsBeforeEvent(context.Background(), joinRules)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{create.EventID(), join.EventID(), powerLevels.EventID()}, got)
+	require.Zero(t, fed.stateIDLookups, "the chain can be repaired from stored events without /state_ids")
+}
+
 // A later backfill page gets a new requester. An event stored by an earlier page
 // already has a before-state snapshot, which must be reused instead of asking
 // the remote server for /state_ids again.
