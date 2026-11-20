@@ -937,7 +937,7 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 // aliasCitedAuthEvents lets the auth check see the state's own version of an
 // auth event the target cites by a different ID.
 //
-// gomatrixserverlib checks an event against only the cited auth_events it can
+// The gomatrixserverlib auth check uses only the cited auth_events it can
 // find by ID in the before-state map, so a cited event that is not itself in
 // that state is silently skipped. When the sender has since re-joined (or
 // changed profile), the state holds a newer member event for the same key and
