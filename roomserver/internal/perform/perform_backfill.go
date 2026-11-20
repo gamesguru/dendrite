@@ -845,6 +845,7 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 				result[events[i].EventID()] = events[i]
 				b.eventIDMap[events[i].EventID()] = events[i]
 			}
+			b.aliasCitedAuthEvents(ctx, event, result)
 			return result, nil
 		}
 	}
@@ -866,9 +867,54 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 		for eventID, ev := range result {
 			b.eventIDMap[eventID] = ev
 		}
+		b.aliasCitedAuthEvents(ctx, event, result)
 		return result, nil
 	}
 	return nil, lastErr
+}
+
+// aliasCitedAuthEvents lets the auth check see the state's own version of an
+// auth event the target cites by a different ID.
+//
+// gomatrixserverlib checks an event against only the cited auth_events it can
+// find by ID in the before-state map, so a cited event that is not itself in
+// that state is silently skipped. When the sender has since re-joined (or
+// changed profile), the state holds a newer member event for the same key and
+// the sender is judged "not in room", dropping a valid event from backfill.
+// Authorization at state is meant to use the state's event for each
+// (type, state_key); this maps each cited ID that is missing from the state to
+// the state's event for the same tuple. The cited event is used only to learn
+// the tuple, and never replaces what the state says. A cited event that is
+// unknown here, or whose tuple is absent from the state, stays unmapped.
+func (b *backfillRequester) aliasCitedAuthEvents(
+	ctx context.Context, event gomatrixserverlib.PDU, state map[string]gomatrixserverlib.PDU,
+) {
+	var missing []string
+	for _, id := range event.AuthEventIDs() {
+		if _, ok := state[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	b.hydrateStateEvents(ctx, missing)
+	type tuple struct{ typ, key string }
+	byTuple := make(map[tuple]gomatrixserverlib.PDU, len(state))
+	for _, ev := range state {
+		if ev != nil && ev.StateKey() != nil {
+			byTuple[tuple{ev.Type(), *ev.StateKey()}] = ev
+		}
+	}
+	for _, id := range missing {
+		cited, ok := b.eventIDMap[id]
+		if !ok || cited == nil || cited.StateKey() == nil {
+			continue
+		}
+		if inState, ok := byTuple[tuple{cited.Type(), *cited.StateKey()}]; ok {
+			state[id] = inState
+		}
+	}
 }
 
 // ServersAtEvent is called when trying to determine which server to request from.

@@ -628,3 +628,146 @@ func TestStateIDsBeforeEventIgnoresSnapshotAfterPartialStateEnds(t *testing.T) {
 	require.Nil(t, got, "a room that left partial state must not reuse snapshots it may not have repaired")
 	require.Equal(t, 1, fed.stateIDLookups, "a room that left partial state must ask federation")
 }
+
+func TestAliasCitedAuthEventsUsesStateMemberForStaleCitation(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	oldJoin := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test","state_key":"@a:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
+	newJoin := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test","state_key":"@a:test",` +
+		`"content":{"membership":"join","displayname":"A"},"origin_server_ts":2,"depth":2,"prev_events":[],"auth_events":[]}`)
+	other := newEvent(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test","state_key":"@b:test",` +
+		`"content":{"membership":"join"},"origin_server_ts":3,"depth":3,"prev_events":[],"auth_events":[]}`)
+	target := newEvent(fmt.Sprintf(`{"type":"m.room.message","room_id":"!r:test","sender":"@a:test","content":{},`+
+		`"origin_server_ts":4,"depth":4,"prev_events":["$p"],"auth_events":[%q,"$unknown"]}`, oldJoin.EventID()))
+
+	b := &backfillRequester{
+		db:                      noLocalEventsDB{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{oldJoin.EventID(): oldJoin},
+		eventIDToBeforeStateIDs: map[string][]string{},
+	}
+	state := map[string]gomatrixserverlib.PDU{newJoin.EventID(): newJoin, other.EventID(): other}
+	b.aliasCitedAuthEvents(context.Background(), target, state)
+
+	require.Equal(t, newJoin.EventID(), state[oldJoin.EventID()].EventID(),
+		"the cited join must resolve to the state's own member event")
+	require.NotContains(t, state, "$unknown", "an unknown cited event must stay unmapped")
+	require.Len(t, state, 4-1, "only the one resolvable citation is added")
+}
+
+// staticStateProvider serves a fixed state map through the interface that
+// gomatrixserverlib's auth check uses.
+type staticStateProvider struct {
+	stateIDs  []string
+	state     map[string]gomatrixserverlib.PDU
+	requester *backfillRequester
+	alias     bool
+}
+
+func (p staticStateProvider) StateIDsBeforeEvent(context.Context, gomatrixserverlib.PDU) ([]string, error) {
+	return p.stateIDs, nil
+}
+
+func (p staticStateProvider) StateBeforeEvent(
+	ctx context.Context, _ gomatrixserverlib.RoomVersion, event gomatrixserverlib.PDU, _ []string,
+) (map[string]gomatrixserverlib.PDU, error) {
+	state := make(map[string]gomatrixserverlib.PDU, len(p.state))
+	for id, ev := range p.state {
+		state[id] = ev
+	}
+	if p.alias {
+		p.requester.aliasCitedAuthEvents(ctx, event, state)
+	}
+	return state, nil
+}
+
+func staleCitationFixture(t *testing.T) (
+	create, powerLevels, oldJoin, newJoin, leave, target gomatrixserverlib.PDU,
+) {
+	t.Helper()
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	create = newEvent(`{"type":"m.room.create","room_id":"!r:test","sender":"@a:test","state_key":"",` +
+		`"content":{"creator":"@a:test","room_version":"10"},"origin_server_ts":1,"depth":1,` +
+		`"prev_events":[],"auth_events":[]}`)
+	powerLevels = newEvent(fmt.Sprintf(`{"type":"m.room.power_levels","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"","content":{"users":{"@a:test":100},"events":{"m.space.child":50},`+
+		`"state_default":50,"events_default":0,"users_default":0},"origin_server_ts":2,"depth":2,`+
+		`"prev_events":[],"auth_events":[%q]}`, create.EventID()))
+	oldJoin = newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"@a:test","content":{"membership":"join"},"origin_server_ts":3,"depth":3,`+
+		`"prev_events":[],"auth_events":[%q]}`, create.EventID()))
+	newJoin = newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"@a:test","content":{"membership":"join","displayname":"A"},"origin_server_ts":4,`+
+		`"depth":4,"prev_events":[],"auth_events":[%q]}`, create.EventID()))
+	leave = newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"@a:test","content":{"membership":"leave"},"origin_server_ts":5,"depth":5,`+
+		`"prev_events":[],"auth_events":[%q]}`, create.EventID()))
+	target = newEvent(fmt.Sprintf(`{"type":"m.space.child","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"!child:test","content":{"via":["test"]},"origin_server_ts":6,"depth":6,`+
+		`"prev_events":["$p"],"auth_events":[%q,%q,%q]}`,
+		create.EventID(), powerLevels.EventID(), oldJoin.EventID()))
+	return
+}
+
+// A stale member citation must be judged against the before-state's own
+// membership event, not ignored because its event ID is not in that state.
+func TestBackfillAuthAcceptsStaleMemberCitationWithStateJoin(t *testing.T) {
+	create, powerLevels, oldJoin, newJoin, _, target := staleCitationFixture(t)
+	b := &backfillRequester{
+		db:         noLocalEventsDB{},
+		eventIDMap: map[string]gomatrixserverlib.PDU{oldJoin.EventID(): oldJoin},
+	}
+	provider := staticStateProvider{
+		stateIDs: []string{create.EventID(), powerLevels.EventID(), newJoin.EventID()},
+		state: map[string]gomatrixserverlib.PDU{
+			create.EventID(): create, powerLevels.EventID(): powerLevels, newJoin.EventID(): newJoin,
+		},
+		requester: b,
+		alias:     true,
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		userID := senderID.ToUserID()
+		return userID, nil
+	}
+	withoutAlias := provider
+	withoutAlias.alias = false
+	err := gomatrixserverlib.VerifyAuthRulesAtState(context.Background(), withoutAlias, target, true, userIDForSender)
+	require.ErrorContains(t, err, "not in room",
+		"without the alias the cited event is silently skipped, which is the failure this change fixes")
+
+	err = gomatrixserverlib.VerifyAuthRulesAtState(context.Background(), provider, target, true, userIDForSender)
+	require.NoError(t, err, "the before-state says the sender is joined, so the stale citation must not reject the event")
+}
+
+// A stale join citation must not rescue an event whose sender has left in the
+// before-state: the alias points at the state's leave, so auth still fails.
+func TestBackfillAuthRejectsStaleJoinCitationWhenStateHasLeave(t *testing.T) {
+	create, powerLevels, oldJoin, _, leave, target := staleCitationFixture(t)
+	b := &backfillRequester{
+		db:         noLocalEventsDB{},
+		eventIDMap: map[string]gomatrixserverlib.PDU{oldJoin.EventID(): oldJoin},
+	}
+	provider := staticStateProvider{
+		stateIDs: []string{create.EventID(), powerLevels.EventID(), leave.EventID()},
+		state: map[string]gomatrixserverlib.PDU{
+			create.EventID(): create, powerLevels.EventID(): powerLevels, leave.EventID(): leave,
+		},
+		requester: b,
+		alias:     true,
+	}
+	err := gomatrixserverlib.VerifyAuthRulesAtState(context.Background(), provider, target, true,
+		func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+			userID := senderID.ToUserID()
+			return userID, nil
+		})
+	require.ErrorContains(t, err, "not in room", "a leave in the before-state must still reject the event")
+}
