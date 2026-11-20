@@ -585,7 +585,7 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 	// this event was resolved and stored by an earlier page, its before-state
 	// snapshot is already authoritative locally; do not ask federation for it
 	// again.
-	if ids, ok := b.stateIDsFromStoredEvent(ctx, targetEvent.EventID()); ok {
+	if ids, ok := b.stateIDsFromStoredEvent(ctx, targetEvent); ok {
 		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = ids
 		return ids, nil
 	}
@@ -620,7 +620,7 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 		}
 		prevEventStateIDs, ok := b.eventIDToBeforeStateIDs[prevEventID]
 		if !ok {
-			if prevEventStateIDs, ok = b.stateIDsFromStoredEvent(ctx, prevEventID); ok {
+			if prevEventStateIDs, ok = b.stateIDsFromStoredEvent(ctx, prevEvent); ok {
 				b.eventIDToBeforeStateIDs[prevEventID] = prevEventStateIDs
 			}
 		}
@@ -689,11 +689,13 @@ FederationHit:
 // result means the event has no usable local snapshot and federation may be
 // needed. State snapshots are persisted as HAMTs, with state blocks retained
 // as a fallback for databases that predate HAMT persistence.
-func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID string) ([]string, bool) {
+func (b *backfillRequester) stateIDsFromStoredEvent(
+	ctx context.Context, event gomatrixserverlib.PDU,
+) ([]string, bool) {
 	if !b.localStateUsable(ctx) {
 		return nil, false
 	}
-	states, err := b.db.StateAtEventIDs(ctx, []string{eventID})
+	states, err := b.db.StateAtEventIDs(ctx, []string{event.EventID()})
 	if err != nil || len(states) != 1 || states[0].IsRejected || states[0].BeforeStateSnapshotNID == 0 {
 		return nil, false
 	}
@@ -727,7 +729,40 @@ func (b *backfillRequester) stateIDsFromStoredEvent(ctx context.Context, eventID
 		}
 		ids = append(ids, id)
 	}
+	// A valid before-state must contain every event the target cites for auth.
+	// A snapshot shared with the parent (for example one written for a join and
+	// reused for the state events before it) omits them, which makes the auth
+	// check skip the sender's membership and drop a valid event. Do not roll
+	// forward from or reuse such a snapshot; the caller can compute the state
+	// from the parent instead.
+	if missing := missingStateIDs(ids, event.AuthEventIDs()); len(missing) > 0 {
+		logrus.WithFields(logrus.Fields{
+			"event_id":        event.EventID(),
+			"snapshot_nid":    states[0].BeforeStateSnapshotNID,
+			"missing_auth":    len(missing),
+			"missing_auth_id": missing[0],
+		}).Info("Ignoring stored before-state that omits an auth event")
+		return nil, false
+	}
 	return ids, true
+}
+
+// missingStateIDs returns the IDs that are not present in stateIDs.
+func missingStateIDs(stateIDs, wanted []string) []string {
+	if len(wanted) == 0 {
+		return nil
+	}
+	present := make(map[string]struct{}, len(stateIDs))
+	for _, id := range stateIDs {
+		present[id] = struct{}{}
+	}
+	var missing []string
+	for _, id := range wanted {
+		if _, ok := present[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing
 }
 
 // localStateUsable reports whether a stored before-state snapshot may be

@@ -388,6 +388,51 @@ func TestStateIDsBeforeEventRollsForwardFromStoredState(t *testing.T) {
 	require.Equal(t, 1, fed.stateIDLookups)
 }
 
+// A snapshot that omits an auth event the target cites is not that event's
+// before-state: it is the parent's before-state, reused for the state events
+// before it. Rolling forward from it would drop the sender's membership from
+// the auth check and make backfill reject a valid event.
+func TestStateIDsBeforeEventRejectsSharedParentSnapshot(t *testing.T) {
+	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+	newEvent := func(body string) gomatrixserverlib.PDU {
+		ev, err := verImpl.NewEventFromTrustedJSON([]byte(body), false)
+		require.NoError(t, err)
+		return ev
+	}
+	create := newEvent(`{"type":"m.room.create","room_id":"!r:test","sender":"@b:test","state_key":"",` +
+		`"content":{"creator":"@b:test","room_version":"10"},"origin_server_ts":1,"depth":1,` +
+		`"prev_events":[],"auth_events":[]}`)
+	join := newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@b:test",`+
+		`"state_key":"@b:test","content":{"membership":"join"},"origin_server_ts":2,"depth":2,`+
+		`"prev_events":[%q],"auth_events":[%q]}`, create.EventID(), create.EventID()))
+	target := newEvent(fmt.Sprintf(`{"type":"m.room.power_levels","room_id":"!r:test","sender":"@b:test",`+
+		`"state_key":"","content":{},"origin_server_ts":3,"depth":3,`+
+		`"prev_events":[%q],"auth_events":[%q]}`, join.EventID(), join.EventID()))
+
+	// Both events were stored with the join's before-state: create only.
+	db := newStoredEventsDB(create, join, target)
+	db.beforeState = map[string]types.StateSnapshotNID{
+		join.EventID():   7,
+		target.EventID(): 7,
+	}
+	db.snapshots = map[types.StateSnapshotNID][]types.EventNID{7: {1}}
+
+	fed := &countingFedClient{}
+	requester := &backfillRequester{
+		fsAPI:                   fed,
+		servers:                 []spec.ServerName{"remote.test"},
+		db:                      db,
+		roomVersion:             gomatrixserverlib.RoomVersionV10,
+		eventIDToBeforeStateIDs: map[string][]string{},
+		eventIDMap:              map[string]gomatrixserverlib.PDU{},
+	}
+	got, err := requester.StateIDsBeforeEvent(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, []string{create.EventID(), join.EventID()}, got,
+		"the target's before-state must contain the join it cites, so the parent must be rolled forward")
+	require.Zero(t, fed.stateIDLookups, "the parent is stored, so the correct state can be computed locally")
+}
+
 // A later backfill page gets a new requester. An event stored by an earlier page
 // already has a before-state snapshot, which must be reused instead of asking
 // the remote server for /state_ids again.
