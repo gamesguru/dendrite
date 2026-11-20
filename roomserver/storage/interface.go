@@ -25,6 +25,8 @@ import (
 type Database interface {
 	UserRoomKeys
 	ReportedEvents
+	// HasValidatedRedactionForEvent reports whether any redaction of the event is validated.
+	HasValidatedRedactionForEvent(ctx context.Context, eventID string) (bool, error)
 	// SetUserErased marks a local user as erased (MSC4025), or clears the
 	// mark when the account is reactivated.
 	SetUserErased(ctx context.Context, userID string, erased bool) error
@@ -274,9 +276,17 @@ type Database interface {
 	// we did, as opposed to those listed in the state we joined with, and all the users
 	// currently joined to it.
 	GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID types.RoomNID) (later, joined []string, err error)
-	// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
+	// ClearRoomPartialState removes the partial state flag from a room
 	// Returns the device list stream ID that was stored at join time for device list replay
 	ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (deviceListStreamID int64, err error)
+	// ResyncStateNID returns the state snapshot recorded after the room's last
+	// partial state resync, or 0 if the room has never been resynced. A nonzero
+	// value means events received during the partial window can still hold
+	// before-state snapshots that the resync could not recompute.
+	ResyncStateNID(ctx context.Context, roomNID types.RoomNID) (types.StateSnapshotNID, error)
+	// StateSnapshotsIncomplete reports whether local event snapshots may include
+	// incomplete state from a partial-state period, even after that period ends.
+	StateSnapshotsIncomplete(ctx context.Context, roomNID types.RoomNID) (bool, error)
 	// GetPartialStateDeviceListStreamID returns the device list stream ID for a partial state room
 	GetPartialStateDeviceListStreamID(ctx context.Context, roomNID types.RoomNID) (int64, error)
 	// GetAllPartialStateRooms returns all rooms that currently have partial state
@@ -305,6 +315,8 @@ type UserRoomKeys interface {
 type RoomDatabase interface {
 	EventDatabase
 	UserRoomKeys
+	// HasValidatedRedactionForEvent reports whether any redaction of the event is validated.
+	HasValidatedRedactionForEvent(ctx context.Context, eventID string) (bool, error)
 	AssignRoomNID(ctx context.Context, roomID spec.RoomID, roomVersion gomatrixserverlib.RoomVersion) (roomNID types.RoomNID, err error)
 	// RoomInfo returns room information for the given room ID, or nil if there is no room.
 	RoomInfo(ctx context.Context, roomID string) (*types.RoomInfo, error)

@@ -147,7 +147,7 @@ func TestAnnotationsBackfill(t *testing.T) {
 			eventNID, _, err := deps.events.InsertEvent(ctx, nil, 1, typeNID, 1, eventID, nil, 1, rejected)
 			require.NoError(t, err)
 			eventJSON := fmt.Sprintf(`{"event_id":%q,"type":"m.reaction","sender":"@alice:test","content":%s}`, eventID, content)
-			require.NoError(t, deps.eventJSON.InsertEventJSON(ctx, nil, eventNID, []byte(eventJSON)))
+			require.NoError(t, deps.eventJSON.InsertEventJSON(ctx, nil, eventNID, []byte(eventJSON), false))
 		}
 		annotation := func(key string) string {
 			return fmt.Sprintf(`{"m.relates_to":{"rel_type":"m.annotation","event_id":"$target","key":%q}}`, key)

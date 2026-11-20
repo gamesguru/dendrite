@@ -822,6 +822,17 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			hasMembershipChange = true
 		}
 	}
+	// A membership can reach the state block without appearing in the timeline,
+	// for example with lazy loading or when the state block carries a full
+	// snapshot. Refresh the summary for those too, but keep this separate from
+	// timeline-activity tracking above.
+	hasStateMembershipChange := false
+	for _, stateEvent := range delta.StateEvents {
+		if stateEvent.Type() == spec.MRoomMember && stateEvent.StateKey() != nil {
+			hasStateMembershipChange = true
+			break
+		}
+	}
 
 	// MSC3706: Check if this room became un-partial-stated (completed partial state resync)
 	// in the sync range. If so, we need to send the room summary with updated member counts.
@@ -934,7 +945,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	switch delta.Membership {
 	case spec.Join:
 		jr := types.NewJoinResponse()
-		if hasMembershipChange {
+		if hasMembershipChange || hasStateMembershipChange {
 			jr.Summary, err = snapshot.GetRoomSummary(ctx, delta.RoomID, device.UserID)
 			if err != nil {
 				if abandonsSync(err) {
@@ -1123,6 +1134,25 @@ func topologicalRecentEvents(
 			res.Limited = true
 		}
 		slices.Reverse(picked)
+		// A create at the head of the window with excluded (backfilled)
+		// events after it is not the start of the room's delivered history.
+		// Keeping it would anchor prev_batch at the create, leaving the
+		// backfilled events unreachable. Leave the create to state and let
+		// backward pagination deliver it at the end of the history.
+		if len(picked) > 1 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
+			createDepth, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
+			if err != nil {
+				return nil, err
+			}
+			hasExcludedAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createDepth)
+			if err != nil {
+				return nil, err
+			}
+			if hasExcludedAfterCreate {
+				picked = picked[1:]
+				res.Limited = true
+			}
+		}
 		res.Events = picked
 		result[roomID] = res
 	}
@@ -1194,7 +1224,6 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
 		}
 	}
-
 	if !stateAfter {
 		stateEvents = removeDuplicates(stateEvents, events)
 	}
@@ -1223,8 +1252,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if len(events) > 0 {
 		var backwardTopologyPos, backwardStreamPos types.StreamPosition
 		event := events[0]
-		// If this is the beginning of the room, we can't go back further. We're going to return
-		// the TopologyToken from the last event instead. (Synapse returns the /sync next_Batch)
+		// If this is the beginning of the room, we can't go back further. Return
+		// the position of the last event instead, as Synapse does with /sync
+		// next_batch, so /members?at treats the response as complete.
 		if event.Type() == spec.MRoomCreate && event.StateKeyEquals("") {
 			event = events[len(events)-1]
 		}

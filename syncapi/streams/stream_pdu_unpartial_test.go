@@ -10,6 +10,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,8 @@ type unPartialSnapshot struct {
 	marker types.StreamPosition
 	// deltas are the state deltas the range already holds.
 	deltas []types.StateDelta
+	// summaryCalls counts GetRoomSummary calls when non-nil.
+	summaryCalls *int
 }
 
 func (s unPartialSnapshot) SelectMembershipForUser(_ context.Context, _, _ string, pos int64) (string, int64, error) {
@@ -77,6 +80,9 @@ func (s unPartialSnapshot) GetBackwardTopologyPos(context.Context, []*rstypes.He
 }
 
 func (s unPartialSnapshot) GetRoomSummary(context.Context, string, string) (*types.Summary, error) {
+	if s.summaryCalls != nil {
+		*s.summaryCalls++
+	}
 	return &types.Summary{}, nil
 }
 
@@ -105,6 +111,38 @@ func newUnPartialRequest(t *testing.T, userID string, lazyLoad bool) *types.Sync
 		MembershipChanges: map[string]struct{}{},
 		NewlyJoinedRooms:  map[string]struct{}{},
 	}
+}
+
+// A membership that reaches only the state block still changes the member
+// counts, so the client needs an updated room summary.
+func TestIncrementalSyncRefreshesSummaryForStateOnlyMembership(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	var membership *rstypes.HeaderedEvent
+	for _, event := range room.Events() {
+		if event.Type() == spec.MRoomMember && event.StateKey() != nil {
+			membership = event
+			break
+		}
+	}
+	require.NotNil(t, membership)
+	calls := 0
+	snapshot := unPartialSnapshot{
+		failoverSnapshot: failoverSnapshot{roomID: room.ID},
+		deltas: []types.StateDelta{{
+			RoomID:      room.ID,
+			Membership:  spec.Join,
+			StateEvents: []*rstypes.HeaderedEvent{membership},
+		}},
+		summaryCalls: &calls,
+	}
+	req := newUnPartialRequest(t, alice.ID, true)
+	provider := &PDUStreamProvider{rsAPI: noPartialStateRooms{}}
+
+	provider.IncrementalSync(t.Context(), snapshot, req, 10, 20)
+
+	require.Contains(t, req.Response.Rooms.Join, room.ID)
+	assert.Equal(t, 1, calls)
 }
 
 // A client that does not lazy load members was not sent the room while its state was

@@ -328,6 +328,33 @@ func Test_register(t *testing.T) {
 			},
 		},
 		{
+			name:                 "disabled registration wins over invalid username",
+			registrationDisabled: true,
+			username:             "#totalyNotValid",
+			wantErrorResponse: util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.Forbidden(`Registration is disabled on "test"`),
+			},
+		},
+		{
+			name:                 "disabled registration wins over weak password",
+			registrationDisabled: true,
+			password:             "short",
+			wantErrorResponse: util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.Forbidden(`Registration is disabled on "test"`),
+			},
+		},
+		{
+			name:                 "disabled registration wins over numeric username",
+			registrationDisabled: true,
+			username:             "1337",
+			wantErrorResponse: util.JSONResponse{
+				Code: http.StatusForbidden,
+				JSON: spec.Forbidden(`Registration is disabled on "test"`),
+			},
+		},
+		{
 			name:         "successful registration, numeric ID",
 			username:     "",
 			password:     "someRandomPassword",

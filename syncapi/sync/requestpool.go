@@ -260,6 +260,19 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 			return
 		}
 	}
+	// The in-memory cache only covers this Sync API process. In a multi-instance
+	// deployment another process may already have written the same effective
+	// state, so use the shared presence row to suppress redundant federation
+	// refreshes as well.
+	if err == nil && len(dbPresence) > 0 && dbPresence[0] != nil {
+		old := dbPresence[0]
+		statusUnchanged := equalPresenceStatus(old.ClientFields.StatusMsg, newPresence.ClientFields.StatusMsg)
+		nowTS := spec.AsTimestamp(time.Now())
+		if old.Presence == presenceToSet && statusUnchanged &&
+			(nowTS <= old.LastActiveTS || nowTS-old.LastActiveTS <= spec.Timestamp(time.Minute.Milliseconds())) {
+			return
+		}
+	}
 
 	if err := rp.producer.SendPresence(userID, presenceToSet, newPresence.ClientFields.StatusMsg); err != nil {
 		logrus.WithError(err).Error("Unable to publish presence message from sync")
@@ -272,6 +285,13 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 		rp.ctx, userID, presenceToSet, newPresence.ClientFields.StatusMsg,
 		spec.AsTimestamp(time.Now()), true,
 	)
+}
+
+func equalPresenceStatus(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func (rp *RequestPool) updateLastSeen(req *http.Request, device *userapi.Device) {

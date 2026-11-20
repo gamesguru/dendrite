@@ -17,6 +17,7 @@ import (
 
 	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/state"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
@@ -122,6 +123,7 @@ func (t *missingStateReq) fillGapDuringPartialState(ctx context.Context, e gomat
 	for _, newEvent := range newEvents {
 		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 			Kind:         api.KindOld,
+			GapFill:      true,
 			Event:        &types.HeaderedEvent{PDU: newEvent},
 			Origin:       t.origin,
 			SendAsServer: api.DoNotSendToOtherServers,
@@ -217,6 +219,7 @@ func (t *missingStateReq) processEventWithMissingState(
 		for _, newEvent := range newEvents {
 			err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 				Kind:         api.KindOld,
+				GapFill:      true,
 				Event:        &types.HeaderedEvent{PDU: newEvent},
 				Origin:       t.origin,
 				SendAsServer: api.DoNotSendToOtherServers,
@@ -276,6 +279,7 @@ func (t *missingStateReq) processEventWithMissingState(
 
 	err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 		Kind:          api.KindOld,
+		GapFill:       true,
 		Event:         &types.HeaderedEvent{PDU: backwardsExtremity},
 		Origin:        t.origin,
 		HasState:      true,
@@ -296,6 +300,7 @@ func (t *missingStateReq) processEventWithMissingState(
 	for _, newEvent := range newEvents {
 		err = t.inputer.processRoomEvent(ctx, t.virtualHost, &api.InputRoomEvent{
 			Kind:         api.KindOld,
+			GapFill:      true,
 			Event:        &types.HeaderedEvent{PDU: newEvent},
 			Origin:       t.origin,
 			SendAsServer: api.DoNotSendToOtherServers,
@@ -1311,19 +1316,28 @@ func (t *missingStateReq) lookupEvent(ctx context.Context, roomVersion gomatrixs
 	if err != nil {
 		return nil, err
 	}
-
+	var storedPrunedFallback gomatrixserverlib.PDU
 	if localFirst {
 		// fetch from the roomserver
 		events, err := t.db.EventsFromIDs(ctx, t.roomInfo, []string{missingEventID})
 		if err != nil {
 			t.log.Warnf("Failed to query roomserver for missing event %s: %s - falling back to remote", missingEventID, err)
 		} else if len(events) == 1 {
-			return events[0].PDU, nil
+			if eventutil.StoredCopyLooksHashPruned(verImpl, events[0].JSON()) {
+				// The database reconstructs hash-pruned rows as Redacted()==false,
+				// so verify the stored JSON itself and keep it only as a last resort.
+				storedPrunedFallback = events[0].PDU
+			} else {
+				return events[0].PDU, nil
+			}
 		}
 	}
 	var event gomatrixserverlib.PDU
 	found := false
 	var validationError error
+	// A copy that looks hash-pruned is only used if no server has a full one.
+	var prunedEvent gomatrixserverlib.PDU
+	var prunedValidationError error
 	// Cap the number of servers to try per event to avoid exhaustively
 	// iterating hundreds of servers that don't have the event.
 	serversToTry := t.servers
@@ -1359,6 +1373,17 @@ serverLoop:
 				}
 				break serverLoop
 			case err == nil:
+				if eventutil.LooksHashPruned(txn.PDUs[0], event) {
+					// Prefer another server's copy; keep this one as a fallback.
+					t.log.WithFields(logrus.Fields{
+						"missing_event_id": missingEventID,
+						"server_name":      serverName,
+					}).Debug("Event from /event looks hash-pruned (redacted with no redaction metadata); preferring a full copy if one is available")
+					if prunedEvent == nil {
+						prunedEvent = event
+					}
+					continue
+				}
 				found = true
 				break serverLoop
 			default:
@@ -1366,6 +1391,16 @@ serverLoop:
 				continue
 			}
 		}
+	}
+	if !found && prunedEvent != nil {
+		// Every server returned a pruned copy: store it rather than leave a hole in the DAG.
+		event, validationError = prunedEvent, prunedValidationError
+		found = true
+	}
+	if !found && storedPrunedFallback != nil {
+		// A local copy is already stored and previously accepted. Preserve the old
+		// local-first trust behavior if federation has no better copy.
+		return t.cacheAndReturn(storedPrunedFallback), nil
 	}
 	if !found {
 		// Remember that this event is unfindable so we don't retry it
@@ -1379,6 +1414,11 @@ serverLoop:
 	if err := verifyFetchedEventSignatures(ctx, event, missingEventID, t.keys, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 		return t.inputer.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 	}); err != nil {
+		if storedPrunedFallback != nil {
+			// Do not turn an already-stored event into a gap solely because this
+			// retry could not fetch signature keys for the remote fallback.
+			return t.cacheAndReturn(storedPrunedFallback), nil
+		}
 		t.log.WithError(err).Warnf("Couldn't validate signature of event %q from /event", missingEventID)
 		return nil, err
 	}

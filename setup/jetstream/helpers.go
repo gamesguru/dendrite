@@ -27,6 +27,40 @@ func JetStreamConsumer(
 	f func(ctx context.Context, msgs []*nats.Msg) bool,
 	opts ...nats.SubOpt,
 ) error {
+	return JetStreamConsumerWithAckAction(ctx, js, subj, durable, batch, func(ctx context.Context, msgs []*nats.Msg) AckAction {
+		if f(ctx, msgs) {
+			return AckActionAck
+		}
+		return AckActionNak
+	}, opts...)
+}
+
+// pullDurableSuffix is appended to a configured durable name for its pull
+// consumer. Metric labels are built from the pull durable name.
+const pullDurableSuffix = "Pull"
+
+// AckAction is the action a JetStream consumer takes after processing a batch.
+type AckAction uint8
+
+const (
+	// AckActionNak asks JetStream to redeliver messages after its retry delay.
+	// It is the zero value so an unset action fails safe by redelivering.
+	AckActionNak AckAction = iota
+	// AckActionAck acknowledges messages after the callback completes.
+	AckActionAck
+	// AckActionDefer leaves messages unacknowledged. The callback must arrange
+	// to acknowledge them later and keep their delivery alive in the meantime.
+	// It should call RecordConsumerAck for each acknowledgement it sends.
+	AckActionDefer
+)
+
+// JetStreamConsumerWithAckAction starts a durable consumer whose callback can
+// defer acknowledging a message until work represented by it is durable.
+func JetStreamConsumerWithAckAction(
+	ctx context.Context, js nats.JetStreamContext, subj, durable string, batch int,
+	f func(ctx context.Context, msgs []*nats.Msg) AckAction,
+	opts ...nats.SubOpt,
+) error {
 	var ownership Ownership
 	if protected, isProtected := js.(protectedJetStream); isProtected {
 		ownership = protected.ownership
@@ -47,7 +81,7 @@ func JetStreamConsumer(
 		}
 	}(durable)
 
-	durable += "Pull"
+	durable += pullDurableSuffix
 	if ownership != nil {
 		err := retryAPI(ctx, "configure durable "+durable, func() error {
 			return ConfigureHADelivery(ctx, js, subj, durable)
@@ -155,7 +189,7 @@ func redeliveryBackoff(attempts uint64) time.Duration {
 
 func jetStreamConsumerWorker(
 	ctx context.Context, sub *nats.Subscription, subj, durable string, batch int,
-	f func(ctx context.Context, msgs []*nats.Msg) bool,
+	f func(ctx context.Context, msgs []*nats.Msg) AckAction,
 	ownership Ownership,
 ) {
 	progress := newConsumerProgress(durable)
@@ -256,7 +290,7 @@ func jetStreamConsumerWorker(
 		}
 		stopProgress := KeepAliveDelivery(ctx, ownership, msgs)
 		progress.start(msgs)
-		acknowledge := f(ctx, msgs)
+		action := f(ctx, msgs)
 		progress.finish()
 		stopProgress()
 		// Ownership can be lost while the callback is running, so it is
@@ -264,7 +298,7 @@ func jetStreamConsumerWorker(
 		if !ownedOrStop("acknowledging") {
 			return
 		}
-		if acknowledge {
+		if action == AckActionAck {
 			for _, msg := range msgs {
 				if err = ackWithin(ctx, msg.AckSync); err != nil {
 					logrus.WithContext(ctx).WithField("subject", subj).Warn(fmt.Errorf("msg.AckSync: %w", err))
@@ -273,7 +307,7 @@ func jetStreamConsumerWorker(
 				}
 				progress.acked()
 			}
-		} else {
+		} else if action == AckActionNak {
 			for _, msg := range msgs {
 				delay := redeliveryDelay(msg)
 				consumerRedeliveries.WithLabelValues(subj).Inc()

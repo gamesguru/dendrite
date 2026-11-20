@@ -128,10 +128,10 @@ func main() {
 			cfg.ClientAPI.RegistrationDisabled = false
 			cfg.ClientAPI.OpenRegistrationWithoutVerificationEnabled = true
 			cfg.ClientAPI.RegistrationSharedSecret = "complement"
-			cfg.Global.Presence = config.PresenceOptions{
-				EnableInbound:  true,
-				EnableOutbound: true,
-			}
+			// Set the flags only: replacing the struct would zero
+			// federation_interval, which the loader rejects.
+			cfg.Global.Presence.EnableInbound = true
+			cfg.Global.Presence.EnableOutbound = true
 			cfg.SyncAPI.Fulltext = config.Fulltext{
 				Enabled:   true,
 				IndexPath: config.Path(filepath.Join(*dirPath, "searchindex")),

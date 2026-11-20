@@ -9,13 +9,16 @@ import (
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/postgres"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/sqlite3"
 	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
+	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
 )
 
@@ -160,5 +163,60 @@ func TestReindex(t *testing.T) {
 		if len(events) != wantEventCount {
 			t.Fatalf("expected %d events, got %d", wantEventCount, len(events))
 		}
+	})
+}
+
+// SelectRecentEvents takes a list of rooms and a flag choosing whether events
+// excluded from sync are returned. Both queries must accept the room list, which
+// the PostgreSQL query used when the flag is false once did not.
+func TestSelectRecentEventsExcludedFromSync(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		roomA := test.NewRoom(t, alice)
+		roomB := test.NewRoom(t, alice)
+
+		tab, db, close := newOutputRoomEventsTable(ctx, t, dbType)
+		defer close()
+
+		visible := roomA.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "visible"})
+		hidden := roomA.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hidden"})
+		other := roomB.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "other room"})
+
+		var positions []types.StreamPosition
+		require.NoError(t, sqlutil.WithTransaction(db, func(txn *sql.Tx) error {
+			for _, tc := range []struct {
+				ev      *rstypes.HeaderedEvent
+				exclude bool
+			}{{visible, false}, {hidden, true}, {other, false}} {
+				pos, err := tab.InsertEvent(ctx, txn, tc.ev, nil, nil, nil, tc.exclude, gomatrixserverlib.HistoryVisibilityShared)
+				if err != nil {
+					return err
+				}
+				positions = append(positions, pos)
+			}
+			return nil
+		}))
+
+		rng := types.Range{From: 0, To: positions[len(positions)-1]}
+		ids := func(res map[string]types.RecentEvents, roomID string) []string {
+			var out []string
+			for _, ev := range res[roomID].Events {
+				out = append(out, ev.EventID())
+			}
+			return out
+		}
+		filter := &synctypes.RoomEventFilter{Limit: 10, Types: &[]string{"m.room.message"}}
+		roomIDs := []string{roomA.ID, roomB.ID}
+
+		onlySync, err := tab.SelectRecentEvents(ctx, nil, roomIDs, rng, filter, true, true)
+		require.NoError(t, err)
+		require.Equal(t, []string{visible.EventID()}, ids(onlySync, roomA.ID), "excluded events are left out for sync")
+		require.Equal(t, []string{other.EventID()}, ids(onlySync, roomB.ID))
+
+		all, err := tab.SelectRecentEvents(ctx, nil, roomIDs, rng, filter, true, false)
+		require.NoError(t, err)
+		require.Equal(t, []string{visible.EventID(), hidden.EventID()}, ids(all, roomA.ID), "excluded events are returned when asked for")
+		require.Equal(t, []string{other.EventID()}, ids(all, roomB.ID))
 	})
 }

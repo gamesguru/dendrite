@@ -359,6 +359,20 @@ func (d *DatabaseTransaction) GetEventsBeforeStreamPosition(
 		}
 		if pos.Depth > 0 {
 			maxBackfillDepth = pos.Depth
+			// A token is the position just before the first synced event of its
+			// timeline, so history must stay reachable up to that event's depth.
+			// The parents of a join stored before them (a late-arriving
+			// backfill) sit deeper than any event persisted at or below the
+			// token, so the depth found above alone would cut them off.
+			first, ferr := d.Topology.SelectFirstSyncedDepthAfterStreamPosition(ctx, d.txn, roomID, maxStreamPos)
+			switch {
+			case ferr == nil:
+				if first > maxBackfillDepth {
+					maxBackfillDepth = first
+				}
+			case !errors.Is(ferr, sql.ErrNoRows):
+				return nil, types.TopologyToken{}, types.TopologyToken{}, fmt.Errorf("d.Topology.SelectFirstSyncedDepthAfterStreamPosition: %w", ferr)
+			}
 		}
 	}
 	eIDs, start, end, err = d.Topology.SelectEventIDsBeforeStreamPosition(
@@ -375,6 +389,26 @@ func (d *DatabaseTransaction) BackwardExtremitiesForRoom(
 	ctx context.Context, roomID string,
 ) (backwardExtremities map[string][]string, err error) {
 	return d.BackwardExtremities.SelectBackwardExtremitiesForRoom(ctx, d.txn, roomID)
+}
+
+func (d *DatabaseTransaction) RoomLiveStartPosition(
+	ctx context.Context, roomID string,
+) (types.StreamPosition, bool, error) {
+	return d.Topology.SelectLiveStartPosition(ctx, d.txn, roomID)
+}
+
+// HasExcludedEventsAfterTopologyPosition reports whether an event excluded
+// from sync has a greater topological position in the room.
+func (d *DatabaseTransaction) HasExcludedEventsAfterTopologyPosition(
+	ctx context.Context, roomID string, position types.StreamPosition,
+) (bool, error) {
+	return d.Topology.HasExcludedEventsAfterTopologyPosition(ctx, d.txn, roomID, position)
+}
+
+func (d *DatabaseTransaction) ProspectiveEventPosition(
+	ctx context.Context, event *rstypes.HeaderedEvent,
+) (types.StreamPosition, error) {
+	return d.Topology.ProspectiveEventPosition(ctx, d.txn, event)
 }
 
 func (d *DatabaseTransaction) EventPositionInTopology(
@@ -401,7 +435,8 @@ func (d *DatabaseTransaction) EventPositionByStreamPosition(
 }
 
 // EventPositionsInTopology returns current positions for multiple events in a
-// single query, omitting IDs that are not stored in topology.
+// single query. IDs not stored in topology are omitted; callers must handle
+// missing map entries.
 func (d *DatabaseTransaction) EventPositionsInTopology(
 	ctx context.Context, eventIDs []string,
 ) (map[string]types.TopologyToken, error) {

@@ -90,6 +90,15 @@ const upsertRoomStatesSQL = "" +
 const deleteRoomStateByEventIDSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE event_id = $1"
 
+// Same guard as updateUnredactedEventJSONSQL; see nulSafeJSONB.
+var updateUnredactedCurrentRoomStateEventJSONSQL = "" +
+	"UPDATE syncapi_current_room_state SET headered_event_json = $1, contains_url = $2 WHERE event_id = $3" +
+	" AND CASE WHEN headered_event_json ~ " + invalidJSONEscapeSQL +
+	" OR $4::text ~ " + invalidJSONEscapeSQL +
+	" THEN headered_event_json = $4::text" +
+	" ELSE headered_event_json::jsonb = $4::text::jsonb END" +
+	" AND (" + nulSafeJSONB("headered_event_json") + " -> 'unsigned' -> 'redacted_because') IS NULL"
+
 const deleteRoomStateByEventIDsSQL = "" +
 	"DELETE FROM syncapi_current_room_state WHERE event_id = ANY($1)"
 
@@ -163,6 +172,7 @@ type currentRoomStateStatements struct {
 	selectJoinedUsersStmt              *sql.Stmt
 	selectJoinedUsersInRoomStmt        *sql.Stmt
 	selectEventsWithEventIDsStmt       *sql.Stmt
+	updateUnredactedEventJSONStmt      *sql.Stmt
 	selectStateEventStmt               *sql.Stmt
 	selectStateEventsStmt              *sql.Stmt
 	selectSharedUsersStmt              *sql.Stmt
@@ -201,6 +211,7 @@ func NewPostgresCurrentRoomStateTable(db *sql.DB) (tables.CurrentRoomState, erro
 		{&s.selectJoinedUsersStmt, selectJoinedUsersSQL},
 		{&s.selectJoinedUsersInRoomStmt, selectJoinedUsersInRoomSQL},
 		{&s.selectEventsWithEventIDsStmt, selectEventsWithEventIDsSQL},
+		{&s.updateUnredactedEventJSONStmt, updateUnredactedCurrentRoomStateEventJSONSQL},
 		{&s.selectStateEventStmt, selectStateEventSQL},
 		{&s.selectStateEventsStmt, selectStateEventsSQL},
 		{&s.selectSharedUsersStmt, selectSharedUsersSQL},
@@ -555,6 +566,26 @@ func (s *currentRoomStateStatements) SelectEventsWithEventIDs(
 	}
 	defer internal.CloseAndLogIfError(ctx, rows, "selectEventsWithEventIDs: rows.close() failed")
 	return currentRoomStateRowsToStreamEvents(rows)
+}
+
+func (s *currentRoomStateStatements) UpdateUnredactedEventJSON(
+	ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent,
+) (bool, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	data, err = restoreEventID(data, eventID)
+	if err != nil {
+		return false, err
+	}
+	containsURL := eventContainsURL(event.Content())
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, data, containsURL, eventID, string(expectedJSON))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func currentRoomStateRowsToStreamEvents(rows *sql.Rows) ([]types.StreamEvent, error) {

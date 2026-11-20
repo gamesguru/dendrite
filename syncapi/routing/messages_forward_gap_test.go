@@ -158,8 +158,14 @@ func (d forwardGapDB) PurgeBackwardExtremitiesForEvents(context.Context, string,
 }
 
 type forwardGapAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	state *forwardGapState
+}
+
+// QueryEventsByID reports no events: the roomserver holds nothing the syncapi
+// lacks, so gap tests see only the syncapi's own view.
+func (a *forwardGapAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
+	return nil
 }
 
 func (a *forwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
@@ -445,8 +451,20 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 
 	r = newReq(5, anchorSnapshot{anchor: types.TopologyToken{Depth: 9, PDUPosition: 11}})
 	r.fromTopologyToken = false
+	r.fromStream = &types.StreamingToken{PDUPosition: 10}
 	require.NoError(t, r.reanchorBackwardCursor(ctx))
-	assert.Equal(t, types.StreamPosition(5), r.from.Depth, "only topology tokens are re-anchored")
+	assert.Equal(t, types.StreamPosition(9), r.from.Depth, "stream tokens are re-anchored too")
+
+	// A /sync prev_batch can fall into a stream gap: the next stream position is
+	// a visible event far above an older stored segment. The cursor must move
+	// up to that event's depth, or a live backward extremity above it is
+	// filtered out and /messages never fills the gap.
+	r = newReq(31, anchorSnapshot{anchor: types.TopologyToken{Depth: 92, PDUPosition: 133938}})
+	r.from.PDUPosition = 133937
+	r.fromTopologyToken = false
+	r.fromStream = &types.StreamingToken{PDUPosition: 133937}
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(92), r.from.Depth, "a stream token in a stream gap anchors at the next event's depth")
 
 	r = newReq(5, anchorSnapshot{err: errors.New("db down")})
 	require.Error(t, r.reanchorBackwardCursor(ctx))
@@ -464,9 +482,13 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 // not they contain the missing parent. It stands in for a remote server that
 // has the events around a hole but not the dangling prev_event itself.
 type replayForwardGapAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	events []*rstypes.HeaderedEvent
 	calls  int
+}
+
+func (a *replayForwardGapAPI) QueryEventsByID(context.Context, *api.QueryEventsByIDRequest, *api.QueryEventsByIDResponse) error {
+	return nil
 }
 
 func (a *replayForwardGapAPI) PerformBackfill(_ context.Context, req *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {

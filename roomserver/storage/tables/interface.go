@@ -22,8 +22,16 @@ type EventJSONPair struct {
 }
 
 type EventJSON interface {
-	// Insert the event JSON. On conflict, replace the event JSON with the new value (for redactions).
-	InsertEventJSON(ctx context.Context, tx *sql.Tx, eventNID types.EventNID, eventJSON []byte) error
+	// InsertEventJSON stores the JSON for a new event. If the event is already
+	// stored, redacted is true means the incoming copy was pruned (a failed
+	// content hash or a redacted event) and it must not replace the stored one;
+	// a full copy replaces the stored one unless that copy is itself the result
+	// of a redaction. Genuine redactions use OverwriteEventJSON.
+	InsertEventJSON(ctx context.Context, tx *sql.Tx, eventNID types.EventNID, eventJSON []byte, redacted bool) error
+	// OverwriteEventJSON unconditionally replaces the stored JSON. It is only
+	// for redactions, which must be able to prune an event already stored in
+	// full.
+	OverwriteEventJSON(ctx context.Context, tx *sql.Tx, eventNID types.EventNID, eventJSON []byte) error
 	BulkSelectEventJSON(ctx context.Context, tx *sql.Tx, eventNIDs []types.EventNID) ([]EventJSONPair, error)
 }
 
@@ -98,6 +106,8 @@ type Rooms interface {
 	// UpdateResyncStateNID records the state snapshot NID after a partial state resync completes.
 	// This is used to detect and prevent state regressions from out-of-order events.
 	UpdateResyncStateNID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID, resyncStateNID types.StateSnapshotNID) error
+	SelectStateSnapshotsIncomplete(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error)
+	MarkStateSnapshotsIncomplete(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error
 }
 
 type StateSnapshot interface {
@@ -315,6 +325,11 @@ type Redactions interface {
 	SelectRedactionInfoByRedactionEventID(ctx context.Context, txn *sql.Tx, redactionEventID string) (*RedactionInfo, error)
 	// SelectRedactionInfoByEventBeingRedacted returns the redaction info for the given redacted event ID, or nil if there is no match.
 	SelectRedactionInfoByEventBeingRedacted(ctx context.Context, txn *sql.Tx, eventID string) (*RedactionInfo, error)
+	// HasValidatedRedactionForEvent reports whether any redaction of the given
+	// event has been validated. A redacted event may have more than one
+	// redaction row, so asking "is there one?" is not the same as reading the
+	// first row.
+	HasValidatedRedactionForEvent(ctx context.Context, txn *sql.Tx, eventID string) (bool, error)
 	// Mark this redaction event as having been validated. This means we have both sides of the redaction and have
 	// successfully redacted the event JSON.
 	MarkRedactionValidated(ctx context.Context, txn *sql.Tx, redactionEventID string, validated bool) error

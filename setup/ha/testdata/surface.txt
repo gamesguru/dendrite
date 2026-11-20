@@ -197,6 +197,7 @@ column roomserver_rooms | room_id | text | NO |
 column roomserver_rooms | room_nid | bigint | NO | nextval('roomserver_room_nid_seq'::regclass)
 column roomserver_rooms | room_version | text | NO |
 column roomserver_rooms | state_snapshot_nid | bigint | NO | 0
+column roomserver_rooms | state_snapshots_incomplete | boolean | NO | false
 column roomserver_state_block | event_nids | ARRAY | NO |
 column roomserver_state_block | state_block_hash | bytea | YES |
 column roomserver_state_block | state_block_nid | bigint | NO | nextval('roomserver_state_block_nid_seq'::regclass)
@@ -895,6 +896,7 @@ migration mediaapi: add unused_expires_ts for asynchronous uploads
 migration roomserver: add device_lists_stream_id to partial state rooms
 migration roomserver: add forgotten column
 migration roomserver: add resync_state_nid to rooms
+migration roomserver: add state_snapshots_incomplete to rooms
 migration roomserver: backfill annotations
 migration roomserver: drop column reference_sha from roomserver_events
 migration roomserver: drop column reference_sha from roomserver_prev_events

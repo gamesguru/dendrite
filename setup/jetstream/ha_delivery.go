@@ -54,7 +54,7 @@ func KeepAliveDelivery(ctx context.Context, owner Ownership, msgs []*nats.Msg) f
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(HAConsumerAckWait / 5)
+		ticker := time.NewTicker(KeepAliveInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -125,3 +125,34 @@ func WaitForOwnedPulls(ctx context.Context) {
 	case <-timer.C:
 	}
 }
+
+// AckOwned acknowledges msg, bounded by the consumer ack timeout, but only
+// while owner (nil outside HA) is still valid. A deferred acknowledgement made
+// outside the consumer worker must pass the same fence the worker applies, so a
+// frozen or retired activation cannot acknowledge work it no longer owns.
+func AckOwned(ctx context.Context, owner Ownership, msg *nats.Msg) error {
+	if owner != nil {
+		if err := owner.Valid(); err != nil {
+			return err
+		}
+	}
+	return ackWithin(ctx, msg.AckSync)
+}
+
+// ProgressOwned extends msg's delivery, but only while owner (nil outside HA)
+// is still valid, so a former owner lets the message be redelivered.
+func ProgressOwned(owner Ownership, msg *nats.Msg) error {
+	if owner != nil {
+		if err := owner.Valid(); err != nil {
+			return err
+		}
+	}
+	return msg.InProgress()
+}
+
+// KeepAliveInterval is how often active handlers extend their deliveries.
+const KeepAliveInterval = HAConsumerAckWait / 5
+
+// DeferredProgressInterval is how often deferred deliveries are extended. It
+// is well inside HAConsumerAckWait so one lost ping cannot cause redelivery.
+const DeferredProgressInterval = HAConsumerAckWait / 5

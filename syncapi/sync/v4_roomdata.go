@@ -675,8 +675,8 @@ func (rp *RequestPool) getRequiredStateDelta(
 			Backwards: true,
 		},
 		deltaFilter,
-		true, // chronological order
-		true, // only sync events
+		true,  // chronological order
+		false, // include excluded state events so state resyncs can repair client state
 	)
 	if err != nil {
 		return nil, false, err
@@ -687,13 +687,46 @@ func (rp *RequestPool) getRequiredStateDelta(
 		return nil, false, nil
 	}
 
-	var result []*rstypes.HeaderedEvent
+	// Excluded state PDUs don't appear in the timeline or add_state_ids, but
+	// they can still represent a current-state change (for example, a state
+	// resync restoring a join event). Use them only to identify changed state
+	// slots, then fetch each slot's current event so an old excluded PDU cannot
+	// overwrite newer state on the client. Keep the first-change order stable.
+	//
+	// A slot with no current event is dropped. Excluded events are mostly
+	// historical (backfill and gap-fill never touch current state), so sending
+	// one as a fallback could put a stale event in the client's required state.
+	var changedState []gomatrixserverlib.StateKeyTuple
+	seenState := make(map[gomatrixserverlib.StateKeyTuple]struct{}, len(events.Events))
 	for _, ev := range events.Events {
 		if ev.StateKey() == nil {
 			continue // not a state event
 		}
 		if rp.matchesRequiredState(ev.HeaderedEvent, userID, config, lazySenders) {
-			result = append(result, ev.HeaderedEvent)
+			tuple := gomatrixserverlib.StateKeyTuple{
+				EventType: ev.Type(),
+				StateKey:  *ev.StateKey(),
+			}
+			if _, ok := seenState[tuple]; !ok {
+				seenState[tuple] = struct{}{}
+				changedState = append(changedState, tuple)
+			}
+		}
+	}
+	if len(changedState) == 0 {
+		return nil, events.Limited, nil
+	}
+
+	// One query for every changed slot, not one per slot: a large gap can touch
+	// up to requiredStateDeltaLimit of them on every sync.
+	current, stateErr := snapshot.GetStateEvents(ctx, roomID, changedState)
+	if stateErr != nil {
+		return nil, false, stateErr
+	}
+	result := make([]*rstypes.HeaderedEvent, 0, len(changedState))
+	for _, tuple := range changedState {
+		if currentEvent := current[tuple]; currentEvent != nil && rp.matchesRequiredState(currentEvent, userID, config, lazySenders) {
+			result = append(result, currentEvent)
 		}
 	}
 	return result, events.Limited, nil

@@ -131,6 +131,8 @@ global:
   presence:
     enable_inbound: false
     enable_outbound: false
+    # Coalesce outbound presence updates before federation fanout.
+    federation_interval: 5s
 
   # Configures phone-home statistics reporting. These statistics contain the server
   # name, number of active users and some information on your deployment config.

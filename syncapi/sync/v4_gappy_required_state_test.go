@@ -32,12 +32,14 @@ func TestGetRequiredState_NonLazyPattern_DeliversStateChangedDuringGap(t *testin
 	// The power_levels change happened at position 60 - inside the gap between
 	// this room's own last-sent position (50) and the connection's current
 	// position (100).
+	powerLevels := createMockStateStreamEvent("$plmissed:localhost", "m.room.power_levels", "", 60,
+		`{"users":{"@alice:localhost":100},"events_default":0}`)
 	snapshot.SetRecentEvents(roomID, types.RecentEvents{
 		Events: []types.StreamEvent{
-			createMockStateStreamEvent("$plmissed:localhost", "m.room.power_levels", "", 60,
-				`{"users":{"@alice:localhost":100},"events_default":0}`),
+			powerLevels,
 		},
 	})
+	snapshot.SetStateEvent(roomID, "m.room.power_levels", "", powerLevels.HeaderedEvent)
 
 	config := &types.RequiredStateConfig{
 		Include: [][]string{{"m.room.power_levels", ""}},
@@ -92,4 +94,94 @@ func TestGetRequiredState_NonLazyPattern_NoChangeSinceLastSent_ReturnsEmpty(t *t
 	)
 	require.NoError(t, err)
 	assert.Empty(t, requiredState, "unchanged required_state must not be resent on every incremental sync")
+}
+
+// excludedStateEvent is a state PDU the sync API stored but hides from
+// timelines, as it does for events fed in out of order or by a state resync.
+func excludedStateEvent(eventID, eventType, stateKey string, pos types.StreamPosition, content string) types.StreamEvent {
+	ev := createMockStateStreamEvent(eventID, eventType, stateKey, pos, content)
+	ev.ExcludeFromSync = true
+	return ev
+}
+
+// TestGetRequiredState_DeliversCurrentEventForExcludedStateChange covers a
+// join that reached the sync API as an excluded event: the client still holds
+// the invite it saw earlier, and the join never appeared in any delta. The
+// delta must send the slot's current event, not the excluded PDU itself, which
+// may be stale. The result must also stay in the order slots first changed.
+func TestGetRequiredState_DeliversCurrentEventForExcludedStateChange(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	roomID := "!excluded-join:localhost"
+	userID := "@alice:localhost"
+	target := "@galaxyshock:matrix.org"
+	rp := &RequestPool{rsAPI: &mockRoomserverAPI{}}
+
+	snapshot := newMockSnapshot()
+	invite := excludedStateEvent("$invite:localhost", "m.room.member", target, 60, `{"membership":"invite"}`)
+	join := excludedStateEvent("$join:localhost", "m.room.member", target, 70, `{"membership":"join"}`)
+	power := excludedStateEvent("$pl:localhost", "m.room.power_levels", "", 65, `{"events_default":0}`)
+	// The invite is excluded too, so only the slot, not its payload, may be
+	// trusted: current state holds the join.
+	snapshot.SetRecentEvents(roomID, types.RecentEvents{Events: []types.StreamEvent{invite, power, join}})
+	snapshot.SetStateEvent(roomID, "m.room.member", target, join.HeaderedEvent)
+	snapshot.SetStateEvent(roomID, "m.room.power_levels", "", power.HeaderedEvent)
+
+	config := &types.RequiredStateConfig{
+		Include: [][]string{{"m.room.member", target}, {"m.room.power_levels", ""}},
+	}
+	roomState := types.RoomStreamState{
+		Status:    types.HaveSentRoomLive,
+		LastToken: &types.StreamingToken{PDUPosition: 50},
+	}
+	currentPos := types.StreamingToken{PDUPosition: 100}
+
+	requiredState, err := rp.getRequiredState(
+		ctx, snapshot, roomID, userID, config,
+		[]synctypes.ClientEvent{}, false, roomState, currentPos,
+	)
+	require.NoError(t, err)
+
+	require.Len(t, requiredState, 2)
+	assert.Equal(t, "m.room.member", requiredState[0].Type, "slots keep the order they first changed in")
+	assert.Equal(t, join.EventID(), requiredState[0].EventID, "the current join, not the stale invite")
+	assert.Equal(t, "m.room.power_levels", requiredState[1].Type)
+}
+
+// TestGetRequiredState_ExcludedStateChangeWithoutCurrentState covers an
+// excluded state event whose slot has no current-state row. Excluded events are
+// mostly historical (backfill and gap-fill never write current state), so
+// sending one as a fallback would put a stale event in the client's required
+// state. The slot is dropped instead.
+func TestGetRequiredState_ExcludedStateChangeWithoutCurrentState(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	roomID := "!excluded-join-no-state:localhost"
+	userID := "@alice:localhost"
+	target := "@galaxyshock:matrix.org"
+	rp := &RequestPool{rsAPI: &mockRoomserverAPI{}}
+
+	snapshot := newMockSnapshot()
+	invite := excludedStateEvent("$invite:localhost", "m.room.member", target, 60, `{"membership":"invite"}`)
+	join := excludedStateEvent("$join:localhost", "m.room.member", target, 70, `{"membership":"join"}`)
+	snapshot.SetRecentEvents(roomID, types.RecentEvents{Events: []types.StreamEvent{invite, join}})
+
+	config := &types.RequiredStateConfig{
+		Include: [][]string{{"m.room.member", target}},
+	}
+	roomState := types.RoomStreamState{
+		Status:    types.HaveSentRoomLive,
+		LastToken: &types.StreamingToken{PDUPosition: 50},
+	}
+
+	requiredState, err := rp.getRequiredState(
+		ctx, snapshot, roomID, userID, config,
+		[]synctypes.ClientEvent{}, false, roomState,
+		types.StreamingToken{PDUPosition: 100},
+	)
+	require.NoError(t, err)
+
+	assert.Empty(t, requiredState, "a historical excluded event must not be sent as current state")
 }

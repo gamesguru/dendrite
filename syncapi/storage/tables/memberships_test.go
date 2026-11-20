@@ -3,6 +3,7 @@ package tables_test
 import (
 	"context"
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 
@@ -23,6 +24,14 @@ import (
 
 func newMembershipsTable(t *testing.T, dbType test.DBType) (tables.Memberships, *sql.DB, func()) {
 	t.Helper()
+	return newMembershipsTableWithStubCurrentState(t, dbType, false)
+}
+
+// newMembershipsTableWithStubCurrentState makes the memberships table. With
+// stubCurrentState it creates a minimal current-state table instead of the real
+// one, for tests that insert hand-written rows into it.
+func newMembershipsTableWithStubCurrentState(t *testing.T, dbType test.DBType, stubCurrentState bool) (tables.Memberships, *sql.DB, func()) {
+	t.Helper()
 	connStr, close := test.PrepareDBConnectionString(t, dbType)
 	db, err := sqlutil.Open(&config.DatabaseOptions{
 		ConnectionString: config.DataSource(connStr),
@@ -31,11 +40,36 @@ func newMembershipsTable(t *testing.T, dbType test.DBType) (tables.Memberships, 
 		t.Fatalf("failed to open db: %s", err)
 	}
 
+	// The membership queries consult the current-state table, so it must exist.
+	if stubCurrentState {
+		_, err = db.Exec(`CREATE TABLE syncapi_current_room_state (room_id TEXT NOT NULL, type TEXT NOT NULL, state_key TEXT NOT NULL, event_id TEXT NOT NULL DEFAULT '', headered_event_json TEXT NOT NULL)`)
+		if err != nil {
+			t.Fatalf("failed to make stub current state table: %s", err)
+		}
+	}
 	var tab tables.Memberships
 	switch dbType {
 	case test.DBTypePostgres:
+		if stubCurrentState {
+			tab, err = postgres.NewPostgresMembershipsTable(db)
+			break
+		}
+		if _, err = postgres.NewPostgresCurrentRoomStateTable(db); err != nil {
+			t.Fatalf("failed to make current state table: %s", err)
+		}
 		tab, err = postgres.NewPostgresMembershipsTable(db)
 	case test.DBTypeSQLite:
+		if stubCurrentState {
+			tab, err = sqlite3.NewSqliteMembershipsTable(db)
+			break
+		}
+		var stream sqlite3.StreamIDStatements
+		if err = stream.Prepare(db); err != nil {
+			t.Fatalf("failed to prepare stream stmts: %s", err)
+		}
+		if _, err = sqlite3.NewSqliteCurrentRoomStateTable(db, &stream); err != nil {
+			t.Fatalf("failed to make current state table: %s", err)
+		}
 		tab, err = sqlite3.NewSqliteMembershipsTable(db)
 	}
 	if err != nil {
@@ -53,7 +87,7 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 		joinAt20 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join, "displayname": "updated"}, test.WithStateKey(bob.ID))
 		leaveAt30 := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(bob.ID))
 
-		table, db, close := newMembershipsTable(t, dbType)
+		table, db, close := newMembershipsTableWithStubCurrentState(t, dbType, true)
 		defer close()
 		ctx := context.Background()
 		outputEventsSchema := `CREATE TABLE syncapi_output_room_events (id BIGINT PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL, add_state_ids TEXT[])`
@@ -61,8 +95,6 @@ func TestMembershipHistoryBackfillRecoversOverwrittenTransitions(t *testing.T) {
 			outputEventsSchema = `CREATE TABLE syncapi_output_room_events (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL, event_id TEXT NOT NULL, headered_event_json TEXT NOT NULL, type TEXT NOT NULL, add_state_ids TEXT)`
 		}
 		_, err := db.ExecContext(ctx, outputEventsSchema)
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `CREATE TABLE syncapi_current_room_state (room_id TEXT NOT NULL, type TEXT NOT NULL, state_key TEXT NOT NULL, headered_event_json TEXT NOT NULL)`)
 		require.NoError(t, err)
 		insertOutput := func(id int, eventID, raw string, addState bool) {
 			var addIDs any
@@ -330,5 +362,121 @@ func TestUpdateMembershipTopologicalPos(t *testing.T) {
 		_, pos, err = table.SelectMembershipForUser(ctx, nil, room.ID, bob.ID, 100)
 		require.NoError(t, err)
 		require.Equal(t, int64(20), pos, "a position is never lowered")
+	})
+}
+
+// A state resync stamps every membership row it writes with the same stream
+// position, so a user's stale invite row can tie with their join row. The row
+// matching the room's current member event must win, or a joined user is
+// listed and counted as invited.
+func TestMembershipTiedStreamPositionPrefersCurrentEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		invite := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Invite}, test.WithStateKey(bob.ID))
+		join := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+
+		table, db, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+
+		var current tables.CurrentRoomState
+		switch dbType {
+		case test.DBTypePostgres:
+			var err error
+			current, err = postgres.NewPostgresCurrentRoomStateTable(db)
+			require.NoError(t, err)
+		case test.DBTypeSQLite:
+			var stream sqlite3.StreamIDStatements
+			require.NoError(t, stream.Prepare(db))
+			var err error
+			current, err = sqlite3.NewSqliteCurrentRoomStateTable(db, &stream)
+			require.NoError(t, err)
+		}
+
+		// The invite is stamped last with the join's stream position and a
+		// higher topological position, the worst case for any tie-break that
+		// does not look at the room's current state.
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 50, 0))
+		require.NoError(t, table.UpsertMembership(ctx, nil, invite, 50, 460))
+		joined := spec.Join
+		require.NoError(t, current.UpsertRoomState(ctx, nil, join, &joined, 50))
+
+		for _, tc := range []struct {
+			membership string
+			want       int
+		}{{spec.Join, 1}, {spec.Invite, 0}} {
+			count, err := table.SelectMembershipCount(ctx, nil, room.ID, tc.membership, 100)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, count, "%s count", tc.membership)
+		}
+
+		currentMembership, _, err := table.SelectMembershipForUser(ctx, nil, room.ID, bob.ID, math.MaxInt64)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, currentMembership, "current membership must follow the current member event, not the stale invite's topology")
+
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, join.EventID(), eventID)
+
+		eventIDs, err := table.SelectMemberships(ctx, nil, room.ID,
+			types.TopologyToken{Depth: math.MaxInt64, PDUPosition: 100}, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, eventIDs, join.EventID())
+		require.NotContains(t, eventIDs, invite.EventID())
+	})
+}
+
+// A later update of the same membership (a profile change) moves the compact
+// join row to its own position, leaving only the stale invite at the earlier
+// one. A lookup at that earlier position must still find the join the history
+// recorded there, not fall back to the invite.
+func TestMembershipAtStreamPositionKeepsHistoryAfterProfileUpdate(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		invite := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Invite}, test.WithStateKey(bob.ID))
+		join := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		rename := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join, "displayname": "Bob"}, test.WithStateKey(bob.ID))
+
+		table, db, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+
+		var current tables.CurrentRoomState
+		switch dbType {
+		case test.DBTypePostgres:
+			var err error
+			current, err = postgres.NewPostgresCurrentRoomStateTable(db)
+			require.NoError(t, err)
+		case test.DBTypeSQLite:
+			var stream sqlite3.StreamIDStatements
+			require.NoError(t, stream.Prepare(db))
+			var err error
+			current, err = sqlite3.NewSqliteCurrentRoomStateTable(db, &stream)
+			require.NoError(t, err)
+		}
+		joined := spec.Join
+
+		// Invite then join at one position; the join is the current state.
+		require.NoError(t, table.UpsertMembership(ctx, nil, invite, 50, 460))
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 50, 0))
+		require.NoError(t, current.UpsertRoomState(ctx, nil, join, &joined, 50))
+		// The profile update replaces the compact join row and the current event.
+		require.NoError(t, table.UpsertMembership(ctx, nil, rename, 70, 0))
+		require.NoError(t, current.UpsertRoomState(ctx, nil, rename, &joined, 70))
+
+		membership, eventID, err := table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 50)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership, "the join at position 50, not the compact invite")
+		require.Equal(t, join.EventID(), eventID)
+
+		membership, eventID, err = table.SelectMembershipForUserAtStreamPosition(ctx, nil, room.ID, bob.ID, 100)
+		require.NoError(t, err)
+		require.Equal(t, spec.Join, membership)
+		require.Equal(t, rename.EventID(), eventID)
 	})
 }

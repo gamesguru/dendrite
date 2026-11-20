@@ -40,7 +40,7 @@ func TestTerminalBackfillKeyIgnoresMapOrderButNotContent(t *testing.T) {
 }
 
 type countingTerminalAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	calls int
 }
 

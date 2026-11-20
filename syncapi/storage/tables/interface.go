@@ -9,6 +9,7 @@ package tables
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -71,6 +72,12 @@ type Events interface {
 	SelectRoomsWithEventsSince(ctx context.Context, txn *sql.Tx, roomIDs []string, since types.StreamPosition) ([]string, error)
 	SelectEvents(ctx context.Context, txn *sql.Tx, eventIDs []string, filter *synctypes.RoomEventFilter, preserveOrder bool) ([]types.StreamEvent, error)
 	UpdateEventJSON(ctx context.Context, txn *sql.Tx, eventID string, event *rstypes.HeaderedEvent) error
+	// UpdateUnredactedEventJSON writes only if the stored JSON still matches
+	// expectedJSON and the stored event is not redacted. It reports whether a row was written.
+	UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error)
+	// SelectRoomEventsAfterID returns up to limit events of a room with an id greater than afterID, in id order.
+	// Events excluded from sync are included. limit must be positive.
+	SelectRoomEventsAfterID(ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)
 	// DeleteEventsForRoom removes all event information for a room. This should only be done when removing the room entirely.
 	DeleteEventsForRoom(ctx context.Context, txn *sql.Tx, roomID string) (err error)
 
@@ -88,9 +95,31 @@ type Events interface {
 	SelectMaxStreamPositionsForRooms(ctx context.Context, txn *sql.Tx, roomIDs []string) (map[string]types.StreamPosition, error)
 }
 
+// EventStateReader provides state and topology reads for old-event classification.
+type EventStateReader interface {
+	GetStateEvent(ctx context.Context, roomID, evType, stateKey string) (*rstypes.HeaderedEvent, error)
+	RoomLiveStartPosition(ctx context.Context, roomID string) (pos types.StreamPosition, ok bool, err error)
+	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (pos types.StreamPosition, err error)
+}
+
+// EventSyncClassifier decides whether an old event should be excluded from
+// incremental sync using the state and topology view held by its write txn.
+type EventSyncClassifier func(ctx context.Context, state EventStateReader) (exclude bool, err error)
+
+// ErrEventSyncClassification marks a classification failure while writing an
+// old event. The write is rolled back and the output message must be
+// redelivered rather than stored with a guessed classification.
+var ErrEventSyncClassification = errors.New("classify old event for sync")
+
 // Topology keeps track of the depths and stream positions for all events.
 // These positions are used as types.TopologyToken when backfilling events locally.
 type Topology interface {
+	// LockRoomTopology serializes writes that classify events against a room's
+	// topology and then insert into it.
+	LockRoomTopology(ctx context.Context, txn *sql.Tx, roomID string) error
+	// ProspectiveEventPosition returns the topological position that
+	// InsertEventInTopology would assign based on currently stored prev events.
+	ProspectiveEventPosition(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent) (types.StreamPosition, error)
 	// InsertEventInTopology inserts the given event in the room's topology, based on the event's depth.
 	// `pos` is the stream position of this event in the events table, and is used to order events which have the same depth.
 	InsertEventInTopology(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition) (topoPos types.StreamPosition, err error)
@@ -112,6 +141,14 @@ type Topology interface {
 	// With `includeBackfilled`, events excluded from sync (backfilled history) persisted after the position
 	// are also returned, but only strictly shallower than `maxBackfillDepth`: a backfilled event at the token's own depth was stored after it, so it is newer. Without it, such events are never returned.
 	SelectEventIDsBeforeStreamPosition(ctx context.Context, txn *sql.Tx, roomID string, minDepth, maxStreamPos, maxBackfillDepth types.StreamPosition, limit int, includeBackfilled bool) (eventIDs []string, start, end types.TopologyToken, err error)
+	// SelectLiveStartPosition returns the topological position of the first
+	// delivered, non-create state event (not excluded from sync). ok is false when
+	// the room has none. Older state events sit below this position.
+	SelectLiveStartPosition(ctx context.Context, txn *sql.Tx, roomID string) (pos types.StreamPosition, ok bool, err error)
+	// HasExcludedEventsAfterTopologyPosition reports whether an event excluded
+	// from sync has a greater topological position. Such events are reachable
+	// only through /messages.
+	HasExcludedEventsAfterTopologyPosition(ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition) (bool, error)
 	// SelectPositionInTopology returns the depth and stream position of a given event in the topology of the room it belongs to.
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)
 	// SelectPositionsInTopology returns the stored positions for the requested
@@ -139,6 +176,9 @@ type CurrentRoomState interface {
 	// Pairs with no current state are absent from the result.
 	SelectStateEvents(ctx context.Context, txn *sql.Tx, roomID string, keys []gomatrixserverlib.StateKeyTuple) (map[gomatrixserverlib.StateKeyTuple]*rstypes.HeaderedEvent, error)
 	SelectEventsWithEventIDs(ctx context.Context, txn *sql.Tx, eventIDs []string) ([]types.StreamEvent, error)
+	// UpdateUnredactedEventJSON also requires the row to match expectedJSON and
+	// refuses to replace a genuine redaction.
+	UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error)
 	UpsertRoomState(ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, membership *string, addedAt types.StreamPosition) error
 	// UpsertRoomStates writes many state events in as few statements as the
 	// backend allows. When two upserts share a type and state key, the later

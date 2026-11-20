@@ -41,6 +41,10 @@ const selectRedactionInfoByEventBeingRedactedSQL = "" +
 	"SELECT redaction_event_id, redacts_event_id, validated FROM roomserver_redactions" +
 	" WHERE redacts_event_id = $1"
 
+const hasValidatedRedactionForEventSQL = "" +
+	"SELECT COUNT(*) FROM roomserver_redactions" +
+	" WHERE redacts_event_id = $1 AND validated = TRUE"
+
 const markRedactionValidatedSQL = "" +
 	" UPDATE roomserver_redactions SET validated = $2 WHERE redaction_event_id = $1"
 
@@ -48,6 +52,7 @@ type redactionStatements struct {
 	insertRedactionStmt                         *sql.Stmt
 	selectRedactionInfoByRedactionEventIDStmt   *sql.Stmt
 	selectRedactionInfoByEventBeingRedactedStmt *sql.Stmt
+	hasValidatedRedactionForEventStmt           *sql.Stmt
 	markRedactionValidatedStmt                  *sql.Stmt
 }
 
@@ -63,6 +68,7 @@ func PrepareRedactionsTable(db *sql.DB) (tables.Redactions, error) {
 		{&s.insertRedactionStmt, insertRedactionSQL},
 		{&s.selectRedactionInfoByRedactionEventIDStmt, selectRedactionInfoByRedactionEventIDSQL},
 		{&s.selectRedactionInfoByEventBeingRedactedStmt, selectRedactionInfoByEventBeingRedactedSQL},
+		{&s.hasValidatedRedactionForEventStmt, hasValidatedRedactionForEventSQL},
 		{&s.markRedactionValidatedStmt, markRedactionValidatedSQL},
 	}.Prepare(db)
 }
@@ -103,6 +109,17 @@ func (s *redactionStatements) SelectRedactionInfoByEventBeingRedacted(
 		err = nil
 	}
 	return
+}
+
+func (s *redactionStatements) HasValidatedRedactionForEvent(
+	ctx context.Context, txn *sql.Tx, eventID string,
+) (bool, error) {
+	var count int64
+	stmt := sqlutil.TxStmt(txn, s.hasValidatedRedactionForEventStmt)
+	if err := stmt.QueryRowContext(ctx, eventID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (s *redactionStatements) MarkRedactionValidated(

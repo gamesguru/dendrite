@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"slices"
 
 	"codefloe.com/pat-s/zendrite/internal"
@@ -102,16 +103,36 @@ const upsertMembershipsSQL = "" +
 	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
 	" DO UPDATE SET event_id = EXCLUDED.event_id, stream_pos = EXCLUDED.stream_pos, topological_pos = EXCLUDED.topological_pos"
 
+// A user has one row per membership kind, so two rows can share a stream
+// position (a state resync stamps every row it writes with the same one). The
+// row whose event is the room's current member event then wins the tie, as an
+// arbitrary pick could leave a joined user counted and listed as invited.
+const isCurrentMemberEventSQL = "EXISTS (SELECT 1 FROM syncapi_current_room_state c" +
+	" WHERE c.room_id = m.room_id AND c.type = 'm.room.member' AND c.state_key = m.user_id AND c.event_id = m.event_id)"
+
 const selectMembershipCountSQL = "" +
 	"SELECT COUNT(*) FROM (" +
-	" SELECT DISTINCT ON (room_id, user_id) room_id, user_id, membership FROM syncapi_memberships WHERE room_id = $1 AND stream_pos <= $2 ORDER BY room_id, user_id, stream_pos DESC" +
+	" SELECT DISTINCT ON (m.room_id, m.user_id) m.membership FROM syncapi_memberships m WHERE m.room_id = $1 AND m.stream_pos <= $2" +
+	" ORDER BY m.room_id, m.user_id, m.stream_pos DESC, " + isCurrentMemberEventSQL + " DESC" +
 	") t WHERE t.membership = $3"
 
 const selectMembershipBeforeSQL = "" +
 	"SELECT membership, topological_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND topological_pos <= $3 ORDER BY topological_pos DESC LIMIT 1"
 
+// selectMembershipCurrentSQL answers the same question for the MaxInt64
+// "current" sentinel. Ordering by topological position is wrong then: a
+// resync stamps the current member event with topological position 0, so a
+// stale invite with a real topology would win. Stream order plus the
+// current-event tie-break gives the membership the room state actually has.
+const selectMembershipCurrentSQL = "" +
+	"SELECT m.membership, m.topological_pos FROM syncapi_memberships m" +
+	" WHERE m.room_id = $1 AND m.user_id = $2" +
+	" ORDER BY m.stream_pos DESC, " + isCurrentMemberEventSQL + " DESC LIMIT 1"
+
 const selectMembershipAtStreamSQL = "" +
-	"SELECT membership, event_id, stream_pos FROM syncapi_memberships WHERE room_id = $1 and user_id = $2 AND stream_pos <= $3 ORDER BY stream_pos DESC LIMIT 1"
+	"SELECT m.membership, m.event_id, m.stream_pos, " + isCurrentMemberEventSQL + " FROM syncapi_memberships m" +
+	" WHERE m.room_id = $1 and m.user_id = $2 AND m.stream_pos <= $3" +
+	" ORDER BY m.stream_pos DESC, " + isCurrentMemberEventSQL + " DESC LIMIT 1"
 
 const updateMembershipTopologicalPosSQL = "" +
 	"UPDATE syncapi_memberships SET topological_pos = $1 WHERE room_id = $2 AND event_id = $3 AND topological_pos < $1"
@@ -121,11 +142,11 @@ const purgeMembershipsSQL = "" +
 
 const selectMembersSQL = `
 	SELECT event_id FROM (
-		SELECT DISTINCT ON (room_id, user_id) room_id, user_id, event_id, membership FROM syncapi_memberships
-		WHERE room_id = $1 AND (($2 = 9223372036854775807 AND stream_pos <= $3)
+		SELECT DISTINCT ON (m.room_id, m.user_id) m.room_id, m.user_id, m.event_id, m.membership FROM syncapi_memberships m
+		WHERE m.room_id = $1 AND (($2 = 9223372036854775807 AND m.stream_pos <= $3)
 			OR ($2 <> 9223372036854775807 AND
-				(topological_pos < $2 OR (topological_pos = $2 AND stream_pos <= $3))))
-		ORDER BY room_id, user_id, stream_pos DESC
+				(m.topological_pos < $2 OR (m.topological_pos = $2 AND m.stream_pos <= $3))))
+		ORDER BY m.room_id, m.user_id, m.stream_pos DESC, ` + isCurrentMemberEventSQL + ` DESC
 	) t
 	WHERE ($4::text IS NULL OR t.membership = $4)
 		AND ($5::text IS NULL OR t.membership <> $5)
@@ -136,6 +157,7 @@ type membershipsStatements struct {
 	upsertMembershipsStmt               *sql.Stmt
 	selectMembershipCountStmt           *sql.Stmt
 	selectMembershipForUserStmt         *sql.Stmt
+	selectMembershipCurrentStmt         *sql.Stmt
 	selectMembershipAtStreamStmt        *sql.Stmt
 	updateMembershipTopologicalPosStmt  *sql.Stmt
 	purgeMembershipsStmt                *sql.Stmt
@@ -159,6 +181,7 @@ func NewPostgresMembershipsTable(db *sql.DB) (tables.Memberships, error) {
 		{&s.upsertMembershipsStmt, upsertMembershipsSQL},
 		{&s.selectMembershipCountStmt, selectMembershipCountSQL},
 		{&s.selectMembershipForUserStmt, selectMembershipBeforeSQL},
+		{&s.selectMembershipCurrentStmt, selectMembershipCurrentSQL},
 		{&s.selectMembershipAtStreamStmt, selectMembershipAtStreamSQL},
 		{&s.insertMembershipHistoryStmt, insertMembershipHistorySQL},
 		{&s.insertMembershipHistoryBatchStmt, insertMembershipHistoryBatchSQL},
@@ -253,8 +276,13 @@ func (s *membershipsStatements) SelectMembershipCount(
 func (s *membershipsStatements) SelectMembershipForUser(
 	ctx context.Context, txn *sql.Tx, roomID, userID string, pos int64,
 ) (membership string, topologyPos int64, err error) {
-	stmt := sqlutil.TxStmt(txn, s.selectMembershipForUserStmt)
-	err = stmt.QueryRowContext(ctx, roomID, userID, pos).Scan(&membership, &topologyPos)
+	if pos == math.MaxInt64 {
+		stmt := sqlutil.TxStmt(txn, s.selectMembershipCurrentStmt)
+		err = stmt.QueryRowContext(ctx, roomID, userID).Scan(&membership, &topologyPos)
+	} else {
+		stmt := sqlutil.TxStmt(txn, s.selectMembershipForUserStmt)
+		err = stmt.QueryRowContext(ctx, roomID, userID, pos).Scan(&membership, &topologyPos)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "leave", 0, nil
@@ -280,12 +308,21 @@ func (s *membershipsStatements) SelectMembershipForUserAtStreamPosition(
 	}
 	var currentMembership, currentEventID string
 	var currentPos int64
+	var currentIsCurrentEvent bool
 	currentStmt := sqlutil.TxStmt(txn, s.selectMembershipAtStreamStmt)
-	currentErr := currentStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&currentMembership, &currentEventID, &currentPos)
+	currentErr := currentStmt.QueryRowContext(ctx, roomID, userID, streamPos).Scan(&currentMembership, &currentEventID, &currentPos, &currentIsCurrentEvent)
 	if currentErr != nil && currentErr != sql.ErrNoRows {
 		return "", "", currentErr
 	}
-	if historyErr == nil && (currentErr == sql.ErrNoRows || historyPos >= currentPos) {
+	// The compact row wins when it is newer. On an exact tie it overrides the
+	// history only if its event is the room's current member event: history is
+	// last-writer-wins per position, so a resync can leave it holding a stale
+	// row, but a compact row whose event is not current may merely be the one
+	// that a later update of the same membership left behind, while history
+	// still holds the transition that happened at that position.
+	compactWins := currentErr == nil &&
+		(historyErr == sql.ErrNoRows || currentPos > historyPos || (currentPos == historyPos && currentIsCurrentEvent))
+	if historyErr == nil && !compactWins {
 		return historyMembership, historyEventID, nil
 	}
 	if currentErr == nil {

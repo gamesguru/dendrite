@@ -23,6 +23,7 @@ import (
 
 	federationTypes "codefloe.com/pat-s/zendrite/federationapi/types"
 	"codefloe.com/pat-s/zendrite/internal"
+	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/process"
@@ -795,7 +796,7 @@ func (w *PartialStateWorker) fetchStateViaAnchor(
 			if verErr != nil {
 				return nil, nil, verErr
 			}
-			ev = w.fetchSingleEvent(ctx, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
+			ev = w.fetchSingleEvent(ctx, logger, origin, roomID, anchor.askID, verImpl, bypassBackoff, serverName, allServers)
 			if ev == nil {
 				return nil, nil, fmt.Errorf("could not fetch anchor event %s", anchor.askID)
 			}
@@ -1121,8 +1122,10 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	// one /state request for the whole state is cheaper than a request per event,
 	// and it is what servers expect to be asked for: it needs no /event route.
 	// This is Synapse's heuristic. Events it leaves out are fetched one by one.
+	var prunedFallback []roomserverAPI.InputRoomEvent
 	if len(missing)*10 >= len(allIDs) {
-		if err := w.fetchMissingViaState(ctx, logger, origin, serverName, roomID, eventID, roomVersion, allIDs, missing); err != nil {
+		var err error
+		if prunedFallback, err = w.fetchMissingViaState(ctx, logger, origin, serverName, roomID, eventID, roomVersion, allIDs, missing); err != nil {
 			logger.WithError(err).Warn("Fetching missing state events via /state failed, fetching them individually")
 		} else {
 			missing = w.findMissingEvents(ctx, logger, roomID, roomVersion, idSet(missing), true)
@@ -1133,8 +1136,11 @@ func (w *PartialStateWorker) fetchStateViaStateIDs(
 	}
 
 	// Fetch the rest in parallel from multiple servers.
-	if err := w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers); err != nil {
-		return nil, fmt.Errorf("fetchMissingEventsParallel: %w", err)
+	parallelErr := w.fetchMissingEventsParallel(ctx, logger, origin, roomID, roomVersion, missing, bypassBackoff, serverName, allServers)
+	// Whatever the parallel fetch did, a pruned copy beats a hole in the DAG.
+	w.storePrunedFallbacks(ctx, logger, roomID, roomVersion, prunedFallback)
+	if parallelErr != nil {
+		return nil, fmt.Errorf("fetchMissingEventsParallel: %w", parallelErr)
 	}
 
 	// Step 4: Verify every wanted state event is now stored locally before we
@@ -1275,18 +1281,19 @@ func (w *PartialStateWorker) fetchMissingViaState(
 	roomVersion gomatrixserverlib.RoomVersion,
 	wanted map[string]bool,
 	missing []string,
-) error {
+) (prunedFallback []roomserverAPI.InputRoomEvent, err error) {
 	verImpl, err := gomatrixserverlib.GetRoomVersion(roomVersion)
 	if err != nil {
-		return fmt.Errorf("GetRoomVersion: %w", err)
+		return nil, fmt.Errorf("GetRoomVersion: %w", err)
 	}
 	logger.WithField("missing", len(missing)).Info("Fetching missing state events via /state")
 	state, err := w.fedAPI.LookupState(ctx, origin, serverName, roomID, eventID, roomVersion)
 	if err != nil {
-		return &remoteStateError{fmt.Errorf("LookupState from %s: %w", serverName, err)}
+		return nil, &remoteStateError{fmt.Errorf("LookupState from %s: %w", serverName, err)}
 	}
 
 	missingSet := idSet(missing)
+	seenPruned := make(map[string]struct{})
 	var inputs []roomserverAPI.InputRoomEvent
 	for _, raw := range append(append(gomatrixserverlib.EventJSONs{}, state.GetStateEvents()...), state.GetAuthEvents()...) {
 		ev, evErr := verImpl.NewEventFromUntrustedJSON(raw)
@@ -1297,6 +1304,25 @@ func (w *PartialStateWorker) fetchMissingViaState(
 		if !missingSet[ev.EventID()] || !wanted[ev.EventID()] || ev.RoomID().String() != roomID {
 			continue
 		}
+		if eventutil.LooksHashPruned(raw, ev) {
+			if _, seen := seenPruned[ev.EventID()]; seen {
+				continue
+			}
+			seenPruned[ev.EventID()] = struct{}{}
+			logger.WithFields(logrus.Fields{
+				"event_id":    ev.EventID(),
+				"server_name": serverName,
+			}).Warn("State response event looks hash-pruned; leaving it missing so another server can be tried")
+			// Leave it missing so the per-event fallback can try other residents,
+			// but keep this copy: if every other source fails it is still better
+			// than no event, and storing it never replaces a stored full copy.
+			prunedFallback = append(prunedFallback, roomserverAPI.InputRoomEvent{
+				Kind:   roomserverAPI.KindOutlier,
+				Event:  &types.HeaderedEvent{PDU: ev},
+				Origin: origin,
+			})
+			continue
+		}
 		delete(missingSet, ev.EventID())
 		inputs = append(inputs, roomserverAPI.InputRoomEvent{
 			Kind:   roomserverAPI.KindOutlier,
@@ -1305,14 +1331,48 @@ func (w *PartialStateWorker) fetchMissingViaState(
 		})
 	}
 	if len(inputs) == 0 {
-		return nil
+		return prunedFallback, nil
 	}
 	var ires roomserverAPI.InputRoomEventsResponse
 	w.rsAPI.InputRoomEvents(ctx, &roomserverAPI.InputRoomEventsRequest{InputRoomEvents: inputs}, &ires)
 	if ires.ErrMsg != "" {
-		return fmt.Errorf("store events from /state: %s", ires.ErrMsg)
+		return prunedFallback, fmt.Errorf("store events from /state: %s", ires.ErrMsg)
 	}
-	return nil
+	return prunedFallback, nil
+}
+
+// storePrunedFallbacks stores the copies from /state that look hash-pruned and no other source
+// replaced. Events that are present by now, in full or not, are left alone.
+func (w *PartialStateWorker) storePrunedFallbacks(
+	ctx context.Context,
+	logger *logrus.Entry,
+	roomID string,
+	roomVersion gomatrixserverlib.RoomVersion,
+	fallback []roomserverAPI.InputRoomEvent,
+) {
+	if len(fallback) == 0 {
+		return
+	}
+	candidates := make(map[string]bool, len(fallback))
+	for _, in := range fallback {
+		candidates[in.Event.EventID()] = true
+	}
+	stillMissing := idSet(w.findMissingEvents(ctx, logger, roomID, roomVersion, candidates, false))
+	var inputs []roomserverAPI.InputRoomEvent
+	for _, in := range fallback {
+		if stillMissing[in.Event.EventID()] {
+			inputs = append(inputs, in)
+		}
+	}
+	if len(inputs) == 0 {
+		return
+	}
+	logger.WithField("events", len(inputs)).Warn("Storing redacted-looking copies from /state because no other server had a full copy")
+	var ires roomserverAPI.InputRoomEventsResponse
+	w.rsAPI.InputRoomEvents(ctx, &roomserverAPI.InputRoomEventsRequest{InputRoomEvents: inputs}, &ires)
+	if ires.ErrMsg != "" {
+		logger.Warnf("Failed to store hash-pruned fallback copies: %s", ires.ErrMsg)
+	}
 }
 
 // fetchMissingEventsParallel fetches missing events using parallel workers.
@@ -1373,7 +1433,7 @@ func (w *PartialStateWorker) fetchMissingEventsParallel(
 			go func() {
 				defer wg.Done()
 				for eventID := range pending {
-					ev := w.fetchSingleEvent(ctx, origin, roomID, eventID, verImpl, primaryBypassBackoff, primaryServer, allServers)
+					ev := w.fetchSingleEvent(ctx, logger, origin, roomID, eventID, verImpl, primaryBypassBackoff, primaryServer, allServers)
 					if ev != nil {
 						mu.Lock()
 						batchEvents = append(batchEvents, ev)
@@ -1411,6 +1471,7 @@ func (w *PartialStateWorker) fetchMissingEventsParallel(
 // server failures gracefully.
 func (w *PartialStateWorker) fetchSingleEvent(
 	ctx context.Context,
+	logger *logrus.Entry,
 	origin spec.ServerName,
 	_ /* roomID */, eventID string,
 	verImpl gomatrixserverlib.IRoomVersion,
@@ -1418,9 +1479,25 @@ func (w *PartialStateWorker) fetchSingleEvent(
 	primaryServer spec.ServerName,
 	allServers []serverEntry,
 ) gomatrixserverlib.PDU {
+	// A copy that looks hash-pruned is only used if no server has a full one.
+	var pruned gomatrixserverlib.PDU
+	try := func(serverName spec.ServerName, bypassBackoff bool) gomatrixserverlib.PDU {
+		ev, hashPruned, err := w.getEventFromServer(ctx, origin, serverName, eventID, verImpl, bypassBackoff)
+		if err != nil {
+			return nil
+		}
+		if hashPruned {
+			logger.Debugf("Event %q from %q looks hash-pruned; preferring a full copy if one is available", eventID, serverName)
+			if pruned == nil {
+				pruned = ev
+			}
+			return nil
+		}
+		return ev
+	}
+
 	// Try the primary server first.
-	ev, err := w.getEventFromServer(ctx, origin, primaryServer, eventID, verImpl, primaryBypassBackoff)
-	if err == nil {
+	if ev := try(primaryServer, primaryBypassBackoff); ev != nil {
 		return ev
 	}
 
@@ -1435,13 +1512,12 @@ func (w *PartialStateWorker) fetchSingleEvent(
 			break
 		}
 		tried++
-		ev, err = w.getEventFromServer(ctx, origin, entry.name, eventID, verImpl, entry.bypassBackoff)
-		if err == nil {
+		if ev := try(entry.name, entry.bypassBackoff); ev != nil {
 			return ev
 		}
 	}
 
-	return nil
+	return pruned
 }
 
 const eventFetchTimeout = 30 * time.Second
@@ -1452,7 +1528,7 @@ func (w *PartialStateWorker) getEventFromServer(
 	eventID string,
 	verImpl gomatrixserverlib.IRoomVersion,
 	bypassBackoff bool,
-) (gomatrixserverlib.PDU, error) {
+) (gomatrixserverlib.PDU, bool, error) {
 	reqctx, cancel := context.WithTimeout(ctx, eventFetchTimeout)
 	defer cancel()
 
@@ -1464,17 +1540,17 @@ func (w *PartialStateWorker) getEventFromServer(
 		txn, err = w.fedAPI.GetEvent(reqctx, origin, serverName, eventID)
 	}
 	if err != nil || len(txn.PDUs) == 0 {
-		return nil, fmt.Errorf("GetEvent %s from %s: %w", eventID, serverName, err)
+		return nil, false, fmt.Errorf("GetEvent %s from %s: %w", eventID, serverName, err)
 	}
 
 	ev, err := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
 	if err != nil {
-		return nil, fmt.Errorf("parse event %s from %s: %w", eventID, serverName, err)
+		return nil, false, fmt.Errorf("parse event %s from %s: %w", eventID, serverName, err)
 	}
 	if ev.EventID() != eventID {
-		return nil, fmt.Errorf("server %s returned event %s when %s was requested", serverName, ev.EventID(), eventID)
+		return nil, false, fmt.Errorf("server %s returned event %s when %s was requested", serverName, ev.EventID(), eventID)
 	}
-	return ev, nil
+	return ev, eventutil.LooksHashPruned(txn.PDUs[0], ev), nil
 }
 
 // applyState stores the fetched state and updates the room's current state.

@@ -327,10 +327,14 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	}
 
 	// attempt to satisfy key queries from the local database first as we should get device updates pushed to us
-	domainToDeviceKeys = a.remoteKeysFromDatabase(ctx, res, &respMu, domainToDeviceKeys)
+	domainToDeviceKeys = a.remoteKeysFromDatabase(ctx, res, &respMu, domainToDeviceKeys, domainToCrossSigningKeys)
 	if len(domainToDeviceKeys) > 0 || len(domainToCrossSigningKeys) > 0 {
 		// perform key queries for remote devices
 		a.queryRemoteKeys(ctx, req.Timeout, res, domainToDeviceKeys, domainToCrossSigningKeys)
+		// A full device-list fetch also returns the user's cross-signing keys,
+		// which the updater stores. Pick those up rather than asking the remote
+		// server again with /keys/query for them.
+		a.crossSigningKeysFromDatabase(ctx, req, res)
 	}
 
 	// Finally, append signatures that we know about
@@ -404,9 +408,19 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 }
 
 func (a *UserInternalAPI) remoteKeysFromDatabase(
-	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex, domainToDeviceKeys map[string]map[string][]string,
+	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex,
+	domainToDeviceKeys map[string]map[string][]string,
+	domainToCrossSigningKeys map[string]map[string]struct{},
 ) map[string]map[string][]string {
 	tracked := a.trackedDeviceLists(ctx, domainToDeviceKeys)
+	// A device list fetched in full also carries the user's cross-signing keys
+	// (or proves they have none), so a fresh, tracked list is authoritative for
+	// them too. Do not hit /keys/query just because the database has none.
+	for userID := range tracked {
+		for domain := range domainToCrossSigningKeys {
+			delete(domainToCrossSigningKeys[domain], userID)
+		}
+	}
 	fetchRemote := make(map[string]map[string][]string)
 	for domain, userToDeviceMap := range domainToDeviceKeys {
 		for userID, deviceIDs := range userToDeviceMap {
@@ -646,13 +660,11 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 			devKeys[userID] = []string{}
 			continue
 		}
-		if _, needsCrossSigning := crossSigningKeys[userID]; needsCrossSigning {
-			// ManualUpdate refreshes the device list asynchronously. Keep this
-			// user in /keys/query so a missing cross-signing key is not lost.
-			devKeys[userID] = []string{}
-		} else {
-			delete(devKeys, userID)
-		}
+		// The device-list fetch that just succeeded also returns the user's
+		// cross-signing keys, so do not ask /keys/query for them again. The
+		// caller re-reads them from the database after this query completes.
+		delete(crossSigningKeys, userID)
+		delete(devKeys, userID)
 	}
 	if len(devKeys) == 0 {
 		return

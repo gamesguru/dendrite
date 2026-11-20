@@ -118,9 +118,9 @@ build-cmd: rezzy-native ## Build binaries under cmd/
 	$(GO) build $(GO_LDFLAGS) ./cmd/...
 
 .PHONY: install
-install: rezzy-native ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH (requires sudo)
+install: rezzy-native ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH, keeping a backup of the previous one (requires sudo)
 	$(GO) build $(GO_LDFLAGS) -o dendrite ./cmd/zendrite
-	$(SUDO) install -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
+	$(SUDO) install -b -p -m 0755 ./dendrite $(DENDRITE_INSTALL_PATH)
 
 .PHONY: restart
 restart: ## Restart the dendrite systemd service (DENDRITE_SYSTEMD_SERVICE)

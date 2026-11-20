@@ -73,6 +73,176 @@ func TestWriteEvents(t *testing.T) {
 	})
 }
 
+func TestSelectRoomEventsAfterIDIncludesBackfilledEvents(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		var positions []types.StreamPosition
+		for i, ev := range room.Events()[:3] {
+			pos, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, i == 1, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+			positions = append(positions, pos)
+		}
+		first, err := db.SelectRoomEventsAfterID(ctx, room.ID, 0, 2)
+		require.NoError(t, err)
+		require.Len(t, first, 2)
+		require.Equal(t, positions[0], first[0].StreamPosition)
+		require.Equal(t, positions[1], first[1].StreamPosition)
+		require.True(t, first[1].ExcludeFromSync)
+		second, err := db.SelectRoomEventsAfterID(ctx, room.ID, first[1].StreamPosition, 2)
+		require.NoError(t, err)
+		require.Len(t, second, 1)
+		require.Equal(t, positions[2], second[0].StreamPosition)
+	})
+}
+
+func TestUpdateUnredactedEventJSON(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+
+		// A row that becomes redacted after it was read must not be rewritten.
+		redacted := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "redacted"})
+		_, err := db.WriteEvent(ctx, redacted, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		originalJSON, err := redacted.MarshalJSON()
+		require.NoError(t, err)
+		var stale rstypes.HeaderedEvent
+		require.NoError(t, stale.UnmarshalJSON(originalJSON))
+		require.NoError(t, redacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, db.UpdateEventJSON(ctx, redacted.EventID(), redacted))
+		require.NoError(t, stale.SetUnsignedField("age", 1))
+		// Expect the JSON that is stored now, so only the redaction guard can
+		// block the write.
+		redactedJSON, err := redacted.MarshalJSON()
+		require.NoError(t, err)
+		require.NotEqual(t, originalJSON, redactedJSON)
+
+		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), redactedJSON, &stale)
+		require.NoError(t, err)
+		require.False(t, written, "a redacted row must not be rewritten")
+
+		stored, err := db.Events(ctx, []string{redacted.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.True(t, gjson.GetBytes(stored[0].Unsigned(), "redacted_because").Exists())
+		require.False(t, gjson.GetBytes(stored[0].Unsigned(), "age").Exists())
+
+		// An unredacted row is written normally.
+		live := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "live"})
+		_, err = db.WriteEvent(ctx, live, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		liveJSON, err := live.MarshalJSON()
+		require.NoError(t, err)
+		require.NoError(t, live.SetUnsignedField("age", 2))
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), liveJSON, live)
+		require.NoError(t, err)
+		require.True(t, written)
+
+		stored, err = db.Events(ctx, []string{live.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(2), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// A re-marshaled expectation can differ from the stored text in
+		// whitespace while describing the same JSON value.
+		reformatted, err := json.MarshalIndent(stored[0], "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, live.SetUnsignedField("age", 7))
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), reformatted, live)
+		require.NoError(t, err)
+		require.True(t, written, "a semantically equal expectation must still match")
+		stored, err = db.Events(ctx, []string{live.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(7), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// A redacted_because key in the content is not a redaction and must not
+		// block the write.
+		contentKey := room.CreateEvent(t, alice, "com.example.custom", map[string]any{
+			"redacted_because": "a value in the content",
+		})
+		_, err = db.WriteEvent(ctx, contentKey, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		contentKeyJSON, err := contentKey.MarshalJSON()
+		require.NoError(t, err)
+		require.NoError(t, contentKey.SetUnsignedField("age", 3))
+		written, err = db.UpdateUnredactedEventJSON(ctx, contentKey.EventID(), contentKeyJSON, contentKey)
+		require.NoError(t, err)
+		require.True(t, written)
+
+		stored, err = db.Events(ctx, []string{contentKey.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(3), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// Valid content can contain a NUL escape, which jsonb
+		// rejects. The guard must still match, and still protect.
+		nul := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "a\x00b"})
+		_, err = db.WriteEvent(ctx, nul, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		nulJSON, err := nul.MarshalJSON()
+		require.NoError(t, err)
+		var staleNul rstypes.HeaderedEvent
+		require.NoError(t, staleNul.UnmarshalJSON(nulJSON))
+		require.NoError(t, nul.SetUnsignedField("age", 5))
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), nulJSON, nul)
+		require.NoError(t, err, "a NUL in the stored JSON must not fail the guard")
+		require.True(t, written)
+		// The stored copy changed, so the old expectation no longer matches.
+		require.NoError(t, staleNul.SetUnsignedField("age", 6))
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), nulJSON, &staleNul)
+		require.NoError(t, err)
+		require.False(t, written, "a stale expectation must not match a NUL-bearing row")
+		// A redacted NUL-bearing row is still refused.
+		require.NoError(t, nul.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, db.UpdateEventJSON(ctx, nul.EventID(), nul))
+		redactedNulJSON, err := nul.MarshalJSON()
+		require.NoError(t, err)
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), redactedNulJSON, &staleNul)
+		require.NoError(t, err)
+		require.False(t, written, "a redacted NUL-bearing row must not be rewritten")
+
+		// Literal "\\u0000" text is valid JSON (an escaped backslash), so a
+		// reformatted expectation must still match semantically.
+		literal := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "a\\u0000b"})
+		_, err = db.WriteEvent(ctx, literal, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		literalJSON, err := literal.MarshalJSON()
+		require.NoError(t, err)
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, literalJSON, "", "  "))
+		require.NoError(t, literal.SetUnsignedField("age", 7))
+		written, err = db.UpdateUnredactedEventJSON(ctx, literal.EventID(), indented.Bytes(), literal)
+		require.NoError(t, err)
+		require.True(t, written, "escaped-backslash text must not force an exact-text comparison")
+
+		// A non-redaction rewrite after the repair read must not be overwritten.
+		changed := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "changed"})
+		_, err = db.WriteEvent(ctx, changed, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		staleJSON, err := changed.MarshalJSON()
+		require.NoError(t, err)
+		var staleChanged rstypes.HeaderedEvent
+		require.NoError(t, staleChanged.UnmarshalJSON(staleJSON))
+		require.NoError(t, changed.SetUnsignedField("concurrent", true))
+		require.NoError(t, db.UpdateEventJSON(ctx, changed.EventID(), changed))
+		require.NoError(t, staleChanged.SetUnsignedField("age", 4))
+		written, err = db.UpdateUnredactedEventJSON(ctx, changed.EventID(), staleJSON, &staleChanged)
+		require.NoError(t, err)
+		require.False(t, written, "a row changed after the repair read must not be rewritten")
+		stored, err = db.Events(ctx, []string{changed.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.True(t, gjson.GetBytes(stored[0].Unsigned(), "concurrent").Bool())
+		require.False(t, gjson.GetBytes(stored[0].Unsigned(), "age").Exists())
+	})
+}
+
 func TestGetOrCreateConnectionConcurrent(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, closeDB := MustCreateDatabase(t, dbType)
@@ -1548,6 +1718,49 @@ func TestGetEventsBeforeStreamPositionExcludesDeeperBackfilled(t *testing.T) {
 	})
 }
 
+// The first event of a timeline (in practice a join) can be stored before its
+// parents: the history between the last event stored before it and the event
+// itself arrives later as backfill. The prev_batch token of that timeline sits
+// just before the event, so paging back from it must reach that history, which
+// is deeper than every event persisted at or below the token. The event type
+// does not matter to the code under test.
+func TestGetEventsBeforeStreamPositionReachesParentsStoredAfterTimelineStart(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+		var mid []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			mid = append(mid, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("mid %d", i)}))
+		}
+		first := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "timeline start"})
+
+		_ = MustWriteEvents(t, db, base)
+		firstPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{first})[0]
+		// The parents arrive afterwards as backfill (excluded from sync).
+		for _, ev := range mid {
+			_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, firstPos-1, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 20}, true)
+			require.NoError(t, err)
+			var got []string
+			for _, ev := range events {
+				got = append(got, ev.EventID())
+			}
+			for _, ev := range mid {
+				assert.Contains(t, got, ev.EventID(), "a parent stored after the timeline start must be reachable from its prev_batch")
+			}
+			assert.NotContains(t, got, first.EventID(), "the first event starts the timeline the token precedes")
+		})
+	})
+}
+
 // A sender or type filter that removes every event of a non-empty range must
 // still leave the range's cursor, so /messages can tell a filtered-empty page
 // from the end of history.
@@ -1702,6 +1915,11 @@ func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
 
 		reset := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "after reset"}, test.WithDepth(0))
 		require.Equal(t, int64(0), reset.Depth(), "the event claims a restarted depth")
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			prospective, err := snapshot.ProspectiveEventPosition(ctx, reset)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(1001), prospective)
+		})
 		_, err := db.WriteEvent(ctx, reset, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 

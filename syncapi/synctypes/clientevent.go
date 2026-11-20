@@ -215,10 +215,11 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 	}
 
 	var prev PrevEventRef
+	mappedPrevSender := ""
 	if err := json.Unmarshal(se.Unsigned(), &prev); err == nil && prev.PrevSenderID != "" {
 		prevUserID, err := userIDForSender(se.RoomID(), spec.SenderID(prev.PrevSenderID))
-		if err == nil && userID != nil {
-			prev.PrevSenderID = prevUserID.String()
+		if err == nil && prevUserID != nil {
+			mappedPrevSender = prevUserID.String()
 		} else {
 			errString := "userID unknown"
 			if err != nil {
@@ -227,11 +228,15 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 			logrus.Warnf("Failed to find userID for prev_sender in ClientEvent: %s", errString)
 			// NOTE: Not much can be done here, so leave the previous value in place.
 		}
-		ce.Unsigned, err = json.Marshal(prev)
-		if err != nil {
-			err = fmt.Errorf("failed to marshal unsigned content for ClientEvent: %w", err)
-			return err
-		}
+	}
+
+	// The cases below can replace ce.Unsigned with the original event's, which
+	// lacks the MSC4115 membership annotation and carries the raw prev_sender.
+	// Remember the annotation so it can be restored.
+	membershipKeys := []string{UnsignedFieldMembership, "io\\.element\\.msc4115\\.membership"}
+	membershipValues := make([]gjson.Result, len(membershipKeys))
+	for i, k := range membershipKeys {
+		membershipValues[i] = gjson.GetBytes(ce.Unsigned, k)
 	}
 
 	switch se.Type() {
@@ -260,6 +265,23 @@ func updatePseudoIDs(ce *ClientEvent, se gomatrixserverlib.PDU, userIDForSender 
 		if updatedEvent != nil {
 			ce.Content = updatedEvent.Content()
 			ce.Unsigned = updatedEvent.Unsigned()
+		}
+	}
+
+	// Restore what the cases above may have dropped: the membership annotation
+	// and the mapped prev_sender user ID.
+	for i, k := range membershipKeys {
+		if membershipValues[i].Exists() {
+			ce.Unsigned, err = sjson.SetRawBytes(ce.Unsigned, k, []byte(membershipValues[i].Raw))
+			if err != nil {
+				return fmt.Errorf("failed to preserve membership in ClientEvent: %w", err)
+			}
+		}
+	}
+	if mappedPrevSender != "" {
+		ce.Unsigned, err = sjson.SetBytes(ce.Unsigned, "prev_sender", mappedPrevSender)
+		if err != nil {
+			return fmt.Errorf("failed to preserve mapped prev_sender in ClientEvent: %w", err)
 		}
 	}
 

@@ -8,6 +8,7 @@ package helpers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -20,9 +21,10 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 )
 
-// CheckForSoftFail returns true if the event should be soft-failed
-// and false otherwise. The return error value should be checked before
-// the soft-fail bool.
+// CheckForSoftFail returns true if the event conflicts with the current room
+// state and should be soft-failed. A non-nil error means the current state
+// could not be determined, which is not evidence of a conflict: the caller
+// must not soft-fail on it.
 func CheckForSoftFail(
 	ctx context.Context,
 	db storage.RoomDatabase,
@@ -38,7 +40,7 @@ func CheckForSoftFail(
 	if rewritesState {
 		authStateEntries, err = db.StateEntriesForEventIDs(ctx, stateEventIDs, true)
 		if err != nil {
-			return true, fmt.Errorf("StateEntriesForEventIDs failed: %w", err)
+			return false, fmt.Errorf("StateEntriesForEventIDs failed: %w", err)
 		}
 	} else {
 		// Then get the state entries for the current state snapshot.
@@ -46,7 +48,7 @@ func CheckForSoftFail(
 		roomState := state.NewStateResolution(db, roomInfo, querier)
 		authStateEntries, err = roomState.LoadStateAtSnapshot(ctx, roomInfo.StateSnapshotNID())
 		if err != nil {
-			return true, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
+			return false, fmt.Errorf("roomState.LoadStateAtSnapshot: %w", err)
 		}
 	}
 
@@ -66,15 +68,29 @@ func CheckForSoftFail(
 	// Load the actual auth events from the database.
 	authEvents, err := loadAuthEvents(ctx, db, roomInfo.RoomVersion, stateNeeded, authStateEntries)
 	if err != nil {
-		return true, fmt.Errorf("loadAuthEvents: %w", err)
+		return false, fmt.Errorf("loadAuthEvents: %w", err)
 	}
 
 	// Check if the event is allowed.
+	var lookupErr error
 	if err = gomatrixserverlib.Allowed(event.PDU, &authEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-		return querier.QueryUserIDForSender(ctx, roomID, senderID)
+		userID, queryErr := querier.QueryUserIDForSender(ctx, roomID, senderID)
+		if queryErr != nil {
+			lookupErr = queryErr
+		}
+		return userID, queryErr
 	}); err != nil {
-		// return true, nil
-		return true, err
+		if lookupErr != nil {
+			return false, fmt.Errorf("QueryUserIDForSender: %w", lookupErr)
+		}
+		// Only an auth denial is evidence that the event conflicts with
+		// current state. Other Allowed errors mean the check could not
+		// establish a verdict, so propagate them for retry.
+		var notAllowed *gomatrixserverlib.NotAllowed
+		if errors.As(err, &notAllowed) {
+			return true, nil
+		}
+		return false, fmt.Errorf("gomatrixserverlib.Allowed: %w", err)
 	}
 	return false, nil
 }

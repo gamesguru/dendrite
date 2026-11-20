@@ -595,6 +595,13 @@ func Register(
 	// token is supplied
 	accessToken, accessTokenErr := auth.ExtractAccessToken(req)
 
+	// Refuse closed registration before validating the username or password.
+	// Otherwise a malformed body can make a disabled server answer 400 and
+	// obscure that registration is not allowed at all.
+	if registrationClosed(cfg, r, sessionID, accessTokenErr) {
+		return registrationDisabledResponse(r.ServerName)
+	}
+
 	// While open sign-ups create call guests, a registration without an
 	// access token creates either a call guest, whose localpart is generated
 	// when the account is made, or, with a registration token, a normal
@@ -801,19 +808,8 @@ func handleRegistrationFlow(
 		)
 	}
 
-	registrationEnabled := registrationEnabledFor(cfg, r.ServerName)
-	// While registration is closed, a registration token still lets a user
-	// register; the terms stage is only accepted once the token is redeemed.
-	tokenRedeemed := slices.Contains(sessions.getCompletedStages(sessionID), authtypes.LoginTypeRegistrationToken)
-	if !registrationEnabled && !callGuestRegistration(cfg, r.ServerName) &&
-		r.Auth.Type != authtypes.LoginTypeSharedSecret && r.Auth.Type != authtypes.LoginTypeRegistrationToken &&
-		(r.Auth.Type != authtypes.LoginTypeTerms || !tokenRedeemed) {
-		return util.JSONResponse{
-			Code: http.StatusForbidden,
-			JSON: spec.Forbidden(
-				fmt.Sprintf("Registration is disabled on %q", r.ServerName),
-			),
-		}
+	if registrationClosed(cfg, r, sessionID, accessTokenErr) {
+		return registrationDisabledResponse(r.ServerName)
 	}
 	// A UIA stage can only complete a challenge that this server issued. A
 	// registration token is also allowed as a single-shot credential.
@@ -930,6 +926,43 @@ func registrationEnabledFor(cfg *config.ClientAPI, serverName spec.ServerName) b
 // normal accounts is not, globally or for the virtual host.
 func callGuestRegistration(cfg *config.ClientAPI, serverName spec.ServerName) bool {
 	return cfg.CallGuests.Enabled() && !registrationEnabledFor(cfg, serverName)
+}
+
+// registrationClosed reports whether an ordinary user registration must be
+// refused because open registration is disabled. It is shared by the early
+// check in Register and the flow handler, so a disabled server answers 403
+// before it validates a username or password.
+func registrationClosed(cfg *config.ClientAPI, r registerRequest, sessionID string, accessTokenErr error) bool {
+	if registrationEnabledFor(cfg, r.ServerName) || callGuestRegistration(cfg, r.ServerName) {
+		return false
+	}
+	// A valid access token only exempts the explicit application-service
+	// registration flow. Other request types must still be refused while
+	// ordinary registration is disabled.
+	if r.Type == authtypes.LoginTypeApplicationService && accessTokenErr == nil {
+		return false
+	}
+	// While registration is closed, a registration token still lets a user
+	// register; the terms stage is only accepted once the token is redeemed.
+	switch r.Auth.Type {
+	case authtypes.LoginTypeSharedSecret, authtypes.LoginTypeRegistrationToken:
+		return false
+	case authtypes.LoginTypeTerms:
+		return !slices.Contains(sessions.getCompletedStages(sessionID), authtypes.LoginTypeRegistrationToken)
+	default:
+		return true
+	}
+}
+
+// registrationDisabledResponse is the M_FORBIDDEN response for a registration
+// attempt made while open registration is closed.
+func registrationDisabledResponse(serverName spec.ServerName) util.JSONResponse {
+	return util.JSONResponse{
+		Code: http.StatusForbidden,
+		JSON: spec.Forbidden(
+			fmt.Sprintf("Registration is disabled on %q", serverName),
+		),
+	}
 }
 
 // registrationAccountType picks the kind of account a completed

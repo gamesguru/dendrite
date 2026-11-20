@@ -98,11 +98,36 @@ const selectFirstSyncedDepthAfterStreamPositionSQL = "" +
 const purgeEventsTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE room_id = $1"
 
+const lockRoomTopologySQL = "" +
+	"SELECT pg_advisory_xact_lock(hashtext($1))"
+
 // The highest topological position among the given events that are already in
 // the room's topology, or -1 if none is.
 const selectMaxTopologyPositionSQL = "" +
 	"SELECT COALESCE(MAX(topological_position), -1) FROM syncapi_output_room_events_topology" +
 	" WHERE room_id = $1 AND event_id = ANY($2)"
+
+// The first delivered, non-create state event establishes when the room's
+// state timeline became live. Backfilled messages must not drag the boundary
+// into history. PostgreSQL rejects \u0000 and lone-surrogate escapes that Go
+// accepts, so replace them before parsing the JSON; only the presence of
+// state_key matters here, not the decoded value.
+const selectLiveStartPositionSQL = "" +
+	"SELECT t.topological_position FROM syncapi_output_room_events_topology t" +
+	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
+	" WHERE t.room_id = $1 AND e.exclude_from_sync = FALSE" +
+	" AND e.type <> 'm.room.create'" +
+	" AND CASE WHEN e.headered_event_json LIKE '%\\\\u%'" +
+	" THEN regexp_replace(e.headered_event_json, '\\\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\\\uFFFD', 'g')" +
+	" ELSE e.headered_event_json END::json -> 'state_key' IS NOT NULL" +
+	" ORDER BY t.topological_position ASC LIMIT 1"
+
+// Whether a backfilled event has a greater topological position in the room.
+const selectExcludedEventsAfterTopologyPositionSQL = "" +
+	"SELECT EXISTS (SELECT 1 FROM syncapi_output_room_events_topology t" +
+	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
+	" WHERE t.room_id = $1 AND e.exclude_from_sync = TRUE" +
+	" AND t.topological_position > $2)"
 
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
@@ -116,11 +141,14 @@ const selectRoomEventTopologySQL = "" +
 	" WHERE t.room_id = $1 AND t.topological_position >= $2 ORDER BY t.stream_position, t.event_id"
 
 type outputRoomEventsTopologyStatements struct {
+	lockRoomTopologyStmt                          *sql.Stmt
 	insertEventInTopologyStmt                     *sql.Stmt
 	selectEventIDsInRangeASCStmt                  *sql.Stmt
 	selectEventIDsInRangeDESCStmt                 *sql.Stmt
 	selectEventIDsBeforeStreamPositionStmt        *sql.Stmt
 	selectPositionInTopologyStmt                  *sql.Stmt
+	selectLiveStartPositionStmt                   *sql.Stmt
+	selectExcludedEventsAfterTopologyPositionStmt *sql.Stmt
 	selectPositionByStreamPositionStmt            *sql.Stmt
 	selectPositionsInTopologyStmt                 *sql.Stmt
 	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
@@ -140,11 +168,14 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		return nil, err
 	}
 	return s, sqlutil.StatementList{
+		{&s.lockRoomTopologyStmt, lockRoomTopologySQL},
 		{&s.insertEventInTopologyStmt, insertEventInTopologySQL},
 		{&s.selectEventIDsInRangeASCStmt, selectEventIDsInRangeASCSQL},
 		{&s.selectEventIDsInRangeDESCStmt, selectEventIDsInRangeDESCSQL},
 		{&s.selectEventIDsBeforeStreamPositionStmt, selectEventIDsBeforeStreamPositionSQL},
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
+		{&s.selectLiveStartPositionStmt, selectLiveStartPositionSQL},
+		{&s.selectExcludedEventsAfterTopologyPositionStmt, selectExcludedEventsAfterTopologyPositionSQL},
 		{&s.selectPositionByStreamPositionStmt, selectPositionByStreamPositionSQL},
 		{&s.selectPositionsInTopologyStmt, selectPositionsInTopologySQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
@@ -156,6 +187,14 @@ func NewPostgresTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.updateEventPositionStmt, updateEventPositionSQL},
 		{&s.selectRoomEventTopologyStmt, selectRoomEventTopologySQL},
 	}.Prepare(db)
+}
+
+func (s *outputRoomEventsTopologyStatements) LockRoomTopology(ctx context.Context, txn *sql.Tx, roomID string) error {
+	if txn == nil {
+		return errors.New("LockRoomTopology called without a transaction")
+	}
+	_, err := sqlutil.TxStmt(txn, s.lockRoomTopologyStmt).ExecContext(ctx, roomID)
+	return err
 }
 
 func (s *outputRoomEventsTopologyStatements) UpdateEventPosition(
@@ -195,22 +234,9 @@ func (s *outputRoomEventsTopologyStatements) SelectRoomEventTopology(
 func (s *outputRoomEventsTopologyStatements) InsertEventInTopology(
 	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent, pos types.StreamPosition,
 ) (topoPos types.StreamPosition, err error) {
-	// Clamp the depth to prevent issues with events that have depth values
-	// exceeding the canonical JSON integer limit (e.g., from corrupt federation data).
-	depth := depth.Clamp(event.Depth())
-	// An event must sort after its parents. A server that restarted its depth
-	// counter claims a depth below them, which would split the room into two
-	// depth ranges, so lift the position above the stored prev events.
-	var maxPrev int64
-	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
-		if err = sqlutil.TxStmt(txn, s.selectMaxTopologyPositionStmt).QueryRowContext(
-			ctx, event.RoomID().String(), sqlutil.StringArray(prevs),
-		).Scan(&maxPrev); err != nil {
-			return 0, err
-		}
-		if lifted := maxPrev + 1; maxPrev >= 0 && lifted > depth {
-			depth = lifted
-		}
+	depth, err := s.ProspectiveEventPosition(ctx, txn, event)
+	if err != nil {
+		return 0, err
 	}
 	err = sqlutil.TxStmt(txn, s.insertEventInTopologyStmt).QueryRowContext(
 		ctx, event.EventID(), depth, event.RoomID().String(), pos,
@@ -313,6 +339,51 @@ func (s *outputRoomEventsTopologyStatements) SelectPositionInTopology(
 ) (pos, spos types.StreamPosition, err error) {
 	err = sqlutil.TxStmt(txn, s.selectPositionInTopologyStmt).QueryRowContext(ctx, eventID).Scan(&pos, &spos)
 	return
+}
+
+// SelectLiveStartPosition returns the first delivered non-create state event's
+// topological position, and false when the room has no such event.
+func (s *outputRoomEventsTopologyStatements) SelectLiveStartPosition(
+	ctx context.Context, txn *sql.Tx, roomID string,
+) (types.StreamPosition, bool, error) {
+	var pos sql.NullInt64
+	err := sqlutil.TxStmt(txn, s.selectLiveStartPositionStmt).QueryRowContext(ctx, roomID).Scan(&pos)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil || !pos.Valid {
+		return 0, false, err
+	}
+	return types.StreamPosition(pos.Int64), true, nil
+}
+
+// HasExcludedEventsAfterTopologyPosition reports whether an event excluded
+// from sync has a greater topological position in the room.
+func (s *outputRoomEventsTopologyStatements) HasExcludedEventsAfterTopologyPosition(
+	ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition,
+) (bool, error) {
+	var exists bool
+	err := sqlutil.TxStmt(txn, s.selectExcludedEventsAfterTopologyPositionStmt).QueryRowContext(
+		ctx, roomID, position,
+	).Scan(&exists)
+	return exists, err
+}
+
+// ProspectiveEventPosition returns the topological position that
+// InsertEventInTopology would assign based on currently stored prev events.
+func (s *outputRoomEventsTopologyStatements) ProspectiveEventPosition(
+	ctx context.Context, txn *sql.Tx, event *rstypes.HeaderedEvent,
+) (types.StreamPosition, error) {
+	maxPrev := int64(-1)
+	if prevs := event.PrevEventIDs(); len(prevs) > 0 {
+		if err := sqlutil.TxStmt(txn, s.selectMaxTopologyPositionStmt).QueryRowContext(
+			ctx, event.RoomID().String(), sqlutil.StringArray(prevs),
+		).Scan(&maxPrev); err != nil {
+			return 0, err
+		}
+	}
+	pos := depth.LiftAbovePrevEvents(event.Depth(), maxPrev)
+	return types.StreamPosition(pos), nil
 }
 
 func (s *outputRoomEventsTopologyStatements) SelectPositionByStreamPosition(
