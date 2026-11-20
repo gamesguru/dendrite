@@ -108,7 +108,12 @@ type DeviceListUpdater struct {
 	// block on or timeout via a select.
 	userIDToChan   map[string]chan bool
 	userIDToChanMu *sync.Mutex
-	rsAPI          rsapi.KeyserverRoomserverAPI
+	// fetching holds the users whose device list is being fetched right now, so
+	// that a refresh requested while a fetch is in flight joins that fetch instead
+	// of asking the remote server a second time for the same answer.
+	fetchingMu sync.Mutex
+	fetching   map[string]struct{}
+	rsAPI      rsapi.KeyserverRoomserverAPI
 
 	isBlacklistedOrBackingOffFn func(s spec.ServerName) (*statistics.ServerStatistics, error)
 
@@ -210,6 +215,7 @@ func NewDeviceListUpdater(
 		workerChans:                 make([]chan spec.ServerName, numWorkers),
 		userIDToChan:                make(map[string]chan bool),
 		userIDToChanMu:              &sync.Mutex{},
+		fetching:                    make(map[string]struct{}),
 		rsAPI:                       rsAPI,
 		isBlacklistedOrBackingOffFn: isBlacklistedOrBackingOffFn,
 	}
@@ -284,9 +290,12 @@ func (u *DeviceListUpdater) bumpUpdateGenerationLocked(userID string) {
 // ManualUpdate invalidates the device list for the given user and fetches the latest and tracks it.
 // Blocks until the device list is synced or the timeout is reached.
 func (u *DeviceListUpdater) ManualUpdate(ctx context.Context, serverName spec.ServerName, userID string) error {
+	// A refresh request carries no newer device information, so it does not
+	// supersede a fetch that is already in flight. Discarding that fetch would
+	// start a second one (and, in QueryKeys, a direct /keys/query) for the same
+	// answer. Only a device-list update or a partial-state invalidation does.
 	mu := u.mutex(userID)
 	mu.Lock()
-	u.bumpUpdateGenerationLocked(userID)
 	err := u.db.MarkDeviceListStale(ctx, userID, true)
 	mu.Unlock()
 	if err != nil {
@@ -846,11 +855,18 @@ func (u *DeviceListUpdater) processServer(serverName spec.ServerName) (time.Dura
 func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName spec.ServerName, userID string) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	updateGeneration := u.currentUpdateGeneration(userID)
+	if !u.beginFetch(userID) {
+		// Another fetch for this user is already in flight. It will store the
+		// answer, mark the list fresh and clear the user's channel, so a second
+		// request would only duplicate it.
+		return defaultWaitTime, nil
+	}
 
 	// If we are processing more than one user per server, this unblocks further calls to Update
 	// immediately instead of just after **all** users have been processed.
 	defer u.clearChannel(userID)
+	defer u.endFetch(userID)
+	updateGeneration := u.currentUpdateGeneration(userID)
 
 	logger := util.GetLogger(ctx).WithFields(logrus.Fields{
 		"server_name": serverName,
@@ -934,6 +950,25 @@ func (u *DeviceListUpdater) processServerUser(ctx context.Context, serverName sp
 		return defaultWaitTime, err
 	}
 	return defaultWaitTime, nil
+}
+
+// beginFetch records that this user's device list is being fetched and reports
+// whether the caller is the fetch that owns it. It must be called once the fetch
+// is finished.
+func (u *DeviceListUpdater) beginFetch(userID string) bool {
+	u.fetchingMu.Lock()
+	defer u.fetchingMu.Unlock()
+	if _, ok := u.fetching[userID]; ok {
+		return false
+	}
+	u.fetching[userID] = struct{}{}
+	return true
+}
+
+func (u *DeviceListUpdater) endFetch(userID string) {
+	u.fetchingMu.Lock()
+	delete(u.fetching, userID)
+	u.fetchingMu.Unlock()
 }
 
 func (u *DeviceListUpdater) currentUpdateGeneration(userID string) uint64 {
