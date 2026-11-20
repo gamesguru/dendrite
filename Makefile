@@ -114,8 +114,12 @@ build: rezzy-native ## Build all packages
 	$(GO) build $(GO_LDFLAGS) $(PKGS)
 
 .PHONY: build-cmd
-build-cmd: rezzy-native ## Build binaries under cmd/
-	$(GO) build $(GO_LDFLAGS) ./cmd/...
+build-cmd: rezzy-native ## Build every command under cmd/ into the repository root
+	@for pkg in ./cmd/*/; do \
+		name=$${pkg#./cmd/}; \
+		name=$${name%/}; \
+		$(GO) build $(GO_LDFLAGS) -o "$$name" "$$pkg" || exit $$?; \
+	done
 
 .PHONY: install
 install: rezzy-native ## Build the dendrite binary and install it to DENDRITE_INSTALL_PATH, keeping a backup of the previous one (requires sudo)
