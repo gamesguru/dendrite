@@ -451,8 +451,20 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 
 	r = newReq(5, anchorSnapshot{anchor: types.TopologyToken{Depth: 9, PDUPosition: 11}})
 	r.fromTopologyToken = false
+	r.fromStream = &types.StreamingToken{PDUPosition: 10}
 	require.NoError(t, r.reanchorBackwardCursor(ctx))
-	assert.Equal(t, types.StreamPosition(5), r.from.Depth, "only topology tokens are re-anchored")
+	assert.Equal(t, types.StreamPosition(9), r.from.Depth, "stream tokens are re-anchored too")
+
+	// A /sync prev_batch can fall into a stream gap: the next stream position is
+	// a visible event far above an older stored segment. The cursor must move
+	// up to that event's depth, or a live backward extremity above it is
+	// filtered out and /messages never fills the gap.
+	r = newReq(31, anchorSnapshot{anchor: types.TopologyToken{Depth: 92, PDUPosition: 133938}})
+	r.from.PDUPosition = 133937
+	r.fromTopologyToken = false
+	r.fromStream = &types.StreamingToken{PDUPosition: 133937}
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(92), r.from.Depth, "a stream token in a stream gap anchors at the next event's depth")
 
 	r = newReq(5, anchorSnapshot{err: errors.New("db down")})
 	require.Error(t, r.reanchorBackwardCursor(ctx))
