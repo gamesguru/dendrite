@@ -437,11 +437,21 @@ func (r *Queryer) queryMembershipForOptionalSenderID(ctx context.Context, roomID
 	return err
 }
 
-// logDBPoolOnSlowLookup reports the application-side connection pool
-// counters when a roomserver lookup is slow. A goroutine waiting for a free
-// database connection never appears in pg_stat_activity, so this is the only
-// place that wait is visible.
-func (r *Queryer) logDBPoolOnSlowLookup(stage string, started time.Time) {
+// dbPoolStats returns the application-side connection pool counters. A
+// goroutine waiting for a free database connection never appears in
+// pg_stat_activity, so this is the only view of that wait.
+func (r *Queryer) dbPoolStats() (sql.DBStats, bool) {
+	statser, ok := r.DB.(interface{ DBPoolStats() sql.DBStats })
+	if !ok {
+		return sql.DBStats{}, false
+	}
+	return statser.DBPoolStats(), true
+}
+
+// logDBPoolOnSlowLookup reports the pool counters when a roomserver lookup is
+// slow. WaitCount and WaitDuration are cumulative, so the per-call deltas are
+// what show whether this request waited for a connection.
+func (r *Queryer) logDBPoolOnSlowLookup(stage string, started time.Time, before sql.DBStats, haveBefore bool) {
 	elapsed := time.Since(started)
 	if elapsed <= time.Second {
 		return
@@ -450,14 +460,17 @@ func (r *Queryer) logDBPoolOnSlowLookup(stage string, started time.Time) {
 		"stage":      stage,
 		"elapsed_ms": elapsed.Milliseconds(),
 	}
-	if statser, ok := r.DB.(interface{ DBPoolStats() sql.DBStats }); ok {
-		stats := statser.DBPoolStats()
-		fields["open"] = stats.OpenConnections
-		fields["in_use"] = stats.InUse
-		fields["idle"] = stats.Idle
-		fields["max_open"] = stats.MaxOpenConnections
-		fields["wait_count"] = stats.WaitCount
-		fields["wait_ms"] = stats.WaitDuration.Milliseconds()
+	if after, ok := r.dbPoolStats(); ok {
+		fields["open"] = after.OpenConnections
+		fields["in_use"] = after.InUse
+		fields["idle"] = after.Idle
+		fields["max_open"] = after.MaxOpenConnections
+		fields["wait_count"] = after.WaitCount
+		fields["wait_ms"] = after.WaitDuration.Milliseconds()
+		if haveBefore {
+			fields["wait_count_delta"] = after.WaitCount - before.WaitCount
+			fields["wait_ms_delta"] = (after.WaitDuration - before.WaitDuration).Milliseconds()
+		}
 	}
 	logrus.WithFields(fields).Warn("Slow roomserver database lookup")
 }
@@ -475,9 +488,13 @@ func (r *Queryer) QueryMembershipAtEvent(
 	eventIDs []string,
 	senderID spec.SenderID,
 ) (map[string]*types.HeaderedEvent, error) {
-	roomInfoStarted := time.Now()
+	// Time the whole lookup, including the fallback path when the state
+	// optimisation is unsupported, so no slow branch escapes the counters.
+	beforeStats, haveBeforeStats := r.dbPoolStats()
+	lookupStarted := time.Now()
+	defer r.logDBPoolOnSlowLookup("membership_at_event", lookupStarted, beforeStats, haveBeforeStats)
+
 	info, err := r.DB.RoomInfo(ctx, roomID.String())
-	r.logDBPoolOnSlowLookup("room_info", roomInfoStarted)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get roomInfo: %w", err)
 	}
@@ -494,9 +511,7 @@ func (r *Queryer) QueryMembershipAtEvent(
 		return nil, fmt.Errorf("requested stateKeyNID for %s was not found", senderID)
 	}
 
-	membershipStarted := time.Now()
 	eventIDMembershipMap, err := r.DB.GetMembershipForHistoryVisibility(ctx, stateKeyNIDs[string(senderID)], info, eventIDs...)
-	r.logDBPoolOnSlowLookup("membership_at_event", membershipStarted)
 	switch {
 	case err == nil:
 		return eventIDMembershipMap, nil
