@@ -89,6 +89,13 @@ func (d *Database) SupportsConcurrentRoomInputs() bool {
 	return true
 }
 
+// DBPoolStats returns the connection pool counters. A request waiting for a
+// free connection never reaches the database, so this is the only view of
+// that wait.
+func (d *Database) DBPoolStats() sql.DBStats {
+	return d.DB.Stats()
+}
+
 func (d *Database) GetMembershipForHistoryVisibility(
 	ctx context.Context, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -436,6 +437,31 @@ func (r *Queryer) queryMembershipForOptionalSenderID(ctx context.Context, roomID
 	return err
 }
 
+// logDBPoolOnSlowLookup reports the application-side connection pool
+// counters when a roomserver lookup is slow. A goroutine waiting for a free
+// database connection never appears in pg_stat_activity, so this is the only
+// place that wait is visible.
+func (r *Queryer) logDBPoolOnSlowLookup(stage string, started time.Time) {
+	elapsed := time.Since(started)
+	if elapsed <= time.Second {
+		return
+	}
+	fields := logrus.Fields{
+		"stage":      stage,
+		"elapsed_ms": elapsed.Milliseconds(),
+	}
+	if statser, ok := r.DB.(interface{ DBPoolStats() sql.DBStats }); ok {
+		stats := statser.DBPoolStats()
+		fields["open"] = stats.OpenConnections
+		fields["in_use"] = stats.InUse
+		fields["idle"] = stats.Idle
+		fields["max_open"] = stats.MaxOpenConnections
+		fields["wait_count"] = stats.WaitCount
+		fields["wait_ms"] = stats.WaitDuration.Milliseconds()
+	}
+	logrus.WithFields(fields).Warn("Slow roomserver database lookup")
+}
+
 // QueryMembershipAtEvent returns the known memberships at a given event.
 // If the state before an event is not known, an empty list will be returned
 // for that event instead.
@@ -449,7 +475,9 @@ func (r *Queryer) QueryMembershipAtEvent(
 	eventIDs []string,
 	senderID spec.SenderID,
 ) (map[string]*types.HeaderedEvent, error) {
+	roomInfoStarted := time.Now()
 	info, err := r.DB.RoomInfo(ctx, roomID.String())
+	r.logDBPoolOnSlowLookup("room_info", roomInfoStarted)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get roomInfo: %w", err)
 	}
@@ -466,7 +494,9 @@ func (r *Queryer) QueryMembershipAtEvent(
 		return nil, fmt.Errorf("requested stateKeyNID for %s was not found", senderID)
 	}
 
+	membershipStarted := time.Now()
 	eventIDMembershipMap, err := r.DB.GetMembershipForHistoryVisibility(ctx, stateKeyNIDs[string(senderID)], info, eventIDs...)
+	r.logDBPoolOnSlowLookup("membership_at_event", membershipStarted)
 	switch {
 	case err == nil:
 		return eventIDMembershipMap, nil
