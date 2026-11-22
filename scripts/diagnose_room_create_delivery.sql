@@ -16,14 +16,67 @@ BEGIN;
 -- the original TEXT columns are left untouched.
 CREATE OR REPLACE FUNCTION pg_temp.zz_safe_jsonb(doc text)
     RETURNS jsonb
-    LANGUAGE sql
+    LANGUAGE plpgsql
     IMMUTABLE
     AS $func$
-    SELECT (CASE WHEN doc LIKE '%\\u%' THEN
-        regexp_replace(doc, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
-    ELSE
-        doc
-    END)::jsonb
+DECLARE
+    sanitized text := '';
+    i integer := 1;
+    n integer := char_length(doc);
+    code text;
+    low_code text;
+    in_string boolean := false;
+BEGIN
+    -- Scan JSON escapes instead of applying a regexp to raw text: an escaped
+    -- backslash must not turn a literal \\u sequence into a Unicode escape,
+    -- and valid UTF-16 surrogate pairs must remain intact.
+    WHILE i <= n LOOP
+        IF substr(doc, i, 1) = E'\\' AND substr(doc, i + 1, 1) = E'\\' THEN
+            sanitized := sanitized || substr(doc, i, 2);
+            i := i + 2;
+        ELSIF substr(doc, i, 1) = E'\\' AND substr(doc, i + 1, 1) = 'u'
+            AND i + 5 <= n THEN
+            code := substr(doc, i + 2, 4);
+            IF code ~ '^[0-9A-Fa-f]{4}$' THEN
+                IF code = '0000' OR code ~ '^[dD][c-fC-F][0-9A-Fa-f]{2}$' THEN
+                    sanitized := sanitized || E'\\uFFFD';
+                    i := i + 6;
+                ELSIF code ~ '^[dD][89aAbB][0-9A-Fa-f]{2}$' THEN
+                    low_code := substr(doc, i + 8, 4);
+                    IF substr(doc, i + 6, 2) = E'\\u' AND low_code ~ '^[dD][c-fC-F][0-9A-Fa-f]{2}$' THEN
+                        sanitized := sanitized || substr(doc, i, 12);
+                        i := i + 12;
+                    ELSE
+                        sanitized := sanitized || E'\\uFFFD';
+                        i := i + 6;
+                    END IF;
+                ELSE
+                    sanitized := sanitized || substr(doc, i, 6);
+                    i := i + 6;
+                END IF;
+            ELSE
+                sanitized := sanitized || E'\\u';
+                i := i + 2;
+            END IF;
+        ELSIF substr(doc, i, 1) = E'\\' AND in_string AND substr(doc, i + 1, 1) = 'u' THEN
+            -- Preserve malformed/short Unicode escapes as literal text in
+            -- the sanitized copy instead of making the whole diagnostic fail.
+            sanitized := sanitized || E'\\u';
+            i := i + 2;
+        ELSIF substr(doc, i, 1) = E'\\' AND in_string
+            AND substr(doc, i + 1, 1) NOT IN ('"', '/', 'b', 'f', 'n', 'r', 't') THEN
+            sanitized := sanitized || E'\\\\' || substr(doc, i + 1, 1);
+            i := i + 2;
+        ELSE
+            IF substr(doc, i, 1) = '"' THEN
+                in_string := NOT in_string;
+            END IF;
+            sanitized := sanitized || substr(doc, i, 1);
+            i := i + 1;
+        END IF;
+    END LOOP;
+    RETURN sanitized::jsonb;
+END
 $func$;
 CREATE TEMP TABLE zz_room_create_delivery_scan ON COMMIT DROP AS
 WITH create_room_ids AS (
