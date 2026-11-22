@@ -249,6 +249,26 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			markUnvalidated(ev.PDU)
 			continue
 		}
+		// RequestBackfill skips authorization when the initial signature check
+		// fails. Do not infer that authorization ran from cached before-state:
+		// resolving another event can populate this event's state entry too.
+		// Re-run both authorization checks before using any returned event.
+		if authErr := gomatrixserverlib.VerifyEventAuthChain(ctx, ev.PDU, requester.ProvideEvents, userIDForSender); authErr != nil {
+			logrus.WithError(authErr).WithFields(logrus.Fields{
+				"room_id":  req.RoomID,
+				"event_id": ev.EventID(),
+			}).Warn("backfillViaFederation: skipping state and redaction processing for event that failed auth chain verification")
+			markUnvalidated(ev.PDU)
+			continue
+		}
+		if authErr := gomatrixserverlib.VerifyAuthRulesAtState(ctx, requester, ev.PDU, true, userIDForSender); authErr != nil {
+			logrus.WithError(authErr).WithFields(logrus.Fields{
+				"room_id":  req.RoomID,
+				"event_id": ev.EventID(),
+			}).Warn("backfillViaFederation: skipping state and redaction processing for event that failed auth rule verification")
+			markUnvalidated(ev.PDU)
+			continue
+		}
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
 		if !ok {
