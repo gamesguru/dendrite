@@ -879,26 +879,32 @@ func TestBackfillAuthRejectsStaleJoinCitationWhenStateHasLeave(t *testing.T) {
 }
 
 func TestBackfillRechecksAuthorizationAfterSignatureRecheckPasses(t *testing.T) {
-	create, powerLevels, oldJoin, newJoin, leave, target := staleCitationFixture(t)
-	_ = oldJoin
-	_ = newJoin
-	_ = target
 	verImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
 	newEvent := func(body string) gomatrixserverlib.PDU {
 		ev, eventErr := verImpl.NewEventFromTrustedJSON([]byte(body), false)
 		require.NoError(t, eventErr)
 		return ev
 	}
-	joinRules := newEvent(fmt.Sprintf(`{"type":"m.room.join_rules","room_id":"!r:test","sender":"@a:test",`+
-		`"state_key":"","content":{"join_rule":"public"},"origin_server_ts":3,"depth":3,`+
-		`"prev_events":[],"auth_events":[%q,%q]}`, create.EventID(), powerLevels.EventID()))
+	create := newEvent(`{"type":"m.room.create","room_id":"!r:test","sender":"@a:test",` +
+		`"state_key":"","content":{"creator":"@a:test","room_version":"10"},` +
+		`"origin_server_ts":1,"depth":1,"prev_events":[],"auth_events":[]}`)
 	join := newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test",`+
-		`"state_key":"@a:test","content":{"membership":"join"},"origin_server_ts":4,"depth":4,`+
-		`"prev_events":[],"auth_events":[%q,%q,%q]}`, create.EventID(), powerLevels.EventID(), joinRules.EventID()))
+		`"state_key":"@a:test","content":{"membership":"join"},"origin_server_ts":2,"depth":2,`+
+		`"prev_events":[%q],"auth_events":[%q]}`, create.EventID(), create.EventID()))
+	powerLevels := newEvent(fmt.Sprintf(`{"type":"m.room.power_levels","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"","content":{"users":{"@a:test":100}},"origin_server_ts":3,"depth":3,`+
+		`"prev_events":[%q],"auth_events":[%q,%q]}`, join.EventID(), create.EventID(), join.EventID()))
+	joinRules := newEvent(fmt.Sprintf(`{"type":"m.room.join_rules","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"","content":{"join_rule":"public"},"origin_server_ts":4,"depth":4,`+
+		`"prev_events":[%q],"auth_events":[%q,%q,%q]}`, powerLevels.EventID(), create.EventID(), powerLevels.EventID(), join.EventID()))
+	leave := newEvent(fmt.Sprintf(`{"type":"m.room.member","room_id":"!r:test","sender":"@a:test",`+
+		`"state_key":"@a:test","content":{"membership":"leave"},"origin_server_ts":5,"depth":5,`+
+		`"prev_events":[%q],"auth_events":[%q,%q,%q,%q]}`, joinRules.EventID(), create.EventID(),
+		powerLevels.EventID(), joinRules.EventID(), join.EventID()))
 	redaction, err := verImpl.NewEventFromTrustedJSON([]byte(fmt.Sprintf(
 		`{"type":"m.room.redaction","room_id":"!r:test","sender":"@a:test","content":{},`+
-			`"origin_server_ts":7,"depth":7,"prev_events":[%q],"auth_events":[%q,%q,%q,%q],"redacts":"$target"}`,
-		join.EventID(), create.EventID(), powerLevels.EventID(), joinRules.EventID(), join.EventID(),
+			`"origin_server_ts":6,"depth":6,"prev_events":[%q],"auth_events":[%q,%q,%q,%q],"redacts":"$target"}`,
+		joinRules.EventID(), create.EventID(), powerLevels.EventID(), joinRules.EventID(), join.EventID(),
 	)), false)
 	require.NoError(t, err)
 
@@ -927,20 +933,26 @@ func TestBackfillRechecksAuthorizationAfterSignatureRecheckPasses(t *testing.T) 
 	}
 
 	// RequestBackfill's initial signature check failed, but the subsequent
-	// signature recheck passed, so this event is no longer in the failed set.
+	// signature recheck passed. The auth chain itself is valid; authorization
+	// against the event's before-state must still reject the redaction.
+	require.NoError(t, gomatrixserverlib.VerifyEventAuthChain(t.Context(), redaction, provideEvents, userIDForSender))
 	failedSignatures := map[string]struct{}{}
 	_, signatureFailed := failedSignatures[redaction.EventID()]
 	stateAssignments := make(map[string][]string)
 	unvalidatedRedactions := make(map[string]struct{})
+	stateCache := map[string][]string{redaction.EventID(): {create.EventID(), powerLevels.EventID()}}
 	if !signatureFailed {
-		if err = verifyBackfillEventAuthorization(t.Context(), redaction, provideEvents, stateProvider, userIDForSender); err == nil {
+		if err = verifyBackfillEventAuthorization(t.Context(), redaction, provideEvents, stateProvider, userIDForSender, func() {
+			delete(stateCache, redaction.EventID())
+		}); err == nil {
 			stateAssignments[redaction.EventID()] = []string{create.EventID()}
 		} else {
 			markUnvalidatedBackfillRedaction(redaction, unvalidatedRedactions)
 		}
 	}
 
-	require.Error(t, err, "the event must fail authorization before state or redaction processing")
+	require.ErrorContains(t, err, "not in room", "the leave in the before-state must reject the event")
 	require.NotContains(t, stateAssignments, redaction.EventID(), "an unauthorized redaction cannot receive before-state")
 	require.Contains(t, unvalidatedRedactions, redaction.EventID(), "the unauthorized redaction is withheld from sync")
+	require.NotContains(t, stateCache, redaction.EventID(), "child state recovery must not reuse before-state cached for an unauthorized event")
 }

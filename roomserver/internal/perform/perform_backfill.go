@@ -253,7 +253,9 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		// fails. Do not infer that authorization ran from cached before-state:
 		// resolving another event can populate this event's state entry too.
 		// Re-run both authorization checks before using any returned event.
-		if authErr := verifyBackfillEventAuthorization(ctx, ev.PDU, requester.ProvideEvents, requester, userIDForSender); authErr != nil {
+		if authErr := verifyBackfillEventAuthorization(ctx, ev.PDU, requester.ProvideEvents, requester, userIDForSender, func() {
+			delete(requester.eventIDToBeforeStateIDs, ev.EventID())
+		}); authErr != nil {
 			logrus.WithError(authErr).WithFields(logrus.Fields{
 				"room_id":  req.RoomID,
 				"event_id": ev.EventID(),
@@ -405,11 +407,23 @@ func verifyBackfillEventAuthorization(
 	provideEvents gomatrixserverlib.EventProvider,
 	stateProvider gomatrixserverlib.StateProvider,
 	userIDForSender spec.UserIDForSender,
+	onFailure func(),
 ) error {
 	if err := gomatrixserverlib.VerifyEventAuthChain(ctx, ev, provideEvents, userIDForSender); err != nil {
+		if onFailure != nil {
+			onFailure()
+		}
 		return err
 	}
-	return gomatrixserverlib.VerifyAuthRulesAtState(ctx, stateProvider, ev, true, userIDForSender)
+	if err := gomatrixserverlib.VerifyAuthRulesAtState(ctx, stateProvider, ev, true, userIDForSender); err != nil {
+		// A failed event may have had its state populated while resolving a
+		// different event. Never let a child treat that cached state as trusted.
+		if onFailure != nil {
+			onFailure()
+		}
+		return err
+	}
+	return nil
 }
 
 func includeBackfillEventInResponse(ev gomatrixserverlib.PDU, unvalidated map[string]struct{}) bool {

@@ -265,6 +265,79 @@ func TestCompleteSyncPrevBatchDoesNotReplayRetainedEventBeforeGapStreamPosition(
 	})
 }
 
+// A visible event on a topology branch that starts before the hidden gap can
+// still be persisted after it. The prev_batch cursor is an inclusive stream
+// cursor at the gap, so backward pagination cannot return such an event. It
+// must stay in the timeline rather than being discarded by a topology-only
+// check.
+func TestCompleteSyncKeepsEventOnEarlierBranchPersistedAfterGap(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		create, join := room.Events()[0], room.Events()[1]
+
+		write := func(ev *rstypes.HeaderedEvent, excluded bool) types.StreamPosition {
+			var state []*rstypes.HeaderedEvent
+			var addState []string
+			if ev.StateKey() != nil {
+				state = []*rstypes.HeaderedEvent{ev}
+				addState = []string{ev.EventID()}
+			}
+			pos, writeErr := db.WriteEvent(t.Context(), ev, state, addState, nil, nil, excluded, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, writeErr)
+			return pos
+		}
+		write(create, false)
+		write(join, false)
+
+		// The hidden branch is deeper, but persisted first.
+		hidden := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden"},
+			test.WithDepth(join.Depth()+8), test.WithPrevEvents(join.EventID()))
+		hiddenPos := write(hidden, true)
+
+		// A sibling branch at an earlier depth is persisted after the gap.
+		early := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "early branch"},
+			test.WithDepth(join.Depth()+2), test.WithPrevEvents(join.EventID()))
+		earlyPos := write(early, false)
+
+		// Another visible event on the hidden branch keeps the gap inside the
+		// selected window.
+		tip := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "tip"},
+			test.WithDepth(hidden.Depth()+2), test.WithPrevEvents(hidden.EventID()))
+		write(tip, false)
+
+		require.Less(t, hiddenPos, earlyPos,
+			"the earlier-branch event is persisted after the hidden gap")
+
+		jr := completeSyncRoom(t, db, alice.ID, room.ID)
+		ids := clientEventIDs(jr.Timeline.Events)
+		require.Contains(t, ids, early.EventID(),
+			"an event beyond the stream cursor must stay in the timeline")
+		require.Contains(t, ids, tip.EventID())
+		require.NotContains(t, ids, hidden.EventID(), "the gap event is not delivered")
+
+		snapshot, err := db.NewDatabaseSnapshot(t.Context())
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
+		require.NoError(t, err)
+		require.Equal(t, hiddenPos, tok.PDUPosition)
+		page, _, _, err := snapshot.GetEventsBeforeStreamPosition(t.Context(), tok.PDUPosition, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 100}, true)
+		require.NoError(t, err)
+		for _, ev := range page {
+			require.NotEqual(t, early.EventID(), ev.EventID(),
+				"pagination must not replay the event retained in the timeline")
+		}
+	})
+}
+
 // A window whose only visible event is the create, followed by hidden
 // history, still leaves the create to state and anchors prev_batch at the
 // hidden history so pagination can reach it.

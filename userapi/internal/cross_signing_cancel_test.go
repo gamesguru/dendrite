@@ -244,3 +244,108 @@ func TestQueryKeysAlreadyCanceled(t *testing.T) {
 	require.NotNil(t, res.MasterKeys)
 	require.Empty(t, res.MasterKeys)
 }
+
+type stagedRefreshCrossSigningDB struct {
+	storage.KeyDatabase
+	reads  []map[fclient.CrossSigningKeyPurpose]fclient.CrossSigningKey
+	sigErr gomatrixserverlib.KeyID
+}
+
+func (d *stagedRefreshCrossSigningDB) CrossSigningKeysForUser(context.Context, string) (map[fclient.CrossSigningKeyPurpose]fclient.CrossSigningKey, error) {
+	keys := d.reads[0]
+	d.reads = d.reads[1:]
+	return keys, nil
+}
+
+func (d *stagedRefreshCrossSigningDB) CrossSigningSigsForTarget(_ context.Context, _, _ string, keyID gomatrixserverlib.KeyID) (types.CrossSigningSigMap, error) {
+	if keyID == d.sigErr {
+		return nil, errors.New("database failed")
+	}
+	return nil, nil
+}
+
+func crossSigningGenerationKey(purpose fclient.CrossSigningKeyPurpose, generation string) fclient.CrossSigningKey {
+	return fclient.CrossSigningKey{
+		Usage: []fclient.CrossSigningKeyPurpose{purpose},
+		Keys: map[gomatrixserverlib.KeyID]spec.Base64Bytes{
+			gomatrixserverlib.KeyID("ed25519:" + generation + "-" + string(purpose)): {generation[0]},
+		},
+	}
+}
+
+// A failed signature read during the reload must leave the whole previous
+// generation in place rather than only the purposes whose reads succeeded.
+func TestCrossSigningRefreshFailureKeepsPreviousGeneration(t *testing.T) {
+	db := &stagedRefreshCrossSigningDB{
+		reads: []map[fclient.CrossSigningKeyPurpose]fclient.CrossSigningKey{
+			{
+				fclient.CrossSigningKeyPurposeMaster:      crossSigningGenerationKey(fclient.CrossSigningKeyPurposeMaster, "a"),
+				fclient.CrossSigningKeyPurposeSelfSigning: crossSigningGenerationKey(fclient.CrossSigningKeyPurposeSelfSigning, "a"),
+			},
+			{
+				fclient.CrossSigningKeyPurposeMaster:      crossSigningGenerationKey(fclient.CrossSigningKeyPurposeMaster, "b"),
+				fclient.CrossSigningKeyPurposeSelfSigning: crossSigningGenerationKey(fclient.CrossSigningKeyPurposeSelfSigning, "b"),
+			},
+		},
+		sigErr: "ed25519:b-self_signing",
+	}
+	a := &UserInternalAPI{KeyDatabase: db}
+	req := &api.QueryKeysRequest{UserToDevices: map[string][]string{"@a:test": nil}}
+	res := &api.QueryKeysResponse{
+		MasterKeys:      make(map[string]fclient.CrossSigningKey),
+		SelfSigningKeys: make(map[string]fclient.CrossSigningKey),
+		UserSigningKeys: make(map[string]fclient.CrossSigningKey),
+	}
+	a.crossSigningKeysFromDatabase(t.Context(), req, res, nil)
+	dbLoaded := crossSigningEntries(res)
+	a.crossSigningKeysFromDatabase(t.Context(), req, res,
+		func(userID string, purpose fclient.CrossSigningKeyPurpose) bool {
+			_, loaded := dbLoaded[userID][purpose]
+			return loaded
+		},
+		func(userID string, purpose fclient.CrossSigningKeyPurpose) bool {
+			_, loaded := dbLoaded[userID][purpose]
+			return loaded
+		},
+	)
+
+	require.Equal(t, gomatrixserverlib.KeyID("ed25519:a-master"), onlyKeyID(t, res.MasterKeys["@a:test"]),
+		"the master key must not advance without the self-signing key")
+	require.Equal(t, gomatrixserverlib.KeyID("ed25519:a-self_signing"), onlyKeyID(t, res.SelfSigningKeys["@a:test"]),
+		"the self-signing key must stay on the previous generation")
+}
+
+// A full refresh that supplies one purpose but omits another must drop the
+// omitted purpose instead of leaving the previous generation paired with the
+// refreshed key.
+func TestCrossSigningRefreshDropsOmittedPurpose(t *testing.T) {
+	db := &stagedRefreshCrossSigningDB{
+		reads: []map[fclient.CrossSigningKeyPurpose]fclient.CrossSigningKey{
+			{
+				fclient.CrossSigningKeyPurposeMaster:      crossSigningGenerationKey(fclient.CrossSigningKeyPurposeMaster, "a"),
+				fclient.CrossSigningKeyPurposeSelfSigning: crossSigningGenerationKey(fclient.CrossSigningKeyPurposeSelfSigning, "a"),
+			},
+			{
+				fclient.CrossSigningKeyPurposeMaster: crossSigningGenerationKey(fclient.CrossSigningKeyPurposeMaster, "b"),
+			},
+		},
+	}
+	a := &UserInternalAPI{KeyDatabase: db}
+	req := &api.QueryKeysRequest{UserToDevices: map[string][]string{"@a:test": nil}}
+	res := &api.QueryKeysResponse{
+		MasterKeys:      make(map[string]fclient.CrossSigningKey),
+		SelfSigningKeys: make(map[string]fclient.CrossSigningKey),
+		UserSigningKeys: make(map[string]fclient.CrossSigningKey),
+	}
+	a.crossSigningKeysFromDatabase(t.Context(), req, res, nil)
+	dbLoaded := crossSigningEntries(res)
+	authoritative := func(userID string, purpose fclient.CrossSigningKeyPurpose) bool {
+		_, loaded := dbLoaded[userID][purpose]
+		return loaded
+	}
+	a.crossSigningKeysFromDatabase(t.Context(), req, res, authoritative, authoritative)
+
+	require.Equal(t, gomatrixserverlib.KeyID("ed25519:b-master"), onlyKeyID(t, res.MasterKeys["@a:test"]))
+	require.NotContains(t, res.SelfSigningKeys, "@a:test",
+		"an omitted self-signing key must not survive next to the refreshed master key")
+}
