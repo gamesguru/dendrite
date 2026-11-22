@@ -475,6 +475,37 @@ func TestSelectMembershipsAtStreamPosition(t *testing.T) {
 	})
 }
 
+// A partial-state resync fills in the state the join was missing and stamps
+// those memberships at the resync's stream position with topological position
+// zero. A client that synced just after the join then asks for /members at its
+// own earlier stream token; the resynced members are state the join already
+// implied, so they must still be returned.
+func TestSelectMembershipsIncludesResyncedStateAtEarlierStreamToken(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		positions := MustWriteEvents(t, db, r.Events())
+		atToken := positions[len(positions)-1]
+
+		bobJoin := r.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		_, err := db.PopulateRoomStateAfterResync(ctx, []*rstypes.HeaderedEvent{bobJoin})
+		require.NoError(t, err)
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		streamOnly := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: atToken}
+		got, err := snapshot.SelectMemberships(ctx, r.ID, streamOnly, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "resynced state belongs to the room at the earlier token")
+	})
+}
+
 // The purpose of this test is to ensure that backfill does indeed go backwards, using a topology token.
 func TestGetEventsInRangeWithTopologyToken(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {

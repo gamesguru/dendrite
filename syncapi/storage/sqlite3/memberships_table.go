@@ -120,12 +120,18 @@ const selectMembershipAtStreamSQL = "" +
 	" WHERE m.room_id = $1 and m.user_id = $2 AND m.stream_pos <= $3" +
 	" ORDER BY m.stream_pos DESC, " + isCurrentMemberEventSQL + " DESC LIMIT 1"
 
+// Rows written by a partial-state resync carry topological position 0: they
+// are the state the join already implied, not events that happened after the
+// client's token. A stream token therefore includes them even though the
+// resync stamped them at a later stream position, or /members?at= would omit
+// members the room already had when the token was issued (MSC3706).
 const selectMembersSQL = `
 SELECT event_id FROM
  ( SELECT m.event_id, m.membership,
           ROW_NUMBER() OVER (PARTITION BY m.user_id ORDER BY m.stream_pos DESC, ` + isCurrentMemberEventSQL + ` DESC) AS rn
    FROM syncapi_memberships m WHERE m.room_id = $1
-   AND (($2 = 9223372036854775807 AND m.stream_pos <= $3)
+   AND (($2 = 9223372036854775807 AND
+            (m.stream_pos <= $3 OR m.topological_pos = 0))
         OR ($2 <> 9223372036854775807 AND
             (m.topological_pos < $2 OR (m.topological_pos = $2 AND m.stream_pos <= $3))))) t
     WHERE t.rn = 1
