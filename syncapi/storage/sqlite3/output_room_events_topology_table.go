@@ -129,7 +129,8 @@ const selectLastExcludedEventAfterTopologyPositionSQL = "" +
 	" FROM syncapi_output_room_events_topology t" +
 	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
 	" WHERE t.room_id = $1 AND e.exclude_from_sync = TRUE" +
-	" AND t.topological_position > $2 AND t.topological_position <= $3" +
+	" AND (t.topological_position > $2 OR (t.topological_position = $2 AND t.stream_position > $3))" +
+	" AND (t.topological_position < $4 OR (t.topological_position = $4 AND t.stream_position <= $5))" +
 	" ORDER BY t.topological_position DESC, t.stream_position DESC LIMIT 1"
 
 const deleteEventFromTopologySQL = "" +
@@ -379,11 +380,11 @@ func (s *outputRoomEventsTopologyStatements) HasExcludedEventsAfterTopologyPosit
 // LastExcludedEventAfterTopologyPosition returns the newest event excluded
 // from sync after position and at or before through in the room's topology.
 func (s *outputRoomEventsTopologyStatements) LastExcludedEventAfterTopologyPosition(
-	ctx context.Context, txn *sql.Tx, roomID string, position, through types.StreamPosition,
+	ctx context.Context, txn *sql.Tx, roomID string, position, through types.TopologyToken,
 ) (types.TopologyToken, bool, error) {
 	var token types.TopologyToken
 	err := sqlutil.TxStmt(txn, s.selectLastExcludedEventAfterTopologyPositionStmt).QueryRowContext(
-		ctx, roomID, position, through,
+		ctx, roomID, position.Depth, position.PDUPosition, through.Depth, through.PDUPosition,
 	).Scan(&token.Depth, &token.PDUPosition)
 	if errors.Is(err, sql.ErrNoRows) {
 		return types.TopologyToken{}, false, nil

@@ -1829,6 +1829,57 @@ func TestGetEventsBeforeStreamPositionExcludesBackfilledAtTokenDepth(t *testing.
 	})
 }
 
+// LastExcludedEventAfterTopologyPosition uses the stream position to resolve
+// same-depth events at both ends of its inclusive topology window.
+func TestLastExcludedEventAfterTopologyPositionSameDepthBounds(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		create := r.Events()[0]
+		createPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{create})[0]
+
+		// These forked events share the depth of the create and delivered event,
+		// respectively. The excluded event at each depth is persisted later.
+		hiddenAtCreateDepth := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden at create depth"},
+			test.WithDepth(create.Depth()), test.WithPrevEvents())
+		hiddenAtCreatePos, err := db.WriteEvent(ctx, hiddenAtCreateDepth, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		visible := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "visible"},
+			test.WithDepth(create.Depth()+1), test.WithPrevEvents(create.EventID()))
+		visiblePos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{visible})[0]
+		hiddenAtVisibleDepth := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden after visible"},
+			test.WithDepth(visible.Depth()), test.WithPrevEvents(create.EventID()))
+		hiddenAtVisiblePos, err := db.WriteEvent(ctx, hiddenAtVisibleDepth, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			lower, err := snapshot.EventPositionInTopology(ctx, create.EventID())
+			require.NoError(t, err)
+			upper, err := snapshot.EventPositionInTopology(ctx, visible.EventID())
+			require.NoError(t, err)
+			want, err := snapshot.EventPositionInTopology(ctx, hiddenAtCreateDepth.EventID())
+			require.NoError(t, err)
+			afterUpper, err := snapshot.EventPositionInTopology(ctx, hiddenAtVisibleDepth.EventID())
+			require.NoError(t, err)
+			assert.Equal(t, createPos, lower.PDUPosition)
+			assert.Equal(t, visiblePos, upper.PDUPosition)
+			assert.Equal(t, hiddenAtCreatePos, want.PDUPosition)
+			assert.Equal(t, lower.Depth, want.Depth, "the first hidden event shares the create's topology depth")
+			assert.Equal(t, upper.Depth, afterUpper.Depth, "the excluded event shares the delivered event's topology depth")
+			assert.Greater(t, afterUpper.PDUPosition, upper.PDUPosition)
+
+			got, found, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, r.ID, lower, upper)
+			require.NoError(t, err)
+			require.True(t, found, "the later-stream event at the create's depth is inside the window")
+			assert.Equal(t, want, got, "the later-stream event at the upper depth is outside the window")
+			assert.NotEqual(t, hiddenAtVisiblePos, got.PDUPosition)
+		})
+	})
+}
+
 // A stream token before every stored event refers to the first event persisted
 // after it, not to the start of the depth axis: depth can restart in a room, so
 // an unbounded cursor would begin at the deepest events.

@@ -1141,18 +1141,19 @@ func topologicalRecentEvents(
 		// backfilled events unreachable. Leave the create to state and let
 		// backward pagination deliver it at the end of the history.
 		if len(picked) > 0 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
-			createDepth, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
+			createDepth, createStream, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
 			if err != nil {
 				return nil, err
 			}
-			through := types.StreamPosition(math.MaxInt64)
+			through := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
 			if len(picked) > 1 {
-				through, _, err = snapshot.PositionInTopology(ctx, picked[len(picked)-1].EventID())
+				through.Depth, through.PDUPosition, err = snapshot.PositionInTopology(ctx, picked[len(picked)-1].EventID())
 				if err != nil {
 					return nil, err
 				}
 			}
-			lastExcluded, hasExcludedAfterCreate, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, roomID, createDepth, through)
+			createPosition := types.TopologyToken{Depth: createDepth, PDUPosition: createStream}
+			lastExcluded, hasExcludedAfterCreate, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, roomID, createPosition, through)
 			if err != nil {
 				return nil, err
 			}
