@@ -185,7 +185,7 @@ func TestNotificationReceiptHistoricalRowsFollowOriginOrder(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()
-		defer db.DB.Close()
+		defer func() { require.NoError(t, db.DB.Close()) }()
 
 		var depth int64
 		require.NoError(t, db.DB.QueryRowContext(t.Context(), `SELECT room_depth FROM userapi_notification_events
@@ -264,7 +264,7 @@ func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()
-		defer db.DB.Close()
+		defer func() { require.NoError(t, db.DB.Close()) }()
 		// Reprocessing recovers the room order the migration could not
 		// reconstruct. The recovered $root receipt then clears $event1 too.
 		for i := 0; i < 3; i++ {
