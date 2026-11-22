@@ -206,6 +206,65 @@ func TestCompleteSyncPrevBatchReachesHiddenGapAfterVisibleJoin(t *testing.T) {
 	})
 }
 
+// A topology-later retained event can have an earlier stream position than
+// the hidden event between it and the create. Since prev_batch is a stream
+// cursor, that retained event must be left for pagination instead of being
+// replayed from the timeline.
+func TestCompleteSyncPrevBatchDoesNotReplayRetainedEventBeforeGapStreamPosition(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		create, join := room.Events()[0], room.Events()[1]
+		hidden := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden"}, test.WithDepth(join.Depth()+1), test.WithPrevEvents(join.EventID()))
+		visible := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "visible"}, test.WithDepth(hidden.Depth()+1), test.WithPrevEvents(hidden.EventID()))
+
+		write := func(ev *rstypes.HeaderedEvent, excluded bool) types.StreamPosition {
+			var state []*rstypes.HeaderedEvent
+			var addState []string
+			if ev.StateKey() != nil {
+				state = []*rstypes.HeaderedEvent{ev}
+				addState = []string{ev.EventID()}
+			}
+			pos, writeErr := db.WriteEvent(t.Context(), ev, state, addState, nil, nil, excluded, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, writeErr)
+			return pos
+		}
+		write(create, false)
+		write(join, false)
+		visiblePos := write(visible, false)
+		hiddenPos := write(hidden, true)
+		require.Less(t, visiblePos, hiddenPos, "the retained event is persisted before the hidden gap")
+
+		jr := completeSyncRoom(t, db, alice.ID, room.ID)
+		require.NotNil(t, jr.Timeline.PrevBatch)
+		require.NotContains(t, clientEventIDs(jr.Timeline.Events), visible.EventID(),
+			"an event before the stream cursor must not remain in the delivered timeline")
+
+		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
+		require.NoError(t, err)
+		require.Equal(t, hiddenPos, tok.PDUPosition, "the inclusive cursor must include the hidden event")
+		snapshot, err := db.NewDatabaseSnapshot(t.Context())
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+		page, _, _, err := snapshot.GetEventsBeforeStreamPosition(t.Context(), tok.PDUPosition, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 100}, true)
+		require.NoError(t, err)
+		pageIDs := make([]string, 0, len(page))
+		for _, ev := range page {
+			pageIDs = append(pageIDs, ev.EventID())
+		}
+		require.Contains(t, pageIDs, hidden.EventID())
+		require.Contains(t, pageIDs, visible.EventID(), "the trimmed retained event remains reachable through pagination")
+		require.NotContains(t, clientEventIDs(jr.Timeline.Events), visible.EventID(), "pagination does not replay a delivered event")
+	})
+}
+
 // A window whose only visible event is the create, followed by hidden
 // history, still leaves the create to state and anchors prev_batch at the
 // hidden history so pagination can reach it.

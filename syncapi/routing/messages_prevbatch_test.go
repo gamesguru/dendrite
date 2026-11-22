@@ -280,7 +280,7 @@ func TestMessagesHandlerUsesLeaveBoundInsteadOfClientStreamCursor(t *testing.T) 
 
 		// An earlier client cursor is already the tighter bound. The leave
 		// path must not widen it and replay the event at that cursor.
-		earlierFrom := types.StreamingToken{PDUPosition: beforeLeavePosition}.String()
+		earlierFrom := types.StreamingToken{PDUPosition: beforeLeavePosition - 1}.String()
 		earlierReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/messages?dir=b&from=%s&limit=10", earlierFrom), nil)
 		earlierResponse := OnIncomingMessagesRequest(
 			earlierReq, db, room.ID, device,

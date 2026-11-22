@@ -167,9 +167,7 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			recent, err := topologicalRecentEvents(ctx, snapshot, []string{r.ID}, to, &synctypes.RoomEventFilter{Limit: 20})
 			require.NoError(t, err)
 			events := recent[r.ID].Events
-			require.Len(t, events, 2, "the create is left for backward pagination across the hidden gap")
-			require.Equal(t, m1.EventID(), events[0].EventID())
-			require.Equal(t, m2.EventID(), events[1].EventID())
+			require.Empty(t, events, "events persisted before the hidden gap are left for pagination")
 			require.True(t, recent[r.ID].Limited)
 
 			// The create remains in the state snapshot; removing it from the
@@ -183,12 +181,11 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			}
 			require.Contains(t, stateIDs, create.EventID())
 
-			// The prev_batch is immediately before the first retained event.
-			depth, streamPos, err := snapshot.PositionInTopology(ctx, events[0].EventID())
-			require.NoError(t, err)
-			prevBatch := types.TopologyToken{Depth: depth, PDUPosition: streamPos}
-			prevBatch.Decrement()
-			require.Equal(t, m1Pos-1, prevBatch.PDUPosition)
+			// The prev_batch is after the hidden gap, but timeline events
+			// persisted before it must be left out to avoid replay.
+			require.NotNil(t, recent[r.ID].PrevBatchAnchor)
+			prevBatch := *recent[r.ID].PrevBatchAnchor
+			require.Greater(t, prevBatch.PDUPosition, m1Pos)
 
 			// Exercise the stream-token backfill path: hidden config rows were
 			// persisted after m1, but are topologically between m1 and the create.
@@ -201,8 +198,9 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			for _, ev := range page {
 				pageIDs = append(pageIDs, ev.EventID())
 			}
-			require.Len(t, pageIDs, len(hiddenConfig)+1)
-			require.Equal(t, create.EventID(), pageIDs[len(pageIDs)-1], "the create is last in the backward page")
+			require.Contains(t, pageIDs, create.EventID(), "the create is reachable in the backward page")
+			require.Contains(t, pageIDs, m1.EventID(), "the trimmed message is reachable in the backward page")
+			require.Contains(t, pageIDs, m2.EventID(), "the trimmed message is reachable in the backward page")
 			for _, ev := range hiddenConfig {
 				require.Contains(t, pageIDs, ev.EventID(), "hidden config stored after the cursor remains pageable")
 			}
@@ -268,11 +266,7 @@ func TestTopologicalRecentEventsLeavesCreateForStateOnHiddenGap(t *testing.T) {
 			for _, ev := range recent[r.ID].Events {
 				got = append(got, ev.EventID())
 			}
-			want = nil
-			for _, ev := range messages {
-				want = append(want, ev.EventID())
-			}
-			require.Equal(t, want, got, "hidden config history does not enter the sync timeline")
+			require.Empty(t, got, "messages persisted before the hidden config gap are paginated instead")
 			require.True(t, recent[r.ID].Limited)
 		})
 

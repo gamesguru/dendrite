@@ -64,6 +64,9 @@ BEGIN
         IF substr(doc, i, 1) = E'\\' AND substr(doc, i + 1, 1) = E'\\' THEN
             sanitized := sanitized || substr(doc, i, 2);
             i := i + 2;
+        ELSIF substr(doc, i, 1) = E'\\' AND in_string AND substr(doc, i + 1, 1) = '"' THEN
+            sanitized := sanitized || substr(doc, i, 2);
+            i := i + 2;
         ELSIF substr(doc, i, 1) = E'\\' AND substr(doc, i + 1, 1) = 'u'
             AND i + 5 <= n THEN
             code := substr(doc, i + 2, 4);
@@ -85,16 +88,16 @@ BEGIN
                     i := i + 6;
                 END IF;
             ELSE
-                sanitized := sanitized || E'\\u';
+                sanitized := sanitized || E'\\\\u';
                 i := i + 2;
             END IF;
         ELSIF substr(doc, i, 1) = E'\\' AND in_string AND substr(doc, i + 1, 1) = 'u' THEN
             -- Preserve malformed/short Unicode escapes as literal text in
             -- the sanitized copy instead of making the whole diagnostic fail.
-            sanitized := sanitized || E'\\u';
+            sanitized := sanitized || E'\\\\u';
             i := i + 2;
         ELSIF substr(doc, i, 1) = E'\\' AND in_string
-            AND substr(doc, i + 1, 1) NOT IN ('"', '/', 'b', 'f', 'n', 'r', 't') THEN
+            AND coalesce(substr(doc, i + 1, 1), '') NOT IN ('"', '/', 'b', 'f', 'n', 'r', 't') THEN
             sanitized := sanitized || E'\\\\' || substr(doc, i + 1, 1);
             i := i + 2;
         ELSE

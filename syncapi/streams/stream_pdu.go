@@ -1176,14 +1176,11 @@ func topologicalRecentEvents(
 				}
 				picked = afterGap
 				res.Limited = true
-				// prev_batch is a stream cursor. Place it just after the hidden
-				// gap so pagination can return the hidden events, and retain only
+				// prev_batch is an inclusive stream cursor. Place it at the hidden
+				// event so pagination can return the gap, and retain only
 				// timeline events whose stream positions are beyond that cursor.
 				// This avoids replay when stream order and topology order differ.
 				anchor := lastExcluded
-				if anchor.PDUPosition < types.StreamPosition(math.MaxInt64) {
-					anchor.PDUPosition++
-				}
 				res.PrevBatchAnchor = &anchor
 			}
 		}
