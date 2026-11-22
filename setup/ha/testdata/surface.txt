@@ -469,6 +469,7 @@ column userapi_notification_receipt_locks | room_id | text | NO |
 column userapi_notification_receipt_positions | localpart | text | NO |
 column userapi_notification_receipt_positions | notification_id | bigint | NO |
 column userapi_notification_receipt_positions | origin_ts | bigint | NO |
+column userapi_notification_receipt_positions | receipt_event_id | text | NO | ''::text
 column userapi_notification_receipt_positions | room_depth | bigint | NO | '-1'::integer
 column userapi_notification_receipt_positions | room_id | text | NO |
 column userapi_notification_receipt_positions | server_name | text | NO |
@@ -944,6 +945,7 @@ migration userapi: notification event origin timestamp
 migration userapi: notification event threads
 migration userapi: notification receipt positions
 migration userapi: notification room order
+migration userapi: notification room order recovery
 migration userapi: pending notification refreshes
 migration userapi: rename tables
 migration userapi: server names

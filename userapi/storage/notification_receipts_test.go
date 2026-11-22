@@ -180,7 +180,8 @@ func TestNotificationReceiptHistoricalRowsFollowOriginOrder(t *testing.T) {
      'userapi: notification event threads',
      'userapi: notification event origin timestamp',
      'userapi: notification receipt positions',
-			 'userapi: notification room order');`)
+			 'userapi: notification room order',
+     'userapi: notification room order recovery');`)
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()
@@ -244,23 +245,32 @@ func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
      'userapi: notification event threads',
      'userapi: notification event origin timestamp',
      'userapi: notification receipt positions',
-	     'userapi: notification room order');`)
+	     'userapi: notification room order',
+     'userapi: notification room order recovery');`)
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()
 		var originTS int64
 		require.NoError(t, db.DB.QueryRowContext(t.Context(), `SELECT origin_ts FROM userapi_notification_events WHERE room_id = '!room:test' AND event_id = '$event2'`).Scan(&originTS))
 		require.EqualValues(t, 102, originTS)
+		// The receipt's event has no room depth yet, so it can only clear
+		// itself. The older events stay unread until their depths recover.
 		_, err = db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", "!room:test", "$event2", "$root")
 		require.NoError(t, err)
 		total, _, err := db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
 		require.NoError(t, err)
-		require.EqualValues(t, 1, total)
+		require.EqualValues(t, 2, total)
 		_, err = db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", "!room:test", "$future", "main")
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()
 		defer db.DB.Close()
+		// Reprocessing recovers the room order the migration could not
+		// reconstruct. The recovered $root receipt then clears $event1 too.
+		for i := 0; i < 3; i++ {
+			_, err = db.StoreNotificationEvent(t.Context(), "!room:test", fmt.Sprintf("$event%d", i), map[int]string{0: "main", 1: "$root", 2: "$root"}[i], uint64(i+1), int64(i+1), int64(100+i))
+			require.NoError(t, err)
+		}
 		total, _, err = db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
 		require.NoError(t, err)
 		require.EqualValues(t, 1, total)

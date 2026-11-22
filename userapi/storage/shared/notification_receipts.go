@@ -42,10 +42,13 @@ func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, 
 				return err
 			}
 		}
+		// Placeholders must appear in ascending order: SQLite binds them in
+		// textual order rather than by number.
 		rows, err := txn.QueryContext(ctx, `SELECT rp.localpart, rp.server_name, rp.thread_id, rp.room_depth, rp.stream_pos, rp.receipt_event_id
 	FROM userapi_notification_receipt_positions rp
-	JOIN userapi_notification_events event ON event.room_id = rp.room_id AND event.event_id = $3
+	JOIN userapi_notification_events event ON event.room_id = rp.room_id
 	WHERE rp.room_id = $1 AND (rp.thread_id = '' OR rp.thread_id = $2)
+	AND event.event_id = $3
 	AND rp.room_depth > 0 AND event.room_depth > 0`, roomID, threadID, eventID)
 		if err != nil {
 			return err
