@@ -454,8 +454,32 @@ func (a *UserInternalAPI) processOtherSignatures(
 	return nil
 }
 
+// crossSigningEntries records which cross-signing key types a QueryKeys
+// response currently holds, so a later database pass can distinguish its own
+// earlier entries from keys supplied by federation.
+func crossSigningEntries(res *api.QueryKeysResponse) map[string]map[fclient.CrossSigningKeyPurpose]struct{} {
+	entries := make(map[string]map[fclient.CrossSigningKeyPurpose]struct{})
+	add := func(userID string, keyType fclient.CrossSigningKeyPurpose) {
+		if entries[userID] == nil {
+			entries[userID] = make(map[fclient.CrossSigningKeyPurpose]struct{})
+		}
+		entries[userID][keyType] = struct{}{}
+	}
+	for userID := range res.MasterKeys {
+		add(userID, fclient.CrossSigningKeyPurposeMaster)
+	}
+	for userID := range res.SelfSigningKeys {
+		add(userID, fclient.CrossSigningKeyPurposeSelfSigning)
+	}
+	for userID := range res.UserSigningKeys {
+		add(userID, fclient.CrossSigningKeyPurposeUserSigning)
+	}
+	return entries
+}
+
 func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 	ctx context.Context, req *api.QueryKeysRequest, res *api.QueryKeysResponse,
+	replace func(targetUserID string, keyType fclient.CrossSigningKeyPurpose) bool,
 ) {
 	for targetUserID := range req.UserToDevices {
 		if ctx.Err() != nil {
@@ -483,7 +507,7 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 			case fclient.CrossSigningKeyPurposeUserSigning:
 				_, alreadyPresent = res.UserSigningKeys[targetUserID]
 			}
-			if alreadyPresent {
+			if alreadyPresent && (replace == nil || !replace(targetUserID, keyType)) {
 				continue
 			}
 			var keyID gomatrixserverlib.KeyID
@@ -526,24 +550,21 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 			}
 
 			// Key queries fill this response from the database first and then
-			// again after federation, to cover entries that were still missing.
-			// Only fill absent entries: a key returned by federation is newer
-			// than the database copy and must not be replaced by it.
+			// again after federation. On the second pass replace an entry from
+			// the first pass with the database's current key: a device-list
+			// refresh may have stored a new master and self-signing key, and
+			// mixing the old master with the new self-signing key is invalid.
+			// A key federation supplied for a type the database does not have
+			// is left in place.
 			switch keyType {
 			case fclient.CrossSigningKeyPurposeMaster:
-				if _, ok := res.MasterKeys[targetUserID]; !ok {
-					res.MasterKeys[targetUserID] = key
-				}
+				res.MasterKeys[targetUserID] = key
 
 			case fclient.CrossSigningKeyPurposeSelfSigning:
-				if _, ok := res.SelfSigningKeys[targetUserID]; !ok {
-					res.SelfSigningKeys[targetUserID] = key
-				}
+				res.SelfSigningKeys[targetUserID] = key
 
 			case fclient.CrossSigningKeyPurposeUserSigning:
-				if _, ok := res.UserSigningKeys[targetUserID]; !ok {
-					res.UserSigningKeys[targetUserID] = key
-				}
+				res.UserSigningKeys[targetUserID] = key
 			}
 		}
 	}
