@@ -732,6 +732,14 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		"num_rooms_sent": numRoomsSent,
 	}).Debug("[V4_SYNC] Connection state loaded")
 
+	// One absolute deadline for the whole long poll. The timeout used to be
+	// decremented once per loop iteration, which let a request that kept
+	// waking up wait far longer than the client asked for.
+	var longPollDeadline time.Time
+	if since != nil && v4Req.Timeout > 0 {
+		longPollDeadline = time.Now().Add(time.Duration(v4Req.Timeout) * time.Millisecond)
+	}
+
 	// Update presence and last seen (reuse existing v3 logic)
 	rp.updateLastSeen(req, device)
 	rp.updatePresenceExplicit(rp.db, v4Req.SetPresence, device.UserID)
@@ -754,6 +762,13 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	for {
 		startTime := time.Now()
 
+		// Per-iteration cleanup for the read snapshots opened below. A request
+		// that keeps waking up opens a fresh set on every iteration, so they
+		// must be released before looping instead of accumulating until the
+		// handler returns and starving the database connection pool.
+		var subSnapshotRollback func()
+		var filterSnapshotRollback func()
+
 		// Get current position from notifier
 		currentPos := rp.Notifier.CurrentPosition()
 
@@ -767,29 +782,48 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		}).Info("[V4_SYNC] Long polling check")
 
 		if since != nil && v4Req.Timeout > 0 {
-			logrus.WithField("timeout_ms", v4Req.Timeout).Info("[V4_SYNC] Entering long poll wait")
-			// Incremental sync with timeout - wait for new events
-			timeout := time.Duration(v4Req.Timeout) * time.Millisecond
+			// Always wait only up to the request's absolute deadline, not for
+			// a fresh timeout on every iteration.
+			waitFor := time.Duration(v4Req.Timeout) * time.Millisecond
+			if !longPollDeadline.IsZero() {
+				waitFor = time.Until(longPollDeadline)
+			}
+			if waitFor <= 0 {
+				logrus.Info("[V4_SYNC] Long poll deadline expired before waiting")
+				timeoutResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
+				logV4Response(*timeoutResp, device.UserID, device.ID, http.StatusOK)
+				return util.JSONResponse{
+					Code: http.StatusOK,
+					JSON: timeoutResp,
+				}
+			}
 
-			// Wait for changes using the notifier
-			timer := time.NewTimer(timeout)
-			defer timer.Stop()
+			logrus.WithField("timeout_ms", waitFor.Milliseconds()).Info("[V4_SYNC] Entering long poll wait")
+			// Incremental sync with timeout - wait for new events
+			timer := time.NewTimer(waitFor)
 
 			// Create a minimal sync request for the notifier
 			syncReq := &types.SyncRequest{
 				Context:       ctx,
 				Device:        device,
 				Since:         since.StreamToken,
-				Timeout:       timeout,
+				Timeout:       waitFor,
 				WantFullState: false,
 			}
 
 			userStream := rp.Notifier.GetListener(*syncReq)
-			defer userStream.Close()
+			// Release the timer and the listener as soon as this wait ends.
+			// Deferring them kept every listener of every loop iteration
+			// registered until the whole request returned.
+			stopWaiting := func() {
+				timer.Stop()
+				userStream.Close()
+			}
 
 			select {
 			case <-userStream.GetNotifyChannel(since.StreamToken):
 				// New events arrived, continue processing
+				stopWaiting()
 				logrus.Info("[V4_SYNC] User stream notified - events may be available")
 				currentPos = rp.Notifier.CurrentPosition()
 				currentPos.ApplyUpdates(userStream.GetSyncPosition())
@@ -799,6 +833,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}).Info("[V4_SYNC] Position updated after notification")
 			case <-timer.C:
 				// Timeout - return current position without changes
+				stopWaiting()
 				logrus.Info("[V4_SYNC] Timeout expired with no changes")
 				timeoutResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
 				logV4Response(*timeoutResp, device.UserID, device.ID, http.StatusOK)
@@ -809,6 +844,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			case <-process.Quiescing(ctx):
 				// A planned handover answers as if the timeout had been
 				// reached, so the next request reaches the successor.
+				stopWaiting()
 				logrus.Info("[V4_SYNC] Answering early for a planned handover")
 				return util.JSONResponse{
 					Code: http.StatusOK,
@@ -816,6 +852,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				}
 			case <-ctx.Done():
 				// Client disconnected
+				stopWaiting()
 				logrus.Info("[V4_SYNC] Client disconnected during wait")
 				disconnectResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "disconnect")
 				logV4Response(*disconnectResp, device.UserID, device.ID, http.StatusOK)
@@ -980,7 +1017,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			if subSnapshotErr != nil {
 				logrus.WithError(subSnapshotErr).Error("[V4_SYNC] Failed to create snapshot for subscription filtering")
 			} else {
-				defer func() { _ = subSnapshot.Rollback() }()
+				subSnapshotRollback = func() { _ = subSnapshot.Rollback() }
+				defer subSnapshotRollback()
 
 				// Get list of kicked rooms (leave where sender != user) to allow those subscriptions
 				kickedRoomIDs, kickedErr := subSnapshot.KickedRoomIDs(ctx, device.UserID)
@@ -1101,7 +1139,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 					JSON: spec.InternalServerError{},
 				}
 			}
-			defer func() { _ = filterSnapshot.Rollback() }()
+			filterSnapshotRollback = func() { _ = filterSnapshot.Rollback() }
+			defer filterSnapshotRollback()
 
 			// Get list of all candidate room IDs
 			candidateRoomIDs := make([]string, 0, len(roomsToPopulate))
@@ -1699,16 +1738,39 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		// If no updates and timeout remaining, loop again with bumped position
 		// This handles the case where global position advanced but there are no user-specific changes
 		if !hasUpdates && v4Req.Timeout > 0 && since != nil {
+			// Release this iteration's read snapshots before looping. They
+			// are only no-ops for the deferred cleanup registered above.
+			if subSnapshotRollback != nil {
+				subSnapshotRollback()
+			}
+			if filterSnapshotRollback != nil {
+				filterSnapshotRollback()
+			}
+			if succeeded {
+				_ = snapshot.Commit()
+			}
+			_ = snapshot.Rollback()
+
 			// Bump since to current position
 			since = types.NewSlidingSyncStreamToken(connState.ConnectionPosition, currentPos)
-			// Reduce timeout by elapsed time
-			elapsed := time.Since(startTime)
-			v4Req.Timeout = int(time.Duration(v4Req.Timeout)*time.Millisecond-elapsed) / int(time.Millisecond)
-			if v4Req.Timeout < 0 {
-				v4Req.Timeout = 0
+
+			// Do not start another iteration past the request's deadline.
+			// Building a response after the client has given up only piles more
+			// work onto an already loaded server.
+			remaining := time.Until(longPollDeadline)
+			if remaining <= 0 {
+				logrus.WithField("elapsed_ms", time.Since(startTime).Milliseconds()).
+					Info("[V4_SYNC] Timeout expired after building response, returning without updates")
+				logV4Response(response, device.UserID, device.ID, http.StatusOK)
+				return util.JSONResponse{
+					Code: http.StatusOK,
+					JSON: response,
+				}
 			}
+
+			v4Req.Timeout = int(remaining / time.Millisecond)
 			logrus.WithFields(logrus.Fields{
-				"elapsed_ms":  elapsed.Milliseconds(),
+				"elapsed_ms":  time.Since(startTime).Milliseconds(),
 				"new_timeout": v4Req.Timeout,
 			}).Info("[V4_SYNC] No updates, looping again with reduced timeout")
 			continue
