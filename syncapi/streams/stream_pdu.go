@@ -452,6 +452,13 @@ func (p *PDUStreamProvider) IncrementalSync(
 				logAbandoned(req, err, delta.RoomID, "incremental")
 				return from
 			}
+			if errors.Is(err, errHistoryVisibilityUnavailable) {
+				// Another room may already have raised newPos, but this room's
+				// omitted events sit below that position too. Only the old
+				// position is safe to return.
+				req.Log.WithError(err).WithField("room_id", delta.RoomID).Warn("Abandoning incremental sync, history visibility is unavailable")
+				return from
+			}
 			req.Log.WithError(err).WithField("room_id", delta.RoomID).Error("d.addRoomDeltaToResponse failed")
 			continue
 		}
@@ -854,10 +861,10 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// Applies the history visibility rules
 	events, err := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents, internal.SyncEndpoint)
 	if err != nil {
-		if abandonsSync(err) {
-			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
-		}
-		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
+		// The timeline is incomplete without an answer for every membership.
+		// Returning only the events that survived would let the sync advance
+		// past the omitted ones, so the caller must stay at the old position.
+		return r.From, fmt.Errorf("%w: %w", errHistoryVisibilityUnavailable, err)
 	}
 
 	bwExtrems, bwErr := snapshot.BackwardExtremitiesForRoom(ctx, delta.RoomID)
@@ -1511,6 +1518,11 @@ func removeDuplicates[T gomatrixserverlib.PDU](stateEvents, recentEvents []T) []
 func abandonsSync(err error) bool {
 	return sqlutil.ErrIsCanceled(err) || sqlutil.IsTransient(err)
 }
+
+// errHistoryVisibilityUnavailable reports a timeline that could not be
+// filtered because the membership lookup failed. The events left out are not
+// known to be hidden, so a sync must not advance past them.
+var errHistoryVisibilityUnavailable = errors.New("history visibility unavailable")
 
 // logAbandoned records why a sync was abandoned: routinely because the client
 // went away, or, worth a warning, because the database was unavailable.

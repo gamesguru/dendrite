@@ -155,14 +155,29 @@ func CreateNotificationReceiptPositions(ctx context.Context, tx *sql.Tx) error {
 // receipt boundaries. Stream position breaks ties between events at the same
 // depth; origin_server_ts is not an ordering key because it can tie or regress.
 func AddNotificationRoomOrder(ctx context.Context, tx *sql.Tx) error {
-	// Leave rows written before this migration at depth 0. They fall before
-	// every event that has a real depth, so a new receipt still clears the
-	// notifications they predate, while their origin_server_ts is never mixed
-	// with a depth as if the two were comparable.
-	if _, err := tx.ExecContext(ctx, `ALTER TABLE userapi_notification_events ADD COLUMN room_depth BIGINT NOT NULL DEFAULT 0;
-	ALTER TABLE userapi_notification_receipt_positions ADD COLUMN room_depth BIGINT NOT NULL DEFAULT 0;
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE userapi_notification_events ADD COLUMN room_depth BIGINT NOT NULL DEFAULT -1;
+	ALTER TABLE userapi_notification_receipt_positions ADD COLUMN room_depth BIGINT NOT NULL DEFAULT -1;
 	ALTER TABLE userapi_notification_receipt_positions ADD COLUMN stream_pos BIGINT NOT NULL DEFAULT 0;`); err != nil {
 		return err
 	}
 	return nil
+}
+
+// AddNotificationRoomOrderRecovery preserves legacy receipt boundaries as
+// unknown until their event is reprocessed. Timestamps cannot reconstruct
+// room order because they can tie or regress.
+func AddNotificationRoomOrderRecovery(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE userapi_notification_receipt_positions ADD COLUMN receipt_event_id TEXT NOT NULL DEFAULT '';
+	UPDATE userapi_notification_events SET room_depth = -1 WHERE room_depth = 0;
+	UPDATE userapi_notification_receipt_positions SET room_depth = -1 WHERE room_depth = 0;`); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE userapi_notification_receipt_positions SET receipt_event_id = (
+		SELECT MIN(event_id) FROM userapi_notification_events e
+		WHERE e.room_id = userapi_notification_receipt_positions.room_id
+		AND e.origin_ts = userapi_notification_receipt_positions.origin_ts
+		AND e.notification_id = userapi_notification_receipt_positions.notification_id
+		HAVING COUNT(*) = 1
+	) WHERE receipt_event_id = ''`)
+	return err
 }

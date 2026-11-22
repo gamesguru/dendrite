@@ -25,7 +25,7 @@ func TestThreadedNotificationReceipts(t *testing.T) {
 		for i, thread := range []string{"main", "$a", "$b", "$a", "main", "$b"} {
 			eventID := fmt.Sprintf("$event%d", i)
 			require.NoError(t, db.InsertNotification(ctx, "alice", "localhost", eventID, uint64(i+1), map[string]any{"highlight": true}, &api.Notification{RoomID: "!room:test", Event: synctypes.ClientEvent{Content: []byte(`{}`)}}))
-			_, err := db.StoreNotificationEvent(ctx, "!room:test", eventID, thread, uint64(i+1), 0)
+			_, err := db.StoreNotificationEvent(ctx, "!room:test", eventID, thread, uint64(i+1), int64(i+1), 0)
 			require.NoError(t, err)
 		}
 		count := func(want int64) {
@@ -47,7 +47,7 @@ func TestThreadedNotificationReceipts(t *testing.T) {
 		require.NoError(t, err)
 		count(3)
 		// An event without a notification still supplies a read-up-to position.
-		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$own-event", "main", 7, 0)
+		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$own-event", "main", 7, 7, 0)
 		require.NoError(t, err)
 		_, err = db.SetNotificationsReadForReceipt(ctx, "alice", "localhost", "!room:test", "$own-event", "main")
 		require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestThreadedNotificationReceipts(t *testing.T) {
 		_, err = db.SetNotificationsReadForReceipt(ctx, "alice", "localhost", "!room:test", "$future", "$b")
 		require.NoError(t, err)
 		count(1)
-		users, err := db.StoreNotificationEvent(ctx, "!room:test", "$future", "$b", 8, 0)
+		users, err := db.StoreNotificationEvent(ctx, "!room:test", "$future", "$b", 8, 8, 0)
 		require.NoError(t, err)
 		require.Equal(t, []string{"@alice:localhost"}, users)
 		count(0)
@@ -76,7 +76,7 @@ func TestLateNotificationBehindReceiptIsRead(t *testing.T) {
 
 		// The receipt event is newer in the room (origin 200), but is written
 		// to the output stream before the older event's delayed notification.
-		_, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$receipt", "main", 100, 200)
+		_, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$receipt", "main", 100, 200, 200)
 		require.NoError(t, err)
 		_, err = db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", "!room:test", "$receipt", "")
 		require.NoError(t, err)
@@ -95,14 +95,14 @@ func TestLateNotificationBehindReceiptIsRead(t *testing.T) {
 		// The late event is older in the timeline (origin 100) but has a later
 		// notification id and output stream position than the receipt event.
 		insert("$late", 1)
-		users, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$late", "main", 200, 100)
+		users, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$late", "main", 200, 100, 100)
 		require.NoError(t, err)
 		require.Equal(t, []string{"@alice:localhost"}, users)
 		count(0)
 
 		// An event genuinely after the receipt stays unread.
 		insert("$after", 2)
-		users, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$after", "main", 300, 300)
+		users, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$after", "main", 300, 300, 300)
 		require.NoError(t, err)
 		require.Empty(t, users)
 		count(1)
@@ -126,7 +126,7 @@ func TestLateNotificationReceiptUsesRoomOrder(t *testing.T) {
 					t.Helper()
 					require.NoError(t, db.InsertNotification(t.Context(), "alice", "localhost", eventID, streamPos, nil,
 						&api.Notification{RoomID: roomID, Event: synctypes.ClientEvent{Content: []byte(`{}`), OriginServerTS: originTS}}))
-					_, err := db.StoreNotificationEvent(t.Context(), roomID, eventID, "main", streamPos, depth)
+					_, err := db.StoreNotificationEvent(t.Context(), roomID, eventID, "main", streamPos, depth, int64(originTS))
 					require.NoError(t, err)
 				}
 
@@ -146,6 +146,73 @@ func TestLateNotificationReceiptUsesRoomOrder(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestNotificationReceiptHistoricalRowsFollowOriginOrder(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+		conn, cleanup := test.PrepareDBConnectionString(t, backend)
+		defer cleanup()
+		open := func() *shared.Database {
+			cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+			store, err := storage.NewUserDatabase(t.Context(), cm, &config.DatabaseOptions{ConnectionString: config.DataSource(conn)}, "localhost", bcrypt.MinCost, openIDLifetimeMS, loginTokenLifetime, "_server")
+			require.NoError(t, err)
+			db, ok := store.(*shared.Database)
+			require.True(t, ok)
+			return db
+		}
+		insert := func(db *shared.Database, eventID string, pos int, ts spec.Timestamp) {
+			t.Helper()
+			require.NoError(t, db.InsertNotification(t.Context(), "alice", "localhost", eventID, uint64(pos), nil,
+				&api.Notification{RoomID: "!room:test", Event: synctypes.ClientEvent{Content: []byte(`{}`), OriginServerTS: ts}}))
+		}
+
+		db := open()
+		insert(db, "$old", 1, 100)
+		insert(db, "$old-after", 2, 350)
+		// Recreate the state of a database from before the room-order
+		// migration, so the notification events are rebuilt from the
+		// notifications and their depths are marked unknown.
+		_, err := db.DB.ExecContext(t.Context(), `DROP TABLE userapi_notification_events;
+   DROP TABLE userapi_pending_notification_receipts;
+   DROP TABLE userapi_notification_receipt_locks;
+   DROP TABLE userapi_notification_receipt_positions;
+   DELETE FROM db_migrations WHERE version IN (
+     'userapi: notification event threads',
+     'userapi: notification event origin timestamp',
+     'userapi: notification receipt positions',
+			 'userapi: notification room order');`)
+		require.NoError(t, err)
+		require.NoError(t, db.DB.Close())
+		db = open()
+		defer db.DB.Close()
+
+		var depth int64
+		require.NoError(t, db.DB.QueryRowContext(t.Context(), `SELECT room_depth FROM userapi_notification_events
+   WHERE room_id = '!room:test' AND event_id = '$old'`).Scan(&depth))
+		require.EqualValues(t, -1, depth, "historical rows must not claim the start of the room")
+
+		// A later event carries a real room depth. Historical timestamps cannot
+		// determine which side of this receipt those events occupy.
+		insert(db, "$receipt", 3, 300)
+		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$receipt", "main", 3, 10, 300)
+		require.NoError(t, err)
+		_, err = db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", "!room:test", "$receipt", "")
+		require.NoError(t, err)
+		// Reprocessing recovers authoritative room order: $old is before the
+		// receipt, while $old-after is after it despite their timestamps.
+		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$old", "main", 1, 8, 100)
+		require.NoError(t, err)
+		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$old-after", "main", 2, 12, 350)
+		require.NoError(t, err)
+
+		insert(db, "$after", 4, 400)
+		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$after", "main", 4, 11, 400)
+		require.NoError(t, err)
+
+		total, _, err := db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.EqualValues(t, 2, total, "the historical event after the receipt and the later event stay unread")
+	})
 }
 
 func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
@@ -177,7 +244,7 @@ func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
      'userapi: notification event threads',
      'userapi: notification event origin timestamp',
      'userapi: notification receipt positions',
-     'userapi: notification room order');`)
+	     'userapi: notification room order');`)
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()
@@ -197,7 +264,7 @@ func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
 		total, _, err = db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
 		require.NoError(t, err)
 		require.EqualValues(t, 1, total)
-		users, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$future", "main", 4, 0)
+		users, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$future", "main", 4, 4, 0)
 		require.NoError(t, err)
 		require.Equal(t, []string{"@alice:localhost"}, users)
 		total, _, err = db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
@@ -223,7 +290,7 @@ func TestNotificationReceiptConcurrentEvent(t *testing.T) {
 			}()
 			go func() {
 				<-start
-				_, err := db.StoreNotificationEvent(t.Context(), "!room:test", eventID, "$thread", uint64(i+1), 0)
+				_, err := db.StoreNotificationEvent(t.Context(), "!room:test", eventID, "$thread", uint64(i+1), int64(i+1), 0)
 				results <- err
 			}()
 			close(start)
@@ -247,9 +314,9 @@ func TestDeleteNotificationsForEvent(t *testing.T) {
 		insert("bob", "!room:test", "$rejected", 1, false)
 		insert("alice", "!room:test", "$kept", 2, false)
 		insert("alice", "!other:test", "$rejected", 1, true)
-		_, err := db.StoreNotificationEvent(ctx, "!room:test", "$rejected", "$thread", 1, 0)
+		_, err := db.StoreNotificationEvent(ctx, "!room:test", "$rejected", "$thread", 1, 1, 0)
 		require.NoError(t, err)
-		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$kept", "main", 2, 0)
+		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$kept", "main", 2, 2, 0)
 		require.NoError(t, err)
 
 		users, err := db.DeleteNotificationsForEvent(ctx, "!room:test", "$rejected")
@@ -294,7 +361,7 @@ func TestRoomThreadNotificationCounts(t *testing.T) {
 			eventID := fmt.Sprintf("$event%d", i)
 			require.NoError(t, db.InsertNotification(ctx, "alice", "localhost", eventID, uint64(i+1), map[string]any{"highlight": highlight}, &api.Notification{RoomID: "!room:test", Event: synctypes.ClientEvent{Content: []byte(`{}`)}}))
 			if thread != "" {
-				_, err := db.StoreNotificationEvent(ctx, "!room:test", eventID, thread, uint64(i+1), 0)
+				_, err := db.StoreNotificationEvent(ctx, "!room:test", eventID, thread, uint64(i+1), int64(i+1), 0)
 				require.NoError(t, err)
 			}
 		}

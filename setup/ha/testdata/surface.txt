@@ -461,7 +461,7 @@ column userapi_login_tokens | user_id | text | NO |
 column userapi_notification_events | event_id | text | NO |
 column userapi_notification_events | notification_id | bigint | NO |
 column userapi_notification_events | origin_ts | bigint | NO | 0
-column userapi_notification_events | room_depth | bigint | NO | 0
+column userapi_notification_events | room_depth | bigint | NO | '-1'::integer
 column userapi_notification_events | room_id | text | NO |
 column userapi_notification_events | stream_pos | bigint | NO |
 column userapi_notification_events | thread_id | text | NO |
@@ -469,7 +469,7 @@ column userapi_notification_receipt_locks | room_id | text | NO |
 column userapi_notification_receipt_positions | localpart | text | NO |
 column userapi_notification_receipt_positions | notification_id | bigint | NO |
 column userapi_notification_receipt_positions | origin_ts | bigint | NO |
-column userapi_notification_receipt_positions | room_depth | bigint | NO | 0
+column userapi_notification_receipt_positions | room_depth | bigint | NO | '-1'::integer
 column userapi_notification_receipt_positions | room_id | text | NO |
 column userapi_notification_receipt_positions | server_name | text | NO |
 column userapi_notification_receipt_positions | stream_pos | bigint | NO | 0

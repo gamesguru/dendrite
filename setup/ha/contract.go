@@ -92,11 +92,12 @@ var release = Contract{
 // Every build links the native state HAMT reader, so every build writes level
 // 25 snapshots, and a level-25 build ignores the incomplete-snapshot marker and
 // could trust incomplete snapshots, so level 26 only rolls back to itself.
-// Level 27 adds stable notification receipt room-order positions, which are
-// additive and remain readable by level 26.
+// Level 27 adds stable notification receipt room-order positions. Level 28
+// adds receipt-boundary recovery metadata and treats unknown historical
+// positions conservatively; older writers can still use the additive columns.
 const (
-	releaseLevel           = 27
-	rollbackToLevel        = 26
+	releaseLevel           = 28
+	rollbackToLevel        = 27
 	membershipHistoryLevel = 19
 	topologyLiftLevel      = 22
 )
