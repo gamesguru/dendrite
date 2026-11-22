@@ -174,7 +174,10 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 
 	deleted, err := a.DB.DeleteNotificationsUpTo(ctx, localpart, domain, req.RoomID, uint64(spec.AsTimestamp(time.Now())))
 	if err != nil {
-		logrus.WithError(err).Errorf("UserInternalAPI.setFullyRead: DeleteNotificationsUpTo failed")
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"user_id": req.UserID,
+			"room_id": req.RoomID,
+		}).Error("UserInternalAPI.setFullyRead: DeleteNotificationsUpTo failed")
 		return err
 	}
 
@@ -187,7 +190,11 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 	defer cancel()
 
 	if err = a.SyncProducer.GetAndSendNotificationData(publishCtx, req.UserID, req.RoomID); err != nil {
-		logrus.WithError(err).Error("UserInternalAPI.setFullyRead: GetAndSendNotificationData failed")
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"user_id": req.UserID,
+			"room_id": req.RoomID,
+			"deleted": deleted,
+		}).Error("UserInternalAPI.setFullyRead: GetAndSendNotificationData failed")
 		return err
 	}
 
@@ -197,7 +204,10 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 	}
 
 	if err = userapiUtil.NotifyUserCountsAsync(publishCtx, a.PgClient, localpart, domain, a.DB); err != nil {
-		logrus.WithError(err).Error("UserInternalAPI.setFullyRead: NotifyUserCounts failed")
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"user_id": req.UserID,
+			"room_id": req.RoomID,
+		}).Error("UserInternalAPI.setFullyRead: NotifyUserCounts failed")
 		return err
 	}
 	return nil
