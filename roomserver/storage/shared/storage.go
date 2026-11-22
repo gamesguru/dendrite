@@ -143,6 +143,20 @@ func (d *Database) membershipFromHAMT(
 			// order.
 			states, err := d.EventsTable.BulkSelectStateAtEventByID(ctx, txn, []string{eventID})
 			if err != nil {
+				// History visibility can safely fail closed for an event whose
+				// before-state snapshot is unavailable. Do not fail the whole
+				// timeline batch: QueryMembershipAtEvent treats a missing map
+				// entry as unknown membership (leave), while retaining results
+				// for the other events.
+				var missingStateErr types.MissingStateError
+				var missingEventErr types.MissingEventError
+				if errors.As(err, &missingStateErr) || errors.As(err, &missingEventErr) {
+					logrus.WithFields(logrus.Fields{
+						"room_nid": roomInfo.RoomNID,
+						"event_id": eventID,
+					}).WithError(err).Warn("Skipping history visibility membership lookup for event without recoverable state")
+					continue
+				}
 				return err
 			}
 			if len(states) != 1 {

@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -45,6 +46,12 @@ var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 	},
 	[]string{"api"},
 )
+
+// membershipLookupTimeout caps how long one history visibility membership
+// lookup may hold a request open. A stalled database must not keep the
+// request, its goroutine and its connections alive for minutes: the page
+// falls back to the conservative "leave" default instead.
+const membershipLookupTimeout = 30 * time.Second
 
 var historyVisibilityPriority = map[gomatrixserverlib.HistoryVisibility]uint8{
 	spec.WorldReadable:                         0,
@@ -140,10 +147,32 @@ func ApplyHistoryVisibilityFilter(
 		return nil, err
 	}
 	visibilityStarted := time.Now()
-	visibilities, membershipKnown := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
-	if elapsed := time.Since(visibilityStarted); elapsed > time.Second {
+	lookupCtx, cancel := context.WithTimeout(ctx, membershipLookupTimeout)
+	visibilities, membershipKnown, lookupErr := visibilityForEvents(lookupCtx, rsAPI, events, senderID, firstEvRoomID)
+	cancel()
+	elapsed := time.Since(visibilityStarted)
+	switch {
+	case ctx.Err() != nil:
+		// The caller has gone away. That is the expected end of a long poll
+		// or a canceled page, not a slow lookup.
 		logrus.WithFields(logrus.Fields{
 			"room_id":    firstEvRoomID.String(),
+			"endpoint":   endpoint,
+			"events":     len(events),
+			"elapsed_ms": elapsed.Milliseconds(),
+		}).Debug("History visibility membership lookup canceled by caller")
+	case lookupErr != nil:
+		logrus.WithFields(logrus.Fields{
+			"room_id":    firstEvRoomID.String(),
+			"endpoint":   endpoint,
+			"events":     len(events),
+			"elapsed_ms": elapsed.Milliseconds(),
+			"timed_out":  errors.Is(lookupErr, context.DeadlineExceeded),
+		}).WithError(lookupErr).Warn("History visibility membership lookup failed; defaulting to 'leave'")
+	case elapsed > time.Second:
+		logrus.WithFields(logrus.Fields{
+			"room_id":    firstEvRoomID.String(),
+			"endpoint":   endpoint,
 			"events":     len(events),
 			"elapsed_ms": elapsed.Milliseconds(),
 		}).Warn("Slow membership lookup for history visibility")
@@ -305,7 +334,7 @@ func visibilityForEvents(
 	rsAPI api.SyncRoomserverAPI,
 	events []*types.HeaderedEvent,
 	senderID *spec.SenderID, roomID spec.RoomID,
-) (result map[string]eventVisibility, membershipKnown bool) {
+) (result map[string]eventVisibility, membershipKnown bool, err error) {
 	eventIDs := make([]string, len(events))
 	for i := range events {
 		eventIDs[i] = events[i].EventID()
@@ -315,13 +344,11 @@ func visibilityForEvents(
 	membershipKnown = true
 
 	// get the membership events for all eventIDs
-	var err error
 	membershipEvents := make(map[string]*types.HeaderedEvent)
 	if senderID != nil {
 		membershipEvents, err = rsAPI.QueryMembershipAtEvent(ctx, roomID, eventIDs, *senderID)
 		if err != nil {
 			membershipKnown = false
-			logrus.WithError(err).Error("visibilityForEvents: failed to fetch membership at event, defaulting to 'leave'")
 		}
 	}
 
@@ -338,8 +365,8 @@ func visibilityForEvents(
 			continue
 		}
 
-		membership, err := ev.Membership()
-		if err != nil {
+		membership, membershipErr := ev.Membership()
+		if membershipErr != nil {
 			result[eventID] = vis
 			continue
 		}
@@ -347,7 +374,7 @@ func visibilityForEvents(
 
 		result[eventID] = vis
 	}
-	return result, membershipKnown
+	return result, membershipKnown, err
 }
 
 // ApplyTimelineHistoryVisibilityFilter applies the history visibility filter
