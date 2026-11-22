@@ -182,10 +182,6 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 		return
 	}
 
-	// lock the map to this thread
-	lastPresence.mu.Lock()
-	defer lastPresence.mu.Unlock()
-
 	if presence == "" {
 		presence = types.PresenceOnline.String()
 	}
@@ -201,6 +197,13 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 		LastActiveTS: spec.AsTimestamp(time.Now()),
 	}
 
+	now := time.Now()
+
+	// Hold the lock only for the in-memory presence bookkeeping. A database
+	// read, NATS publish or consumer emit below can block when the server is
+	// busy; keeping the mutex across them would stall every sync request on
+	// the server before it could even enter its response loop.
+	lastPresence.mu.Lock()
 	// make sure that the map is defined correctly as needed
 	if lastPresence.seen == nil {
 		lastPresence.seen = make(map[string]map[types.Presence]time.Time)
@@ -209,12 +212,12 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 		lastPresence.seen[userID] = make(map[types.Presence]time.Time)
 	}
 
-	now := time.Now()
 	// update time for each presence
 	lastPresence.seen[userID][presenceID] = now
 
 	// Default to unknown presence
 	presenceToSet := types.PresenceUnknown
+	checkOfflineAgain := false
 	switch {
 	case explicit:
 		presenceToSet = presenceID
@@ -229,16 +232,18 @@ func (rp *RequestPool) updatePresenceInternal(db storage.Presence, presence stri
 		// only set offline status if there is no known online devices
 		// clients may set offline to attempt to not alter the online status of the user
 		presenceToSet = types.PresenceOffline
+		checkOfflineAgain = checkAgain
+	}
+	lastPresence.mu.Unlock()
 
-		if checkAgain {
-			// after a timeout, check presence again to make sure it gets set as offline sooner or later
-			process.Go(rp.ctx, func() {
-				if !process.Sleep(rp.ctx, presenceTimeout) {
-					return
-				}
-				rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false, false)
-			})
-		}
+	if checkOfflineAgain {
+		// after a timeout, check presence again to make sure it gets set as offline sooner or later
+		process.Go(rp.ctx, func() {
+			if !process.Sleep(rp.ctx, presenceTimeout) {
+				return
+			}
+			rp.updatePresenceInternal(db, types.PresenceOffline.String(), userID, false, false)
+		})
 	}
 
 	// ensure we also send the current status_msg to federated servers and not nil

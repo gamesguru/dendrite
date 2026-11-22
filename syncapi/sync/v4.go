@@ -8,6 +8,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -618,6 +619,8 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		}
 	}
 
+	setupStarted := time.Now()
+
 	// Validate position token if provided
 	if since != nil {
 		// Validate that the position exists and belongs to this connection
@@ -767,6 +770,13 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 	if rp.toDeviceBarrier != nil && v4Req.Extensions != nil &&
 		v4Req.Extensions.ToDevice != nil && v4Req.Extensions.ToDevice.Enabled {
 		rp.toDeviceBarrier()
+	}
+	if elapsed := time.Since(setupStarted); elapsed > time.Second {
+		// Everything between the request arriving and this point is database
+		// and notifier setup that runs before the response loop. A long time
+		// here means a sync can appear frozen even though the loop is fine.
+		logrus.WithField("elapsed_ms", elapsed.Milliseconds()).
+			Warn("[V4_SYNC] Slow request setup before response loop")
 	}
 
 	// Main sync loop - similar to v3 sync
@@ -1040,7 +1050,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				// Get ignored users for invite filtering
 				ignoredUsers := make(map[string]bool)
 				ignoresData, ignoresErr := subSnapshot.IgnoresForUser(ctx, device.UserID)
-				if ignoresErr != nil {
+				if ignoresErr != nil && !errors.Is(ignoresErr, sql.ErrNoRows) {
 					logrus.WithError(ignoresErr).Warn("[V4_SYNC] Failed to get ignored users")
 				} else if ignoresData != nil && ignoresData.List != nil {
 					for userID := range ignoresData.List {
