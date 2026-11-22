@@ -44,6 +44,10 @@ import (
 	userapiUtil "codefloe.com/pat-s/zendrite/userapi/util"
 )
 
+// notificationRefreshTimeout bounds the detached publish that clears a room's
+// unread badge after the client marks it read.
+const notificationRefreshTimeout = 10 * time.Second
+
 type UserInternalAPI struct {
 	DB                storage.UserDatabase
 	KeyDatabase       storage.KeyDatabase
@@ -174,7 +178,15 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 		return err
 	}
 
-	if err = a.SyncProducer.GetAndSendNotificationData(ctx, req.UserID, req.RoomID); err != nil {
+	// The notifications are already deleted. Publishing their new count is what
+	// clears the badge in the sync API, so it must not be abandoned just
+	// because the client disconnected after sending the read marker. Otherwise
+	// the sync API keeps the old count until some later event for the room
+	// happens to refresh it.
+	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notificationRefreshTimeout)
+	defer cancel()
+
+	if err = a.SyncProducer.GetAndSendNotificationData(publishCtx, req.UserID, req.RoomID); err != nil {
 		logrus.WithError(err).Error("UserInternalAPI.setFullyRead: GetAndSendNotificationData failed")
 		return err
 	}
@@ -184,7 +196,7 @@ func (a *UserInternalAPI) setFullyRead(ctx context.Context, req *api.InputAccoun
 		return nil
 	}
 
-	if err = userapiUtil.NotifyUserCountsAsync(ctx, a.PgClient, localpart, domain, a.DB); err != nil {
+	if err = userapiUtil.NotifyUserCountsAsync(publishCtx, a.PgClient, localpart, domain, a.DB); err != nil {
 		logrus.WithError(err).Error("UserInternalAPI.setFullyRead: NotifyUserCounts failed")
 		return err
 	}
