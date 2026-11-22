@@ -168,7 +168,7 @@ func ApplyHistoryVisibilityFilter(
 			"events":     len(events),
 			"elapsed_ms": elapsed.Milliseconds(),
 			"timed_out":  errors.Is(lookupErr, context.DeadlineExceeded),
-		}).WithError(lookupErr).Warn("History visibility membership lookup failed; defaulting to 'leave'")
+		}).WithError(lookupErr).Warn("History visibility membership lookup failed")
 	case elapsed > time.Second:
 		logrus.WithFields(logrus.Fields{
 			"room_id":    firstEvRoomID.String(),
@@ -176,6 +176,12 @@ func ApplyHistoryVisibilityFilter(
 			"events":     len(events),
 			"elapsed_ms": elapsed.Milliseconds(),
 		}).Warn("Slow membership lookup for history visibility")
+	}
+	// Report a failed lookup instead of serving a filtered page. The caller
+	// would otherwise advance its pagination cursor past events that were
+	// omitted only because the membership was unknown, losing them for good.
+	if lookupErr != nil {
+		return nil, fmt.Errorf("history visibility membership lookup: %w", lookupErr)
 	}
 
 	// MSC4354: joined users see unexpired sticky events whatever the history

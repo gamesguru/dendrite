@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -23,6 +24,8 @@ type mockHisVisRoomserverAPI struct {
 	// membershipAt overrides the membership event at the given event IDs.
 	membershipAt map[string]*types.HeaderedEvent
 	erased       map[string]struct{}
+	// lookupErr, when set, is returned instead of a membership map.
+	lookupErr error
 }
 
 func (s *mockHisVisRoomserverAPI) QueryErasedUsers(ctx context.Context, userIDs []string) (map[string]struct{}, error) {
@@ -36,6 +39,9 @@ func (s *mockHisVisRoomserverAPI) QueryErasedUsers(ctx context.Context, userIDs 
 }
 
 func (s *mockHisVisRoomserverAPI) QueryMembershipAtEvent(ctx context.Context, roomID spec.RoomID, eventIDs []string, senderID spec.SenderID) (map[string]*types.HeaderedEvent, error) {
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
 	if roomID.String() == s.roomID {
 		membershipMap := map[string]*types.HeaderedEvent{}
 
@@ -279,4 +285,36 @@ func Test_ApplyHistoryVisibility_StickyEvents(t *testing.T) {
 	assert.DeepEqual(t, []string{"$sticky"}, filter(spec.Join, "messages"))
 	assert.DeepEqual(t, []string{}, filter(spec.Join, SyncEndpoint))
 	assert.DeepEqual(t, []string{}, filter(spec.Leave, "messages"))
+}
+
+// A failed membership lookup must not be served as a successfully filtered
+// (and therefore incomplete) page: the caller would advance its pagination
+// cursor past events the client never received.
+func TestApplyHistoryVisibility_MembershipLookupError(t *testing.T) {
+	ctx := context.Background()
+	roomID := "!roomid:domain"
+	other := spec.NewUserIDOrPanic("@other:domain", false)
+	roomVerImpl := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionV10)
+
+	pdu, err := roomVerImpl.NewEventFromTrustedJSONWithEventID("$event", []byte(fmt.Sprintf(`{
+		"type": "m.room.message", "room_id": %q, "sender": %q,
+		"origin_server_ts": 1, "content": {"body": "x"}
+	}`, roomID, other.String())), false)
+	if err != nil {
+		t.Fatalf("failed to prepare event: %s", err)
+	}
+	events := []*types.HeaderedEvent{{PDU: pdu}}
+	events[0].Visibility = gomatrixserverlib.HistoryVisibilityShared
+
+	lookupErr := errors.New("roomserver unavailable")
+	rsAPI := &mockHisVisRoomserverAPI{events: events, roomID: roomID, lookupErr: lookupErr}
+	syncDB := &mockDB{roomID: roomID, currentMembership: map[string]string{other.String(): spec.Join}}
+
+	filtered, err := ApplyHistoryVisibilityFilter(ctx, syncDB, rsAPI, events, nil, other, "messages")
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected the membership lookup error, got %v", err)
+	}
+	if filtered != nil {
+		t.Fatalf("expected no events on a failed lookup, got %d", len(filtered))
+	}
 }

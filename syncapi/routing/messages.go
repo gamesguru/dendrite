@@ -75,6 +75,8 @@ const minBranchesForSelection = 2
 // far are stored, so retrying the same cursor makes progress.
 var errForwardBackfillIncomplete = errors.New("forward backfill did not close the history gap within one request")
 
+var errHistoryVisibilityUnavailable = errors.New("history visibility lookup failed")
+
 // errBackwardBackfillIncomplete is returned when a backward gap remains open
 // after maxBackwardBackfillRounds. The caller retries the same cursor after
 // the fetched batches have been stored.
@@ -458,6 +460,13 @@ func OnIncomingMessagesRequest(
 		return util.JSONResponse{
 			Code: http.StatusTooManyRequests,
 			JSON: spec.LimitExceeded("History is still being fetched, retry shortly", forwardBackfillRetryAfterMS),
+		}
+	}
+	if errors.Is(err, errHistoryVisibilityUnavailable) {
+		util.GetLogger(req.Context()).WithError(err).Warn("mreq.retrieveEvents: history visibility lookup failed")
+		return util.JSONResponse{
+			Code: http.StatusTooManyRequests,
+			JSON: spec.LimitExceeded("History visibility is temporarily unavailable; retry shortly", forwardBackfillRetryAfterMS),
 		}
 	}
 	if err != nil {
@@ -898,7 +907,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	startTime := time.Now()
 	filteredEvents, err := internal.ApplyHistoryVisibilityFilter(r.ctx, r.snapshot, r.rsAPI, events, nil, r.deviceUserID, "messages") //nolint:contextcheck
 	if err != nil {
-		return []synctypes.ClientEvent{}, *r.from, *r.to, nil
+		return []synctypes.ClientEvent{}, *r.from, emptyToken, fmt.Errorf("%w: %w", errHistoryVisibilityUnavailable, err)
 	}
 	logrus.WithFields(logrus.Fields{
 		"duration":      time.Since(startTime),
