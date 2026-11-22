@@ -139,7 +139,15 @@ func ApplyHistoryVisibilityFilter(
 	if err != nil {
 		return nil, err
 	}
+	visibilityStarted := time.Now()
 	visibilities, membershipKnown := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
+	if elapsed := time.Since(visibilityStarted); elapsed > time.Second {
+		logrus.WithFields(logrus.Fields{
+			"room_id":    firstEvRoomID.String(),
+			"events":     len(events),
+			"elapsed_ms": elapsed.Milliseconds(),
+		}).Warn("Slow membership lookup for history visibility")
+	}
 
 	// MSC4354: joined users see unexpired sticky events whatever the history
 	// visibility. Sync v2 and sliding sync timelines keep the usual rules, as
@@ -390,11 +398,17 @@ func ApplyTimelineHistoryVisibilityFilter(
 	if err != nil {
 		return nil, err
 	}
-	logrus.WithFields(logrus.Fields{
-		"duration": time.Since(startTime),
+	elapsed := time.Since(startTime)
+	entry := logrus.WithFields(logrus.Fields{
+		"duration": elapsed,
 		"room_id":  roomID,
 		"before":   len(recentEvents),
 		"after":    len(events),
-	}).Debugf("Applied history visibility (%s)", endpoint)
+	})
+	if elapsed > time.Second {
+		entry.Warnf("Slow history visibility filter (%s)", endpoint)
+	} else {
+		entry.Debugf("Applied history visibility (%s)", endpoint)
+	}
 	return events, nil
 }

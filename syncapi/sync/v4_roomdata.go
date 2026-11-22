@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -192,7 +193,17 @@ func (rp *RequestPool) BuildRoomData(
 		if ignoreTimelineBound || isInitialForRoom {
 			timelineFromToken = nil
 		}
+		timelineStarted := time.Now()
 		timeline, limited, numLiveCount, timelineErr := rp.getTimelineEvents(ctx, snapshot, roomID, userID, timelineLimit, roomState, currentPos, timelineFromToken)
+		if elapsed := time.Since(timelineStarted); elapsed > time.Second {
+			logrus.WithFields(logrus.Fields{
+				"room_id":    roomID,
+				"events":     len(timeline),
+				"expanded":   ignoreTimelineBound,
+				"initial":    isInitialForRoom,
+				"elapsed_ms": elapsed.Milliseconds(),
+			}).Warn("[V4_SYNC] Slow timeline build")
+		}
 		if timelineErr != nil {
 			logrus.WithError(timelineErr).WithField("room_id", roomID).Error("Failed to get timeline events")
 		} else {

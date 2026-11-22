@@ -131,36 +131,55 @@ func (d *Database) membershipFromHAMT(
 	// resolve each snapshot once.
 	bySnapshot := make(map[types.StateSnapshotNID]snapshotMembership)
 	var blockEventIDs []string
-	for _, eventID := range eventIDs {
-		// BulkSelectStateAtEventByID does not return the event ID, so ask for
-		// one event at a time rather than assuming the rows keep input order.
-		states, err := d.EventsTable.BulkSelectStateAtEventByID(ctx, nil, []string{eventID})
-		if err != nil {
-			return nil, false, err
-		}
-		if len(states) != 1 {
-			return nil, false, types.MissingEventError(fmt.Sprintf("storage: event ID %q missing from the database", eventID))
-		}
-		snapshotNID := states[0].BeforeStateSnapshotNID
-		if snapshotNID == 0 {
-			continue
-		}
-		cached, seen := bySnapshot[snapshotNID]
-		if !seen {
-			entries, ok, err := d.stateHAMTEntriesForTuples(ctx, nil, snapshotNID, []types.StateKeyTuple{tuple})
+	var blockMemberships map[string]*types.HeaderedEvent
+	// Resolve the whole batch in one read transaction. Each event used to open
+	// its own transaction for the state lookup and each snapshot opened another
+	// for the HAMT read, so a 50-event timeline could take over a hundred short
+	// transactions and advisory-lock acquisitions, all while the client waits.
+	err := sqlutil.WithTransaction(d.DB, func(txn *sql.Tx) error {
+		for _, eventID := range eventIDs {
+			// BulkSelectStateAtEventByID does not return the event ID, so ask
+			// for one event at a time rather than assuming the rows keep input
+			// order.
+			states, err := d.EventsTable.BulkSelectStateAtEventByID(ctx, txn, []string{eventID})
 			if err != nil {
-				return nil, false, err
+				return err
 			}
-			cached = snapshotMembership{entries: entries, ok: ok}
-			bySnapshot[snapshotNID] = cached
+			if len(states) != 1 {
+				return types.MissingEventError(fmt.Sprintf("storage: event ID %q missing from the database", eventID))
+			}
+			snapshotNID := states[0].BeforeStateSnapshotNID
+			if snapshotNID == 0 {
+				continue
+			}
+			cached, seen := bySnapshot[snapshotNID]
+			if !seen {
+				entries, ok, err := d.stateHAMTEntriesForTuples(ctx, txn, snapshotNID, []types.StateKeyTuple{tuple})
+				if err != nil {
+					return err
+				}
+				cached = snapshotMembership{entries: entries, ok: ok}
+				bySnapshot[snapshotNID] = cached
+			}
+			if !cached.ok {
+				blockEventIDs = append(blockEventIDs, eventID)
+				continue
+			}
+			if len(cached.entries) > 0 {
+				membershipNIDs[eventID] = cached.entries[len(cached.entries)-1].EventNID
+			}
 		}
-		if !cached.ok {
-			blockEventIDs = append(blockEventIDs, eventID)
-			continue
+		if len(blockEventIDs) > 0 {
+			var err error
+			blockMemberships, err = d.StateSnapshotTable.BulkSelectMembershipForHistoryVisibility(
+				ctx, txn, userNID, roomInfo, blockEventIDs...,
+			)
+			return err
 		}
-		if len(cached.entries) > 0 {
-			membershipNIDs[eventID] = cached.entries[len(cached.entries)-1].EventNID
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
 	}
 	eventNIDList := make([]types.EventNID, 0, len(membershipNIDs))
 	for _, nid := range membershipNIDs {
@@ -184,16 +203,8 @@ func (d *Database) membershipFromHAMT(
 			result[eventID] = &types.HeaderedEvent{}
 		}
 	}
-	if len(blockEventIDs) > 0 {
-		fromBlocks, err := d.StateSnapshotTable.BulkSelectMembershipForHistoryVisibility(
-			ctx, nil, userNID, roomInfo, blockEventIDs...,
-		)
-		if err != nil {
-			return nil, false, err
-		}
-		for eventID, event := range fromBlocks {
-			result[eventID] = event
-		}
+	for eventID, event := range blockMemberships {
+		result[eventID] = event
 	}
 	return result, true, nil
 }
