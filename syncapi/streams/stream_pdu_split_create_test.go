@@ -85,9 +85,9 @@ func completeSyncRoom(t *testing.T, db storage.Database, userID, roomID string, 
 	return jr
 }
 
-func containsClientEventType(events []synctypes.ClientEvent, evType string) bool {
+func containsCreateEvent(events []synctypes.ClientEvent) bool {
 	return slices.ContainsFunc(events, func(ev synctypes.ClientEvent) bool {
-		return ev.Type == evType
+		return ev.Type == spec.MRoomCreate
 	})
 }
 
@@ -124,7 +124,7 @@ func TestCompleteSyncSplitsCreateBehindBackfilledHistory(t *testing.T) {
 			require.NotEqual(t, spec.MRoomCreate, ev.Type, "create must not be in the live window")
 		}
 		require.NotNil(t, jr.State)
-		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate), "create must be in state")
+		require.True(t, containsCreateEvent(jr.State.Events), "create must be in state")
 
 		// Backwards pagination from the window's prev_batch must deliver the
 		// hidden configuration events and then the create, which is where
@@ -180,7 +180,7 @@ func TestCompleteSyncPrevBatchReachesHiddenGapAfterVisibleJoin(t *testing.T) {
 		require.True(t, jr.Timeline.Limited)
 		require.Equal(t, []string{visibleMessage.EventID()}, clientEventIDs(jr.Timeline.Events),
 			"events before the hidden gap are paginated instead of replayed")
-		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate))
+		require.True(t, containsCreateEvent(jr.State.Events))
 		require.Contains(t, clientEventIDs(jr.State.Events), join.EventID(), "the removed join remains in state")
 
 		snapshot, err := db.NewDatabaseSnapshot(t.Context())
@@ -228,7 +228,7 @@ func TestCompleteSyncCreateOnlyWindowWithHiddenHistory(t *testing.T) {
 		require.Empty(t, jr.Timeline.Events, "the sole create is left for backward pagination")
 		require.NotNil(t, jr.Timeline.PrevBatch)
 		require.True(t, jr.Timeline.Limited)
-		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate))
+		require.True(t, containsCreateEvent(jr.State.Events))
 
 		snapshot, err := db.NewDatabaseSnapshot(t.Context())
 		require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestCompleteSyncKeepsCreateWhenNoBackfillGap(t *testing.T) {
 			got = append(got, ev.EventID)
 		}
 		require.Equal(t, want, got, "the whole room comes back in order")
-		require.True(t, containsClientEventType(jr.Timeline.Events, spec.MRoomCreate),
+		require.True(t, containsCreateEvent(jr.Timeline.Events),
 			"with no hidden gap the create stays in the window")
 		require.False(t, jr.Timeline.Limited)
 	})

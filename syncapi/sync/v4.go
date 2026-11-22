@@ -285,14 +285,14 @@ func roomLeaveIsNew(
 
 // logV4Response logs full response body at trace level (sensitive data)
 // Enable with logging.*.level: trace in config.
-func logV4Response(response any, userID, deviceID string, statusCode int) {
+func logV4Response(response any, userID, deviceID string) {
 	responseBodyJSON, err := json.Marshal(response)
 	if err == nil {
 		logrus.WithFields(logrus.Fields{
 			"timestamp":     time.Now().Format(time.RFC3339),
 			"user_id":       userID,
 			"device_id":     deviceID,
-			"status":        statusCode,
+			"status":        http.StatusOK,
 			"response_body": string(responseBodyJSON),
 		}).Trace("[V4_SYNC_DEBUG] Full response")
 	}
@@ -796,7 +796,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			if waitFor <= 0 {
 				logrus.Info("[V4_SYNC] Long poll deadline expired before waiting")
 				timeoutResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
-				logV4Response(*timeoutResp, device.UserID, device.ID, http.StatusOK)
+				logV4Response(*timeoutResp, device.UserID, device.ID)
 				return util.JSONResponse{
 					Code: http.StatusOK,
 					JSON: timeoutResp,
@@ -841,7 +841,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				stopWaiting()
 				logrus.Info("[V4_SYNC] Timeout expired with no changes")
 				timeoutResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "timeout")
-				logV4Response(*timeoutResp, device.UserID, device.ID, http.StatusOK)
+				logV4Response(*timeoutResp, device.UserID, device.ID)
 				return util.JSONResponse{
 					Code: http.StatusOK,
 					JSON: timeoutResp,
@@ -860,7 +860,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 				stopWaiting()
 				logrus.Info("[V4_SYNC] Client disconnected during wait")
 				disconnectResp := rp.buildInterruptResponse(ctx, &v4Req, device, connState, since, currentPos, connectionKey, "disconnect")
-				logV4Response(*disconnectResp, device.UserID, device.ID, http.StatusOK)
+				logV4Response(*disconnectResp, device.UserID, device.ID)
 				return util.JSONResponse{
 					Code: http.StatusOK,
 					JSON: disconnectResp,
@@ -1763,7 +1763,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 			if remaining <= 0 {
 				logrus.WithField("elapsed_ms", time.Since(startTime).Milliseconds()).
 					Info("[V4_SYNC] Timeout expired after building response, returning without updates")
-				logV4Response(response, device.UserID, device.ID, http.StatusOK)
+				logV4Response(response, device.UserID, device.ID)
 				return util.JSONResponse{
 					Code: http.StatusOK,
 					JSON: response,
@@ -1779,7 +1779,7 @@ func (rp *RequestPool) OnIncomingSyncRequestV4(req *http.Request, device *userap
 		}
 
 		// Return response (either has updates or timeout expired or first sync)
-		logV4Response(response, device.UserID, device.ID, http.StatusOK)
+		logV4Response(response, device.UserID, device.ID)
 		return util.JSONResponse{
 			Code: http.StatusOK,
 			JSON: response,

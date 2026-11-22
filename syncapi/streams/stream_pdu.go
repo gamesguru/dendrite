@@ -1162,7 +1162,6 @@ func topologicalRecentEvents(
 				// to state/backward pagination. Otherwise the cursor after the
 				// gap would make /messages replay events already in this window.
 				selected := picked
-				picked = nil
 				var afterGap []types.StreamEvent
 				for _, ev := range selected[1:] {
 					depth, stream, posErr := snapshot.PositionInTopology(ctx, ev.EventID())
