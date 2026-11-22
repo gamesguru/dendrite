@@ -7,6 +7,9 @@ package routing
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -15,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
+	"codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
@@ -23,6 +27,39 @@ import (
 	"codefloe.com/pat-s/zendrite/test"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+type leaveBoundRoomserver struct {
+	api.SyncRoomserverAPI
+	leaveEventID string
+	membership   *rstypes.HeaderedEvent
+}
+
+func (r leaveBoundRoomserver) QueryMembershipForUser(_ context.Context, _ *api.QueryMembershipForUserRequest, res *api.QueryMembershipForUserResponse) error {
+	res.RoomExists = true
+	res.Membership = spec.Leave
+	res.EventID = r.leaveEventID
+	return nil
+}
+
+func (leaveBoundRoomserver) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
+	senderID := spec.SenderID(userID.String())
+	return &senderID, nil
+}
+
+func (leaveBoundRoomserver) QueryUserIDForSender(_ context.Context, _ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+	userID, err := spec.NewUserID(string(senderID), true)
+	return userID, err
+}
+
+func (r leaveBoundRoomserver) QueryMembershipAtEvent(
+	_ context.Context, _ spec.RoomID, eventIDs []string, _ spec.SenderID,
+) (map[string]*rstypes.HeaderedEvent, error) {
+	memberships := make(map[string]*rstypes.HeaderedEvent, len(eventIDs))
+	for _, eventID := range eventIDs {
+		memberships[eventID] = r.membership
+	}
+	return memberships, nil
+}
 
 // A /sync prev_batch issued before hs1 backfilled a federated room can be a
 // stream token at position 2 (for example, when PostgreSQL assigned positions
@@ -181,5 +218,59 @@ func TestBackwardMessagesLeaveBoundIgnoresLatePostLeaveEvent(t *testing.T) {
 		}
 		require.Contains(t, got, beforeLeave.EventID(), "pre-leave history is still returned")
 		require.NotContains(t, got, afterLeave.EventID(), "the post-leave event is not returned from the leave bound")
+	})
+}
+
+func TestMessagesHandlerUsesLeaveBoundInsteadOfClientStreamCursor(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		bobJoin := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		beforeLeave := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "before leave"})
+		leave := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave}, test.WithStateKey(alice.ID))
+		afterLeave := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "after leave"})
+
+		var afterLeavePosition types.StreamPosition
+		for _, ev := range room.Events() {
+			var state []*rstypes.HeaderedEvent
+			var addState []string
+			if ev.StateKey() != nil {
+				state = []*rstypes.HeaderedEvent{ev}
+				addState = []string{ev.EventID()}
+			}
+			position, writeErr := db.WriteEvent(context.Background(), ev, state, addState, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, writeErr)
+			if ev.EventID() == afterLeave.EventID() {
+				afterLeavePosition = position
+			}
+		}
+
+		from := types.StreamingToken{PDUPosition: afterLeavePosition}.String()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/messages?dir=b&from=%s&limit=10", from), nil)
+		device := &userapi.Device{UserID: alice.ID}
+		response := OnIncomingMessagesRequest(
+			req, db, room.ID, device,
+			leaveBoundRoomserver{leaveEventID: leave.EventID(), membership: bobJoin},
+			&config.SyncAPI{}, nil, nil,
+		)
+		require.Equal(t, http.StatusOK, response.Code)
+		body, ok := response.JSON.(messagesResp)
+		require.True(t, ok)
+		got := make(map[string]struct{}, len(body.Chunk))
+		for _, ev := range body.Chunk {
+			got[ev.EventID] = struct{}{}
+		}
+		require.Contains(t, got, beforeLeave.EventID())
+		require.NotContains(t, got, afterLeave.EventID())
+		require.Empty(t, body.StartStream, "the overridden client stream cursor must not be returned")
 	})
 }

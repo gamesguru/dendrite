@@ -131,8 +131,8 @@ type DatabaseTransaction interface {
 	// event excluded from sync at a greater topological position.
 	HasExcludedEventsAfterTopologyPosition(ctx context.Context, roomID string, position types.StreamPosition) (bool, error)
 	// LastExcludedEventAfterTopologyPosition returns the newest event excluded
-	// from sync after a topological position.
-	LastExcludedEventAfterTopologyPosition(ctx context.Context, roomID string, position types.StreamPosition) (types.TopologyToken, bool, error)
+	// from sync after position and at or before through in the room's topology.
+	LastExcludedEventAfterTopologyPosition(ctx context.Context, roomID string, position, through types.StreamPosition) (types.TopologyToken, bool, error)
 	// ProspectiveEventPosition returns the topological position the event would
 	// receive from the stored positions of its prev events.
 	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (types.StreamPosition, error)

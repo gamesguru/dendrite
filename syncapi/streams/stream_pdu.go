@@ -1135,7 +1135,8 @@ func topologicalRecentEvents(
 		}
 		slices.Reverse(picked)
 		// A create at the head of the window with excluded (backfilled)
-		// events after it is not the start of the room's delivered history.
+		// events inside the selected topology range is not the start of the
+		// room's delivered history.
 		// Keeping it would anchor prev_batch at the create, leaving the
 		// backfilled events unreachable. Leave the create to state and let
 		// backward pagination deliver it at the end of the history.
@@ -1144,36 +1145,47 @@ func topologicalRecentEvents(
 			if err != nil {
 				return nil, err
 			}
-			lastExcluded, hasExcludedAfterCreate, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, roomID, createDepth)
+			through := types.StreamPosition(math.MaxInt64)
+			if len(picked) > 1 {
+				through, _, err = snapshot.PositionInTopology(ctx, picked[len(picked)-1].EventID())
+				if err != nil {
+					return nil, err
+				}
+			}
+			lastExcluded, hasExcludedAfterCreate, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, roomID, createDepth, through)
 			if err != nil {
 				return nil, err
 			}
 			if hasExcludedAfterCreate {
-				picked = picked[1:]
-				res.Limited = true
-				// Backward pagination must start after the last hidden gap so
-				// that the excluded events before it are reachable. If no
-				// delivered event follows the gap (a create-only window), the
-				// hidden event itself is the anchor.
-				anchor := lastExcluded
-				foundDeliveredAfterGap := false
-				for _, ev := range picked {
+				// Leave the create and delivered events up to the hidden gap
+				// to state/backward pagination. Otherwise the cursor after the
+				// gap would make /messages replay events already in this window.
+				selected := picked
+				picked = nil
+				var afterGap []types.StreamEvent
+				for _, ev := range selected[1:] {
 					depth, stream, posErr := snapshot.PositionInTopology(ctx, ev.EventID())
 					if posErr != nil {
 						return nil, posErr
 					}
 					if depth > lastExcluded.Depth ||
 						(depth == lastExcluded.Depth && stream > lastExcluded.PDUPosition) {
-						anchor = types.TopologyToken{Depth: depth, PDUPosition: stream}
-						foundDeliveredAfterGap = true
-						break
+						afterGap = append(afterGap, ev)
 					}
 				}
-				if !foundDeliveredAfterGap {
-					// getJoinResponseForCompleteSync decrements the anchor to
-					// mean "just before this event". Advance once so that its
-					// decrement lands on the excluded event itself.
-					anchor.PDUPosition++
+				picked = afterGap
+				res.Limited = true
+				// The explicit anchor is the final cursor position, already
+				// normalized to avoid replaying delivered events from the window.
+				anchor := lastExcluded
+				if len(picked) > 0 {
+					ev := picked[0]
+					depth, stream, posErr := snapshot.PositionInTopology(ctx, ev.EventID())
+					if posErr != nil {
+						return nil, posErr
+					}
+					anchor = types.TopologyToken{Depth: depth, PDUPosition: stream}
+					anchor.Decrement()
 				}
 				res.PrevBatchAnchor = &anchor
 			}
@@ -1297,7 +1309,9 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 		}
 	}
 	if prevBatch != nil {
-		prevBatch.Decrement()
+		if prevBatchAnchor == nil {
+			prevBatch.Decrement()
+		}
 	}
 
 	if prevBatch != nil {

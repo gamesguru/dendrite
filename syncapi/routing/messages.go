@@ -399,6 +399,9 @@ func OnIncomingMessagesRequest(
 		}
 		if backwardOrdering {
 			from = token
+			// The client token is no longer the active bound. Leaving it set
+			// would make retrieveEvents query by the stale stream position.
+			fromStream = nil
 			fromTopologyToken = false
 			leaveBound = true
 		}

@@ -150,8 +150,8 @@ type Topology interface {
 	// only through /messages.
 	HasExcludedEventsAfterTopologyPosition(ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition) (bool, error)
 	// LastExcludedEventAfterTopologyPosition returns the newest event excluded
-	// from sync after a topological position.
-	LastExcludedEventAfterTopologyPosition(ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition) (types.TopologyToken, bool, error)
+	// from sync after position and at or before through in the room's topology.
+	LastExcludedEventAfterTopologyPosition(ctx context.Context, txn *sql.Tx, roomID string, position, through types.StreamPosition) (types.TopologyToken, bool, error)
 	// SelectPositionInTopology returns the depth and stream position of a given event in the topology of the room it belongs to.
 	SelectPositionInTopology(ctx context.Context, txn *sql.Tx, eventID string) (depth, spos types.StreamPosition, err error)
 	// SelectPositionsInTopology returns the stored positions for the requested

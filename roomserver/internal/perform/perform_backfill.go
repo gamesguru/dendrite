@@ -232,26 +232,26 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	unvalidatedRedactions := make(map[string]struct{})
 	phaseStarted = time.Now()
 	markUnvalidated := func(ev gomatrixserverlib.PDU) {
-		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
-			unvalidatedRedactions[ev.EventID()] = struct{}{}
-		}
+		markUnvalidatedBackfillRedaction(ev, unvalidatedRedactions)
 	}
 	for _, ev := range storedEvents {
 		_, failedSignature := failedSignatures[ev.EventID()]
+		if failedSignature {
+			// Keep the event stored and in the response so the backfill cursor
+			// can advance, but never recover before-state or apply redactions
+			// from an event that failed signature verification. A redaction
+			// must also stay out of the response, or sync would store a
+			// redaction the roomserver never applied to its target.
+			logrus.WithFields(logrus.Fields{
+				"room_id":  req.RoomID,
+				"event_id": ev.EventID(),
+			}).Warn("backfillViaFederation: skipping state and redaction processing for event that failed signature verification")
+			markUnvalidated(ev.PDU)
+			continue
+		}
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
 		if !ok {
-			if failedSignature {
-				// RequestBackfill keeps events that only failed signature
-				// verification but does not expose that outcome. Do not use
-				// such an event to recover before-state or apply a redaction.
-				logrus.WithFields(logrus.Fields{
-					"room_id":  req.RoomID,
-					"event_id": ev.EventID(),
-				}).Warn("backfillViaFederation: not resolving before-state for an event that failed signature verification")
-				markUnvalidated(ev.PDU)
-				continue
-			}
 			stateIDsStarted := time.Now()
 			logrus.WithFields(logrus.Fields{
 				"room_id":    req.RoomID,
@@ -316,14 +316,6 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			continue
 		}
 		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
-			if failedSignature {
-				logrus.WithFields(logrus.Fields{
-					"room_id":  req.RoomID,
-					"event_id": ev.EventID(),
-				}).Warn("backfillViaFederation: not applying a redaction that failed signature verification")
-				markUnvalidated(ev.PDU)
-				continue
-			}
 			// persistEvents validated this redaction before the event had a
 			// before-state, which fails (and rolls the redaction back). Now that
 			// the snapshot exists, validate it again.
@@ -349,7 +341,7 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 
 	res.Events = make([]*types.HeaderedEvent, 0, len(events))
 	for i := range events {
-		if _, skip := unvalidatedRedactions[events[i].EventID()]; skip {
+		if !includeBackfillEventInResponse(events[i], unvalidatedRedactions) {
 			continue
 		}
 		if redacted, ok := redactedInBatch[events[i].EventID()]; ok {
@@ -387,6 +379,17 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil
+}
+
+func markUnvalidatedBackfillRedaction(ev gomatrixserverlib.PDU, unvalidated map[string]struct{}) {
+	if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
+		unvalidated[ev.EventID()] = struct{}{}
+	}
+}
+
+func includeBackfillEventInResponse(ev gomatrixserverlib.PDU, unvalidated map[string]struct{}) bool {
+	_, skip := unvalidated[ev.EventID()]
+	return !skip
 }
 
 // historyVisibilityBeforeEvent returns the history visibility in force in the

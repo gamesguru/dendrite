@@ -178,9 +178,10 @@ func TestCompleteSyncPrevBatchReachesHiddenGapAfterVisibleJoin(t *testing.T) {
 		jr := completeSyncRoom(t, db, alice.ID, room.ID)
 		require.NotNil(t, jr.Timeline.PrevBatch)
 		require.True(t, jr.Timeline.Limited)
-		require.NotEqual(t, spec.MRoomCreate, jr.Timeline.Events[0].Type,
-			"the create stays in state rather than anchoring the window")
+		require.Equal(t, []string{visibleMessage.EventID()}, clientEventIDs(jr.Timeline.Events),
+			"events before the hidden gap are paginated instead of replayed")
 		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate))
+		require.Contains(t, clientEventIDs(jr.State.Events), join.EventID(), "the removed join remains in state")
 
 		snapshot, err := db.NewDatabaseSnapshot(t.Context())
 		require.NoError(t, err)
@@ -199,6 +200,8 @@ func TestCompleteSyncPrevBatchReachesHiddenGapAfterVisibleJoin(t *testing.T) {
 		}
 		require.Contains(t, ids, hiddenMessage.EventID(),
 			"the hidden event between the join and the delivered message is reachable")
+		require.Contains(t, ids, join.EventID(), "the removed join is reached through pagination")
+		require.NotContains(t, ids, visibleMessage.EventID(), "the delivered event is not replayed")
 		require.Equal(t, create.EventID(), ids[len(ids)-1], "create is the oldest event")
 	})
 }
@@ -276,7 +279,7 @@ func TestCompleteSyncKeepsCreateWhenNoBackfillGap(t *testing.T) {
 	})
 }
 
-func TestCompleteSyncLargeLimitSplitsCreateWhenExcludedEventFollowsWindow(t *testing.T) {
+func TestCompleteSyncKeepsCreateWhenExcludedEventFollowsWindow(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
 		defer closeDB()
@@ -296,10 +299,10 @@ func TestCompleteSyncLargeLimitSplitsCreateWhenExcludedEventFollowsWindow(t *tes
 
 		jr := completeSyncRoom(t, db, alice.ID, room.ID, 100)
 
-		require.True(t, jr.Timeline.Limited)
+		require.False(t, jr.Timeline.Limited, "excluded events after the delivered window do not split it")
 		var want, got []string
 		for _, ev := range room.Events() {
-			if ev.EventID() != room.Events()[0].EventID() && ev.EventID() != hiddenTopic.EventID() {
+			if ev.EventID() != hiddenTopic.EventID() {
 				want = append(want, ev.EventID())
 			}
 		}
@@ -307,8 +310,7 @@ func TestCompleteSyncLargeLimitSplitsCreateWhenExcludedEventFollowsWindow(t *tes
 			got = append(got, ev.EventID)
 		}
 		require.Equal(t, want, got, "large limit preserves all visible events in order")
-		require.NotContains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
-		require.Contains(t, clientEventTypes(jr.State.Events), spec.MRoomCreate)
+		require.Contains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
 	})
 }
 
@@ -338,10 +340,10 @@ func TestCompleteSyncPrevBatchCrossesHiddenMessageAfterVisibleJoin(t *testing.T)
 
 		jr := completeSyncRoom(t, db, alice.ID, room.ID, 100)
 		require.NotNil(t, jr.Timeline.PrevBatch)
-		require.NotContains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
-		require.Contains(t, clientEventIDs(jr.Timeline.Events), join.EventID())
-		require.Contains(t, clientEventIDs(jr.Timeline.Events), visible.EventID())
+		require.Equal(t, []string{visible.EventID()}, clientEventIDs(jr.Timeline.Events),
+			"events before the hidden gap are paginated instead of replayed")
 		require.Contains(t, clientEventIDs(jr.State.Events), room.Events()[0].EventID(), "the removed create remains in state")
+		require.Contains(t, clientEventIDs(jr.State.Events), join.EventID(), "the removed join remains in state")
 
 		snapshot, err := db.NewDatabaseSnapshot(t.Context())
 		require.NoError(t, err)
@@ -356,6 +358,12 @@ func TestCompleteSyncPrevBatchCrossesHiddenMessageAfterVisibleJoin(t *testing.T)
 		require.True(t, slices.ContainsFunc(page, func(ev types.StreamEvent) bool {
 			return ev.EventID() == hidden.EventID()
 		}), "prev_batch reaches the excluded message between the join and visible message")
+		require.True(t, slices.ContainsFunc(page, func(ev types.StreamEvent) bool {
+			return ev.EventID() == join.EventID()
+		}), "the join removed from the timeline is reached through pagination")
+		require.False(t, slices.ContainsFunc(page, func(ev types.StreamEvent) bool {
+			return ev.EventID() == visible.EventID()
+		}), "the delivered event is not replayed")
 	})
 }
 

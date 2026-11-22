@@ -14,7 +14,20 @@ import (
 	federationAPI "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/roomserver/storage"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/test"
 )
+
+func TestFailedSignatureRedactionIsNotReturnedButOtherEventsAdvance(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	target := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "target"})
+	redaction := room.CreateEvent(t, alice, spec.MRoomRedaction, map[string]any{}, test.WithRedacts(target.EventID()))
+
+	unvalidated := make(map[string]struct{})
+	markUnvalidatedBackfillRedaction(redaction.PDU, unvalidated)
+	require.False(t, includeBackfillEventInResponse(redaction.PDU, unvalidated), "sync must not receive a redaction the roomserver did not apply")
+	require.True(t, includeBackfillEventInResponse(target.PDU, unvalidated), "other failed-signature events remain returnable so pagination can advance")
+}
 
 // stateLookupFedAPI fails every state lookup with a per-server error.
 type stateLookupFedAPI struct {

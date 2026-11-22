@@ -106,7 +106,8 @@ WHERE
 -- candidate and moves to the next available ID when that one is taken.
 CREATE TEMP TABLE zz_plan ON COMMIT DROP AS
 SELECT
-    old_id, NULL::bigint AS new_id, room_id, event_id, first_id, rn
+    old_id, NULL::bigint AS new_id, room_id, event_id, first_id, rn,
+    'no free id'::text AS skip_reason
 FROM
     zz_late_creates;
 DO $$
@@ -140,10 +141,18 @@ BEGIN
             UPDATE
                 zz_plan
             SET
-                new_id = chosen
+                new_id = chosen,
+                skip_reason = NULL
             WHERE
                 old_id = candidate.old_id;
             used := used || chosen;
+        ELSE
+            UPDATE
+                zz_plan
+            SET
+                skip_reason = 'no free id'
+            WHERE
+                old_id = candidate.old_id;
         END IF;
     END LOOP;
 END
@@ -157,6 +166,11 @@ DECLARE
     bad_rows bigint;
     live_room_nid bigint;
     create_room_nid bigint;
+    candidate record;
+    free_candidate record;
+    used bigint[];
+    unsafe_carrier boolean;
+    assigned boolean;
 BEGIN
     SELECT
         count(*) - count(DISTINCT new_id)
@@ -210,8 +224,68 @@ BEGIN
                     WHERE
                         other.id BETWEEN p.new_id AND p.old_id
                         AND other.id <> p.old_id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM zz_plan moving
+                            WHERE moving.old_id = other.id
+                                AND moving.new_id IS NOT NULL)
                         AND (delta.event_id = ANY (coalesce(other.add_state_ids, ARRAY[]::text[]))
                             OR delta.event_id = ANY (coalesce(other.remove_state_ids, ARRAY[]::text[])))));
+    UPDATE zz_plan SET skip_reason = 'unique state delta carrier' WHERE new_id IS NULL AND skip_reason IS NULL;
+    -- IDs released by carrier rows can now serve other rooms. Try those
+    -- candidates again, counting only stationary rows as delta carriers.
+        SELECT coalesce(array_agg(new_id), ARRAY[]::bigint[]) INTO used
+        FROM zz_plan WHERE new_id IS NOT NULL;
+        FOR candidate IN
+            SELECT old_id, room_id, event_id, rn
+            FROM zz_plan
+            WHERE new_id IS NULL AND skip_reason = 'no free id'
+            ORDER BY room_id, rn
+        LOOP
+            assigned := false;
+            unsafe_carrier := false;
+            FOR free_candidate IN
+                SELECT f.free_id
+                FROM zz_free_ids f
+                WHERE f.room_id = candidate.room_id
+                    AND NOT (f.free_id = ANY (used))
+                ORDER BY f.rn
+            LOOP
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM syncapi_output_room_events moved
+                    CROSS JOIN LATERAL unnest(
+                        coalesce(moved.add_state_ids, ARRAY[]::text[]) ||
+                        coalesce(moved.remove_state_ids, ARRAY[]::text[])
+                    ) delta(event_id)
+                    WHERE moved.id = candidate.old_id
+                        AND delta.event_id <> candidate.event_id
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM syncapi_output_room_events other
+                            WHERE other.id BETWEEN free_candidate.free_id AND candidate.old_id
+                                AND other.id <> candidate.old_id
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM zz_late_creates pending
+                                    WHERE pending.old_id = other.id)
+                                AND (delta.event_id = ANY(coalesce(other.add_state_ids, ARRAY[]::text[]))
+                                    OR delta.event_id = ANY(coalesce(other.remove_state_ids, ARRAY[]::text[])))
+                        )
+                ) INTO unsafe_carrier;
+                IF NOT unsafe_carrier THEN
+                    UPDATE zz_plan
+                    SET new_id = free_candidate.free_id, skip_reason = NULL
+                    WHERE old_id = candidate.old_id;
+                    used := used || free_candidate.free_id;
+                    assigned := true;
+                    EXIT;
+                END IF;
+            END LOOP;
+            IF NOT assigned AND unsafe_carrier THEN
+                UPDATE zz_plan SET skip_reason = 'unique state delta carrier'
+                WHERE old_id = candidate.old_id;
+            END IF;
+        END LOOP;
     SELECT
         count(*)
     INTO
@@ -271,7 +345,7 @@ BEGIN
 END IF;
 END
 $$;
-\echo '--- plan: every row considered (new_id NULL = SKIPPED, no free id) ---'
+\echo '--- plan: every row considered (new_id NULL = SKIPPED; see skip_reason) ---'
 SELECT
     p.old_id,
     p.new_id,
@@ -279,7 +353,7 @@ SELECT
     p.room_id,
     p.event_id,
     CASE WHEN p.new_id IS NULL THEN
-        'SKIPPED'
+        'SKIPPED: ' || p.skip_reason
     ELSE
         'move'
     END AS action,

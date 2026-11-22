@@ -474,6 +474,18 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 			if ctx.Err() != nil {
 				return
 			}
+			alreadyPresent := false
+			switch keyType {
+			case fclient.CrossSigningKeyPurposeMaster:
+				_, alreadyPresent = res.MasterKeys[targetUserID]
+			case fclient.CrossSigningKeyPurposeSelfSigning:
+				_, alreadyPresent = res.SelfSigningKeys[targetUserID]
+			case fclient.CrossSigningKeyPurposeUserSigning:
+				_, alreadyPresent = res.UserSigningKeys[targetUserID]
+			}
+			if alreadyPresent {
+				continue
+			}
 			var keyID gomatrixserverlib.KeyID
 			for id := range key.Keys {
 				keyID = id

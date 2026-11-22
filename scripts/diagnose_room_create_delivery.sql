@@ -5,8 +5,9 @@
 --
 --     psql -X -f scripts/diagnose_room_create_delivery.sql <dsn>
 --
--- Persistent tables are only read. A temporary report table is dropped by the
--- final rollback.
+-- Persistent tables are only read. This transaction creates a temporary JSON
+-- sanitizer function and report table, so the role needs TEMP privilege on the
+-- database; both are dropped by the final rollback.
 \pset pager off
 \set ON_ERROR_STOP on
 BEGIN;
