@@ -405,6 +405,14 @@ func (d *DatabaseTransaction) HasExcludedEventsAfterTopologyPosition(
 	return d.Topology.HasExcludedEventsAfterTopologyPosition(ctx, d.txn, roomID, position)
 }
 
+// LastExcludedEventAfterTopologyPosition returns the newest event excluded
+// from sync after a topological position.
+func (d *DatabaseTransaction) LastExcludedEventAfterTopologyPosition(
+	ctx context.Context, roomID string, position types.StreamPosition,
+) (types.TopologyToken, bool, error) {
+	return d.Topology.LastExcludedEventAfterTopologyPosition(ctx, d.txn, roomID, position)
+}
+
 func (d *DatabaseTransaction) ProspectiveEventPosition(
 	ctx context.Context, event *rstypes.HeaderedEvent,
 ) (types.StreamPosition, error) {

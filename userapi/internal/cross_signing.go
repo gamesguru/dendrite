@@ -513,15 +513,25 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 				}
 			}
 
+			// Key queries fill this response from the database first and then
+			// again after federation, to cover entries that were still missing.
+			// Only fill absent entries: a key returned by federation is newer
+			// than the database copy and must not be replaced by it.
 			switch keyType {
 			case fclient.CrossSigningKeyPurposeMaster:
-				res.MasterKeys[targetUserID] = key
+				if _, ok := res.MasterKeys[targetUserID]; !ok {
+					res.MasterKeys[targetUserID] = key
+				}
 
 			case fclient.CrossSigningKeyPurposeSelfSigning:
-				res.SelfSigningKeys[targetUserID] = key
+				if _, ok := res.SelfSigningKeys[targetUserID]; !ok {
+					res.SelfSigningKeys[targetUserID] = key
+				}
 
 			case fclient.CrossSigningKeyPurposeUserSigning:
-				res.UserSigningKeys[targetUserID] = key
+				if _, ok := res.UserSigningKeys[targetUserID]; !ok {
+					res.UserSigningKeys[targetUserID] = key
+				}
 			}
 		}
 	}

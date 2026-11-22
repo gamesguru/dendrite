@@ -148,6 +148,101 @@ func TestCompleteSyncSplitsCreateBehindBackfilledHistory(t *testing.T) {
 	})
 }
 
+// A hidden event between two delivered events starts the complete-sync
+// prev_batch after that gap, so backward pagination can still return the
+// hidden event. The create is left to state as usual.
+func TestCompleteSyncPrevBatchReachesHiddenGapAfterVisibleJoin(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		create := room.Events()[0]
+		join := room.Events()[1]
+		hiddenMessage := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "hidden"})
+		visibleMessage := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "visible"})
+		visible := map[string]struct{}{
+			create.EventID():         {},
+			join.EventID():           {},
+			visibleMessage.EventID(): {},
+		}
+		storeRoomEvents(t, db, room, func(ev *rstypes.HeaderedEvent) bool {
+			_, ok := visible[ev.EventID()]
+			return !ok
+		})
+
+		jr := completeSyncRoom(t, db, alice.ID, room.ID)
+		require.NotNil(t, jr.Timeline.PrevBatch)
+		require.True(t, jr.Timeline.Limited)
+		require.NotEqual(t, spec.MRoomCreate, jr.Timeline.Events[0].Type,
+			"the create stays in state rather than anchoring the window")
+		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate))
+
+		snapshot, err := db.NewDatabaseSnapshot(t.Context())
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
+		require.NoError(t, err)
+		events, _, _, err := snapshot.GetEventsBeforeStreamPosition(
+			t.Context(), tok.PDUPosition, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 100}, true,
+		)
+		require.NoError(t, err)
+		ids := make([]string, 0, len(events))
+		for _, ev := range events {
+			ids = append(ids, ev.EventID())
+		}
+		require.Contains(t, ids, hiddenMessage.EventID(),
+			"the hidden event between the join and the delivered message is reachable")
+		require.Equal(t, create.EventID(), ids[len(ids)-1], "create is the oldest event")
+	})
+}
+
+// A window whose only visible event is the create, followed by hidden
+// history, still leaves the create to state and anchors prev_batch at the
+// hidden history so pagination can reach it.
+func TestCompleteSyncCreateOnlyWindowWithHiddenHistory(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		create := room.Events()[0]
+		storeRoomEvents(t, db, room, func(ev *rstypes.HeaderedEvent) bool {
+			return ev.EventID() != create.EventID()
+		})
+
+		jr := completeSyncRoom(t, db, alice.ID, room.ID)
+		require.Empty(t, jr.Timeline.Events, "the sole create is left for backward pagination")
+		require.NotNil(t, jr.Timeline.PrevBatch)
+		require.True(t, jr.Timeline.Limited)
+		require.True(t, containsClientEventType(jr.State.Events, spec.MRoomCreate))
+
+		snapshot, err := db.NewDatabaseSnapshot(t.Context())
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
+		require.NoError(t, err)
+		events, _, _, err := snapshot.GetEventsBeforeStreamPosition(
+			t.Context(), tok.PDUPosition, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 100}, true,
+		)
+		require.NoError(t, err)
+		require.NotEmpty(t, events)
+		require.Equal(t, spec.MRoomCreate, events[len(events)-1].Type())
+	})
+}
+
 // The same room without a backfilled gap between the create and the next
 // delivered event keeps its previous shape: the create stays in the window and
 // the timeline is not marked limited.
@@ -215,6 +310,61 @@ func TestCompleteSyncLargeLimitSplitsCreateWhenExcludedEventFollowsWindow(t *tes
 		require.NotContains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
 		require.Contains(t, clientEventTypes(jr.State.Events), spec.MRoomCreate)
 	})
+}
+
+func TestCompleteSyncPrevBatchCrossesHiddenMessageAfterVisibleJoin(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		cfg, processCtx, closeDB := testrig.CreateConfig(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(processCtx, cfg.Global.DatabaseOptions)
+		db, err := storage.NewSyncServerDatasource(processCtx.Context(), cm, &cfg.SyncAPI.Database)
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		var join *rstypes.HeaderedEvent
+		for _, ev := range room.Events() {
+			if ev.Type() == spec.MRoomMember && ev.StateKeyEquals(alice.ID) {
+				join = ev
+				break
+			}
+		}
+		require.NotNil(t, join)
+		hidden := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "backfilled"})
+		visible := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "visible after gap"})
+		storeRoomEvents(t, db, room, func(ev *rstypes.HeaderedEvent) bool {
+			return ev.EventID() == hidden.EventID()
+		})
+
+		jr := completeSyncRoom(t, db, alice.ID, room.ID, 100)
+		require.NotNil(t, jr.Timeline.PrevBatch)
+		require.NotContains(t, clientEventTypes(jr.Timeline.Events), spec.MRoomCreate)
+		require.Contains(t, clientEventIDs(jr.Timeline.Events), join.EventID())
+		require.Contains(t, clientEventIDs(jr.Timeline.Events), visible.EventID())
+		require.Contains(t, clientEventIDs(jr.State.Events), room.Events()[0].EventID(), "the removed create remains in state")
+
+		snapshot, err := db.NewDatabaseSnapshot(t.Context())
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+		tok, err := types.NewStreamTokenFromString(*jr.Timeline.PrevBatch)
+		require.NoError(t, err)
+		page, _, _, err := snapshot.GetEventsBeforeStreamPosition(
+			t.Context(), tok.PDUPosition, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 100}, true,
+		)
+		require.NoError(t, err)
+		require.True(t, slices.ContainsFunc(page, func(ev types.StreamEvent) bool {
+			return ev.EventID() == hidden.EventID()
+		}), "prev_batch reaches the excluded message between the join and visible message")
+	})
+}
+
+func clientEventIDs(events []synctypes.ClientEvent) []string {
+	result := make([]string, 0, len(events))
+	for _, ev := range events {
+		result = append(result, ev.EventID)
+	}
+	return result
 }
 
 func clientEventTypes(events []synctypes.ClientEvent) []string {

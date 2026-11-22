@@ -19,7 +19,7 @@
 --
 -- Usage, interactively, so the transaction can be inspected before COMMIT:
 --     \set ON_ERROR_STOP on
---     \i scripts/repair_late_creates.sql
+--     \i scripts/archive/repair_late_creates.sql
 -- The transaction is left OPEN at the end. Review the candidates, then COMMIT;
 -- or ROLLBACK;. Drop zz_bak_late_creates once satisfied.
 

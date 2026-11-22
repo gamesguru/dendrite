@@ -18,7 +18,7 @@
 -- Limits:
 --   * A free id must exist within FREE_WINDOW below the room's first id. A room
 --     with none is listed as SKIPPED and left alone. Hide it instead with
---     scripts/repair_late_creates.sql.
+--     scripts/archive/repair_late_creates.sql.
 --   * Clients that already received the create keep their misplaced copy until
 --     they clear their cache. Only fresh and initial syncs change.
 --   * A client whose token lies between the new and old id and never saw the
@@ -29,14 +29,24 @@
 --     \set ON_ERROR_STOP on
 --     \i scripts/reposition_late_creates.sql
 -- Dry run: after reviewing the first listing, type ROLLBACK; at the prompt.
--- The transaction is left OPEN at the end. No table lock is taken; the UPDATE
--- re-checks each row's old id and visibility, and a count assertion aborts the
--- transaction if any candidate changed in between.
+-- The transaction is left OPEN at the end. Locks on the PDU-position and
+-- occupancy tables block writers until COMMIT or ROLLBACK, keeping the plan
+-- valid throughout the repair.
 \pset pager off
 \set ON_ERROR_STOP on
 \set ON_ERROR_ROLLBACK off
 \set FREE_WINDOW 1000
 BEGIN ISOLATION LEVEL READ COMMITTED;
+SET LOCAL lock_timeout = '10s';
+SET LOCAL statement_timeout = '300s';
+-- SHARE ROW EXCLUSIVE conflicts with ordinary write locks and is held through
+-- commit. These are the tables used to read or write occupied stream IDs.
+LOCK TABLE syncapi_output_room_events IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE syncapi_output_room_events_topology IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE syncapi_current_room_state IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE syncapi_unpartialstated_rooms IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE syncapi_peeks IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE syncapi_sliding_sync_joined_rooms IN SHARE ROW EXCLUSIVE MODE;
 CREATE TEMP TABLE zz_first_event ON COMMIT DROP AS
 SELECT
     room_id, min(id) AS first_id
@@ -59,11 +69,12 @@ WHERE
     -- NID 3, live room NID 11). Left in place until that is settled.
     AND o.room_id <> '!YRswYZcqh4FWoo1LLk:nutra.tk';
 -- Unused PDU positions below each affected room's first id, nearest first.
--- Un-partial-state markers share the PDU token coordinate, so their IDs are
--- occupied too even though they are in another table.
+-- Un-partial-state markers and peeks share the PDU token coordinate, so their
+-- IDs are occupied too even though they are in other tables.
 CREATE TEMP TABLE zz_free_ids ON COMMIT DROP AS
 SELECT
-    r.room_id, g AS free_id, row_number() OVER (PARTITION BY r.room_id ORDER BY g DESC) AS rn
+    r.room_id, g AS free_id,
+    row_number() OVER (PARTITION BY r.room_id ORDER BY g DESC) AS rn
 FROM ( SELECT DISTINCT
         room_id, first_id
     FROM
@@ -82,14 +93,61 @@ WHERE
         FROM
             syncapi_unpartialstated_rooms u
         WHERE
-            u.id = g);
+            u.id = g)
+    AND NOT EXISTS (
+        SELECT
+            1
+        FROM
+            syncapi_peeks p
+        WHERE
+            p.id = g);
+-- Allocate one ID at a time so an ID chosen for one room is not reused by
+-- another room whose free window overlaps it. Each room keeps its own nearest
+-- candidate and moves to the next available ID when that one is taken.
 CREATE TEMP TABLE zz_plan ON COMMIT DROP AS
 SELECT
-    c.old_id, f.free_id AS new_id, c.room_id, c.event_id, c.first_id
+    old_id, NULL::bigint AS new_id, room_id, event_id, first_id, rn
 FROM
-    zz_late_creates c
-    LEFT JOIN zz_free_ids f ON f.room_id = c.room_id
-        AND f.rn = c.rn;
+    zz_late_creates;
+DO $$
+DECLARE
+    candidate record;
+    chosen bigint;
+    used bigint[] := ARRAY[]::bigint[];
+BEGIN
+    FOR candidate IN
+    SELECT
+        *
+    FROM
+        zz_plan
+    ORDER BY
+        room_id, rn
+    LOOP
+        chosen := NULL;
+        SELECT
+            f.free_id
+        INTO
+            chosen
+        FROM
+            zz_free_ids f
+        WHERE
+            f.room_id = candidate.room_id
+            AND NOT (f.free_id = ANY (used))
+        ORDER BY
+            f.rn
+        LIMIT 1;
+        IF chosen IS NOT NULL THEN
+            UPDATE
+                zz_plan
+            SET
+                new_id = chosen
+            WHERE
+                old_id = candidate.old_id;
+            used := used || chosen;
+        END IF;
+    END LOOP;
+END
+$$;
 -- GUARDS: refuse ambiguous plans, stream-position collisions, or moving the
 -- known !YRsw create if it is not attached to the live room incarnation.
 DO $$
@@ -123,6 +181,37 @@ BEGIN
     IF marker_collisions <> 0 THEN
         RAISE EXCEPTION 'plan collides with % un-partial-state PDU markers; ROLLBACK and review', marker_collisions;
     END IF;
+    -- Moving a carrier row can move unique state deltas out of the range
+    -- visited by an incremental sync. Leave such a row in place (new_id NULL)
+    -- unless another row between its new and old IDs carries each delta.
+    UPDATE
+        zz_plan p
+    SET
+        new_id = NULL
+    FROM
+        syncapi_output_room_events moved
+    WHERE
+        moved.id = p.old_id
+        AND moved.event_id = p.event_id
+        AND p.new_id IS NOT NULL
+        AND EXISTS (
+            SELECT
+                1
+            FROM
+                unnest(coalesce(moved.add_state_ids, ARRAY[]::text[]) ||
+                    coalesce(moved.remove_state_ids, ARRAY[]::text[])) delta(event_id)
+            WHERE
+                delta.event_id <> p.event_id
+                AND NOT EXISTS (
+                    SELECT
+                        1
+                    FROM
+                        syncapi_output_room_events other
+                    WHERE
+                        other.id BETWEEN p.new_id AND p.old_id
+                        AND other.id <> p.old_id
+                        AND (delta.event_id = ANY (coalesce(other.add_state_ids, ARRAY[]::text[]))
+                            OR delta.event_id = ANY (coalesce(other.remove_state_ids, ARRAY[]::text[])))));
     SELECT
         count(*)
     INTO
@@ -294,7 +383,8 @@ WITH moved AS (
         AND o.event_id = p.event_id
     RETURNING
         o.event_id,
-        o.id AS new_id
+        o.id AS new_id,
+        p.old_id
 )
 SELECT
     *
@@ -311,7 +401,11 @@ WHERE
 UPDATE
     syncapi_current_room_state s
 SET
-    added_at = m.new_id
+    added_at = CASE WHEN s.added_at = m.old_id THEN
+        m.new_id
+    ELSE
+        s.added_at
+    END
 FROM
     zz_moved m
 WHERE

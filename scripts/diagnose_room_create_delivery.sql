@@ -10,22 +10,48 @@
 \pset pager off
 \set ON_ERROR_STOP on
 BEGIN;
+-- PostgreSQL rejects the \u0000 and lone-surrogate escapes that valid event
+-- content can contain. Parse a sanitized copy, as the stored-event parser does;
+-- the original TEXT columns are left untouched.
+CREATE OR REPLACE FUNCTION pg_temp.zz_safe_jsonb(doc text)
+    RETURNS jsonb
+    LANGUAGE sql
+    IMMUTABLE
+    AS $func$
+    SELECT (CASE WHEN doc LIKE '%\\u%' THEN
+        regexp_replace(doc, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
+    ELSE
+        doc
+    END)::jsonb
+$func$;
 CREATE TEMP TABLE zz_room_create_delivery_scan ON COMMIT DROP AS
-WITH room_ids AS (
+WITH create_room_ids AS (
+    SELECT
+        e.event_id,
+        CASE WHEN (pg_temp.zz_safe_jsonb(j.event_json) -> 'content' ->> 'room_version') ~ '^[0-9]+$'
+            AND (pg_temp.zz_safe_jsonb(j.event_json) -> 'content' ->> 'room_version')::int >= 12 THEN
+            '!' || substring(e.event_id FROM 2)
+        ELSE
+            pg_temp.zz_safe_jsonb(j.event_json) ->> 'room_id'
+        END AS room_id
+    FROM
+        roomserver_events e
+        JOIN roomserver_event_types et ON et.event_type_nid = e.event_type_nid
+            AND et.event_type = 'm.room.create'
+        JOIN roomserver_event_json j USING (event_nid)
+),
+room_ids AS (
     SELECT
         room_id
     FROM
         roomserver_rooms
     UNION
     SELECT
-        j.event_json::jsonb ->> 'room_id'
+        room_id
     FROM
-        roomserver_events e
-        JOIN roomserver_event_types et ON et.event_type_nid = e.event_type_nid
-            AND et.event_type = 'm.room.create'
-        JOIN roomserver_event_json j USING (event_nid)
+        create_room_ids
     WHERE
-        j.event_json::jsonb ->> 'room_id' IS NOT NULL
+        room_id IS NOT NULL
     UNION
     SELECT
         room_id
@@ -145,7 +171,7 @@ sync_create_roll AS (
 ),
 roomserver_create_rows AS (
     SELECT
-        j.event_json::jsonb ->> 'room_id' AS room_id,
+        created.room_id,
         e.event_id,
         e.event_nid,
         e.room_nid,
@@ -156,13 +182,14 @@ roomserver_create_rows AS (
         e.is_rejected,
         e.state_snapshot_nid,
         sk.event_state_key,
-        j.event_json::jsonb ->> 'state_key' AS json_state_key
+        pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key' AS json_state_key
     FROM
         roomserver_events e
         JOIN roomserver_event_types et ON et.event_type_nid = e.event_type_nid
             AND et.event_type = 'm.room.create'
+        JOIN create_room_ids created ON created.event_id = e.event_id
         JOIN roomserver_event_json j USING (event_nid)
-        LEFT JOIN roomserver_rooms live ON live.room_id = j.event_json::jsonb ->> 'room_id'
+        LEFT JOIN roomserver_rooms live ON live.room_id = created.room_id
         LEFT JOIN roomserver_event_state_keys sk ON sk.event_state_key_nid = e.event_state_key_nid
 ),
 roomserver_create_roll AS (
@@ -196,10 +223,10 @@ sync_state_roll AS (
             AND membership = 'join') AS joined_member_rows,
         count(*) FILTER (WHERE type = 'm.room.member'
             AND membership = 'join'
-            AND coalesce(headered_event_json::jsonb -> 'content' ->> 'displayname', '') <> '') AS joined_members_with_displayname,
+            AND coalesce(pg_temp.zz_safe_jsonb(headered_event_json) -> 'content' ->> 'displayname', '') <> '') AS joined_members_with_displayname,
             count(*) FILTER (WHERE type = 'm.room.member'
                 AND membership = 'join'
-                AND coalesce(headered_event_json::jsonb -> 'content' ->> 'displayname', '') = '') AS joined_members_without_displayname FROM syncapi_current_room_state
+                AND coalesce(pg_temp.zz_safe_jsonb(headered_event_json) -> 'content' ->> 'displayname', '') = '') AS joined_members_without_displayname FROM syncapi_current_room_state
             GROUP BY
                 room_id
 )
@@ -255,8 +282,7 @@ SELECT
     count(*) FILTER (WHERE sync_events > 0) AS rooms_with_sync_events,
     count(*) FILTER (WHERE sync_create_rows = 0) AS rooms_without_sync_create_row,
     count(*) FILTER (WHERE roomserver_create_rows = 0) AS rooms_without_roomserver_create_row,
-    count(*) FILTER (WHERE sync_create_rows > 0
-        AND roomserver_create_rows = 0) AS sync_creates_missing_from_roomserver,
+    count(*) FILTER (WHERE creates_missing_from_roomserver > 0) AS rooms_with_sync_creates_missing_from_roomserver,
     count(*) FILTER (WHERE orphan_nid_create_rows > 0) AS rooms_with_orphan_nid_create,
     count(*) FILTER (WHERE live_create_not_sent_rows > 0) AS rooms_with_live_create_not_emitted,
     count(*) FILTER (WHERE stream_late_creates > 0) AS rooms_with_stream_late_create,

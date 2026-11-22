@@ -466,6 +466,12 @@ func TestReanchorBackwardCursorOnlyRaisesDepth(t *testing.T) {
 	require.NoError(t, r.reanchorBackwardCursor(ctx))
 	assert.Equal(t, types.StreamPosition(92), r.from.Depth, "a stream token in a stream gap anchors at the next event's depth")
 
+	r = newReq(5, anchorSnapshot{anchor: types.TopologyToken{Depth: 9, PDUPosition: 11}})
+	r.leaveBound = true
+	require.NoError(t, r.reanchorBackwardCursor(ctx))
+	assert.Equal(t, types.StreamPosition(5), r.from.Depth,
+		"a bound at the leave event is not moved by a later event")
+
 	r = newReq(5, anchorSnapshot{err: errors.New("db down")})
 	require.Error(t, r.reanchorBackwardCursor(ctx))
 

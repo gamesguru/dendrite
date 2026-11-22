@@ -155,7 +155,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, false,
-			events.Events, events.Limited, eventFormat, to, bundler,
+			events.Events, events.Limited, events.PrevBatchAnchor, eventFormat, to, bundler,
 		)
 		if jerr != nil {
 			if req.Context.Err() != nil || abandonsSync(jerr) {
@@ -218,7 +218,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
 				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, true,
-				events.Events, events.Limited, eventFormat, to, bundler,
+				events.Events, events.Limited, events.PrevBatchAnchor, eventFormat, to, bundler,
 			)
 			if err != nil {
 				if req.Context.Err() != nil || abandonsSync(err) {
@@ -1139,18 +1139,43 @@ func topologicalRecentEvents(
 		// Keeping it would anchor prev_batch at the create, leaving the
 		// backfilled events unreachable. Leave the create to state and let
 		// backward pagination deliver it at the end of the history.
-		if len(picked) > 1 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
+		if len(picked) > 0 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
 			createDepth, _, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
 			if err != nil {
 				return nil, err
 			}
-			hasExcludedAfterCreate, err := snapshot.HasExcludedEventsAfterTopologyPosition(ctx, roomID, createDepth)
+			lastExcluded, hasExcludedAfterCreate, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, roomID, createDepth)
 			if err != nil {
 				return nil, err
 			}
 			if hasExcludedAfterCreate {
 				picked = picked[1:]
 				res.Limited = true
+				// Backward pagination must start after the last hidden gap so
+				// that the excluded events before it are reachable. If no
+				// delivered event follows the gap (a create-only window), the
+				// hidden event itself is the anchor.
+				anchor := lastExcluded
+				foundDeliveredAfterGap := false
+				for _, ev := range picked {
+					depth, stream, posErr := snapshot.PositionInTopology(ctx, ev.EventID())
+					if posErr != nil {
+						return nil, posErr
+					}
+					if depth > lastExcluded.Depth ||
+						(depth == lastExcluded.Depth && stream > lastExcluded.PDUPosition) {
+						anchor = types.TopologyToken{Depth: depth, PDUPosition: stream}
+						foundDeliveredAfterGap = true
+						break
+					}
+				}
+				if !foundDeliveredAfterGap {
+					// getJoinResponseForCompleteSync decrements the anchor to
+					// mean "just before this event". Advance once so that its
+					// decrement lands on the excluded event itself.
+					anchor.PDUPosition++
+				}
+				res.PrevBatchAnchor = &anchor
 			}
 		}
 		res.Events = picked
@@ -1169,6 +1194,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	isPeek bool,
 	recentStreamEvents []types.StreamEvent,
 	limited bool,
+	prevBatchAnchor *types.TopologyToken,
 	eventFormat synctypes.ClientEventFormat,
 	sentAt types.StreamPosition,
 	bundler *syncBundler,
@@ -1249,7 +1275,10 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	// Retrieve the backward topology position, i.e. the position of the
 	// oldest event in the room's topology.
 	var prevBatch *types.TopologyToken
-	if len(events) > 0 {
+	if prevBatchAnchor != nil {
+		anchor := *prevBatchAnchor
+		prevBatch = &anchor
+	} else if len(events) > 0 {
 		var backwardTopologyPos, backwardStreamPos types.StreamPosition
 		event := events[0]
 		// If this is the beginning of the room, we can't go back further. Return
@@ -1266,6 +1295,8 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			Depth:       backwardTopologyPos,
 			PDUPosition: backwardStreamPos,
 		}
+	}
+	if prevBatch != nil {
 		prevBatch.Decrement()
 	}
 

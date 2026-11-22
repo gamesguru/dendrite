@@ -128,18 +128,36 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// (so we don't need to hit /state_ids which the test has no listener for)
 	// Specifically the test "Outbound federation can backfill events"
 	fromEventIDs := prioritiseBackfillFromEventIDs(ctx, req.RoomID, req.PrevEventIDs(), requester.ServersAtEvent)
+	userIDForSender := func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
+	}
 	phaseStarted := time.Now()
 	events, err := gomatrixserverlib.RequestBackfill(
 		ctx, req.VirtualHost, requester,
-		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, maxBackfillEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-			return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
-		},
+		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, maxBackfillEvents, userIDForSender,
 	)
 	logrus.WithFields(logrus.Fields{
 		"room_id":  req.RoomID,
 		"events":   len(events),
 		"duration": time.Since(phaseStarted),
 	}).Info("Backfill federation fetch and verification finished")
+
+	// RequestBackfill keeps events that only failed signature verification but
+	// does not return the per-event outcome. Re-check the signatures so those
+	// events cannot be used to recover before-state or apply a redaction. They
+	// are still stored and returned, as before, so the backfill cursor can move
+	// past them.
+	failedSignatures := make(map[string]struct{})
+	for i, sigErr := range gomatrixserverlib.VerifyAllEventSignatures(ctx, events, r.KeyRing, userIDForSender) {
+		if sigErr == nil {
+			continue
+		}
+		failedSignatures[events[i].EventID()] = struct{}{}
+		logrus.WithError(sigErr).WithFields(logrus.Fields{
+			"room_id":  req.RoomID,
+			"event_id": events[i].EventID(),
+		}).Warn("backfillViaFederation: event failed signature verification; not using it for before-state or redactions")
+	}
 	returned := make(map[string]struct{}, len(events))
 	for _, ev := range events {
 		returned[ev.EventID()] = struct{}{}
@@ -219,9 +237,21 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		}
 	}
 	for _, ev := range storedEvents {
+		_, failedSignature := failedSignatures[ev.EventID()]
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
 		if !ok {
+			if failedSignature {
+				// RequestBackfill keeps events that only failed signature
+				// verification but does not expose that outcome. Do not use
+				// such an event to recover before-state or apply a redaction.
+				logrus.WithFields(logrus.Fields{
+					"room_id":  req.RoomID,
+					"event_id": ev.EventID(),
+				}).Warn("backfillViaFederation: not resolving before-state for an event that failed signature verification")
+				markUnvalidated(ev.PDU)
+				continue
+			}
 			stateIDsStarted := time.Now()
 			logrus.WithFields(logrus.Fields{
 				"room_id":    req.RoomID,
@@ -229,12 +259,9 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 				"event_type": ev.Type(),
 				"prev_count": len(ev.PrevEventIDs()),
 			}).Info("Backfill event has no state IDs from federation verification; resolving")
-			// RequestBackfill keeps events that only failed signature
-			// verification. Those skip the auth-at-state check, so they reach
-			// here without a before-state even though the event is stored.
-			// Resolve it now instead of dropping the event; dropping it leaves
-			// no snapshot, so every later /messages page fetches and discards
-			// the same event again.
+			// Resolve the missing before-state instead of dropping the event;
+			// dropping it leaves no snapshot, so every later /messages page
+			// fetches and discards the same event again.
 			if _, resolveErr := requester.StateIDsBeforeEvent(ctx, ev.PDU); resolveErr != nil {
 				logrus.WithError(resolveErr).WithFields(logrus.Fields{
 					"room_id":  req.RoomID,
@@ -289,6 +316,14 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			continue
 		}
 		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
+			if failedSignature {
+				logrus.WithFields(logrus.Fields{
+					"room_id":  req.RoomID,
+					"event_id": ev.EventID(),
+				}).Warn("backfillViaFederation: not applying a redaction that failed signature verification")
+				markUnvalidated(ev.PDU)
+				continue
+			}
 			// persistEvents validated this redaction before the event had a
 			// before-state, which fails (and rolls the redaction back). Now that
 			// the snapshot exists, validate it again.

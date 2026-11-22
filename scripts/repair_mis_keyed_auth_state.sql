@@ -41,6 +41,20 @@
 \set ON_ERROR_STOP on
 \set ON_ERROR_ROLLBACK off
 BEGIN ISOLATION LEVEL REPEATABLE READ;
+-- PostgreSQL rejects the \u0000 and lone-surrogate escapes that valid event
+-- content can contain. Parse a sanitized copy, as the stored-event parser does;
+-- the original event_json TEXT column is left untouched.
+CREATE OR REPLACE FUNCTION pg_temp.zz_safe_jsonb(doc text)
+    RETURNS jsonb
+    LANGUAGE sql
+    IMMUTABLE
+    AS $func$
+    SELECT (CASE WHEN doc LIKE '%\\u%' THEN
+        regexp_replace(doc, '\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\uFFFD', 'g')
+    ELSE
+        doc
+    END)::jsonb
+$func$;
 -- Do not queue behind a busy writer, and do not hold ingest hostage.
 SET LOCAL lock_timeout = '10s';
 SET LOCAL statement_timeout = '300s';
@@ -51,6 +65,7 @@ SET LOCAL statement_timeout = '300s';
 -- window.
 LOCK TABLE roomserver_events IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE roomserver_event_state_keys IN SHARE MODE;
+LOCK TABLE roomserver_membership IN SHARE ROW EXCLUSIVE MODE;
 -- The whole script is parameterised here so it cannot drift from the incident.
 CREATE TEMP TABLE zz_params ON COMMIT DROP AS
 SELECT
@@ -60,15 +75,15 @@ SELECT
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE zz_mis_keyed_auth_state ON COMMIT DROP AS
 SELECT
-    e.event_nid, e.room_nid, e.event_type_nid, e.event_state_key_nid AS old_state_key_nid, e.event_id, k.event_state_key AS old_state_key, j.event_json::jsonb ->> 'state_key' AS json_state_key, j.event_json::jsonb ->> 'room_id' AS json_room_id
+    e.event_nid, e.room_nid, e.event_type_nid, e.event_state_key_nid AS old_state_key_nid, e.event_id, k.event_state_key AS old_state_key, pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key' AS json_state_key, pg_temp.zz_safe_jsonb(j.event_json) ->> 'room_id' AS json_room_id
 FROM
     roomserver_events e
     JOIN roomserver_event_json j USING (event_nid)
     LEFT JOIN roomserver_event_state_keys k ON k.event_state_key_nid = e.event_state_key_nid
 WHERE
     e.event_type_nid BETWEEN 1 AND 5
-    AND (j.event_json::jsonb ->> 'state_key') IS NOT NULL
-    AND (j.event_json::jsonb ->> 'state_key') IS DISTINCT FROM k.event_state_key
+    AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS NOT NULL
+    AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS DISTINCT FROM k.event_state_key
 ORDER BY
     e.event_nid;
 \echo '--- parameters ---'
@@ -179,8 +194,8 @@ BEGIN
         LEFT JOIN roomserver_event_state_keys k ON k.event_state_key_nid = e.event_state_key_nid
     WHERE
         e.event_type_nid BETWEEN 1 AND 5
-        AND (j.event_json::jsonb ->> 'state_key') IS NOT NULL
-        AND (j.event_json::jsonb ->> 'state_key') IS DISTINCT FROM k.event_state_key
+        AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS NOT NULL
+        AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS DISTINCT FROM k.event_state_key
         AND e.room_nid <> (
             SELECT
                 target_room_nid
@@ -358,6 +373,24 @@ BEGIN
     END IF;
 END
 $$;
+-- Guard live membership rows before changing event NIDs. A membership row
+-- points at the candidate event but still uses the old state-key target; this
+-- script's policy is to abort so the operator can reconcile it explicitly.
+DO $$
+DECLARE
+    stale_live_memberships bigint;
+BEGIN
+    SELECT count(*) INTO stale_live_memberships
+    FROM roomserver_membership m
+    JOIN roomserver_events e ON e.event_nid = m.event_nid
+    JOIN zz_mis_keyed_auth_state c ON c.event_nid = e.event_nid
+    JOIN roomserver_rooms live ON live.room_nid = m.room_nid
+    WHERE m.target_nid = c.old_state_key_nid;
+    IF stale_live_memberships <> 0 THEN
+        RAISE EXCEPTION '% live membership rows still use candidate old state-key NIDs; reconcile them before this repair; ROLLBACK', stale_live_memberships;
+    END IF;
+END
+$$;
 -- ---------------------------------------------------------------------------
 -- Backup. Deliberately a fixed, non-temporary name: a second run, or a run
 -- after a partial attempt, fails here instead of overwriting the pre-image.
@@ -449,8 +482,8 @@ BEGIN
         LEFT JOIN roomserver_event_state_keys k ON k.event_state_key_nid = e.event_state_key_nid
     WHERE
         e.event_type_nid BETWEEN 1 AND 5
-        AND (j.event_json::jsonb ->> 'state_key') IS NOT NULL
-        AND (j.event_json::jsonb ->> 'state_key') IS DISTINCT FROM k.event_state_key;
+        AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS NOT NULL
+        AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS DISTINCT FROM k.event_state_key;
     IF remaining_all <> 0 THEN
         RAISE EXCEPTION '% mismatched auth-type rows remain after update; ROLLBACK', remaining_all;
     END IF;
@@ -469,8 +502,8 @@ BEGIN
             FROM
                 zz_params)
         AND e.event_type_nid BETWEEN 1 AND 5
-        AND (j.event_json::jsonb ->> 'state_key') IS NOT NULL
-        AND (j.event_json::jsonb ->> 'state_key') IS DISTINCT FROM k.event_state_key;
+        AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS NOT NULL
+        AND (pg_temp.zz_safe_jsonb(j.event_json) ->> 'state_key') IS DISTINCT FROM k.event_state_key;
     IF remaining_room <> 0 THEN
         RAISE EXCEPTION '% mismatched rows remain in the target room; ROLLBACK', remaining_room;
     END IF;

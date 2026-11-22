@@ -90,15 +90,19 @@ var errBackwardBackfillFetch = errors.New("backward federation backfill failed")
 var errBackfillRecentlyFailed = errors.New("backfill recently found no events on any server")
 
 type messagesReq struct {
-	ctx                      context.Context
-	db                       storage.Database
-	snapshot                 storage.DatabaseTransaction
-	rsAPI                    api.SyncRoomserverAPI
-	cfg                      *config.SyncAPI
-	roomID                   string
-	from                     *types.TopologyToken
-	fromStream               *types.StreamingToken
-	fromTopologyToken        bool
+	ctx               context.Context
+	db                storage.Database
+	snapshot          storage.DatabaseTransaction
+	rsAPI             api.SyncRoomserverAPI
+	cfg               *config.SyncAPI
+	roomID            string
+	from              *types.TopologyToken
+	fromStream        *types.StreamingToken
+	fromTopologyToken bool
+	// leaveBound marks a backward from token placed at the user's leave event.
+	// It is a history bound, not a client cursor, so it must stay there when a
+	// later event raises the topology around it.
+	leaveBound               bool
 	to                       *types.TopologyToken
 	device                   *userapi.Device
 	deviceUserID             spec.UserID
@@ -383,6 +387,7 @@ func OnIncomingMessagesRequest(
 		wasToProvided = false
 	}
 
+	leaveBound := false
 	// If the user already left the room, grep events from before that
 	if membershipResp.Membership == spec.Leave {
 		var token types.TopologyToken
@@ -395,6 +400,7 @@ func OnIncomingMessagesRequest(
 		if backwardOrdering {
 			from = token
 			fromTopologyToken = false
+			leaveBound = true
 		}
 	}
 
@@ -408,6 +414,7 @@ func OnIncomingMessagesRequest(
 		from:              &from,
 		fromStream:        fromStream,
 		fromTopologyToken: fromTopologyToken,
+		leaveBound:        leaveBound,
 		to:                &to,
 		wasToProvided:     wasToProvided,
 		filter:            filter,
@@ -1059,7 +1066,10 @@ func (r *messagesReq) sortByTopology(events []*rstypes.HeaderedEvent) error {
 // which can put the cursor below a live backward extremity and stop /messages
 // from filling the gap.
 func (r *messagesReq) reanchorBackwardCursor(ctx context.Context) error {
-	if !r.backwardOrdering {
+	if !r.backwardOrdering || r.leaveBound {
+		// A bound set by the departed-member leave path is anchored at the
+		// leave event itself. Re-anchoring it would move it past a later event
+		// and hide the history before the leave.
 		return nil
 	}
 	return reanchorBackwardTopologyToken(ctx, r.snapshot, r.roomID, r.from)

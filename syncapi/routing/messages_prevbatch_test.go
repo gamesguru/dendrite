@@ -112,3 +112,74 @@ func TestBackwardMessagesFromPrevBatchReachesFederatedJoinHistory(t *testing.T) 
 		}
 	})
 }
+
+// A backward /messages request for a user who has left is bounded at the leave
+// event. A later event must not re-anchor that bound upward, or the history
+// before the leave becomes unreachable.
+func TestBackwardMessagesLeaveBoundIgnoresLatePostLeaveEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join},
+			test.WithStateKey(bob.ID))
+		beforeLeave := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "before leave"})
+		leave := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Leave},
+			test.WithStateKey(alice.ID))
+		afterLeave := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "after leave"})
+
+		ctx := context.Background()
+		for _, ev := range room.Events() {
+			var state []*rstypes.HeaderedEvent
+			var addState []string
+			if ev.StateKey() != nil {
+				state = []*rstypes.HeaderedEvent{ev}
+				addState = []string{ev.EventID()}
+			}
+			_, err = db.WriteEvent(ctx, ev, state, addState, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		snapshot, err := db.NewDatabaseTransaction(ctx)
+		require.NoError(t, err)
+		defer func() { _ = snapshot.Rollback() }()
+		from, err := snapshot.EventPositionInTopology(ctx, leave.EventID())
+		require.NoError(t, err)
+		late, err := snapshot.EventPositionInTopology(ctx, afterLeave.EventID())
+		require.NoError(t, err)
+		require.Greater(t, late.Depth, from.Depth, "the late event would raise the leave bound")
+
+		req := &messagesReq{
+			ctx:              ctx,
+			db:               db,
+			snapshot:         snapshot,
+			roomID:           room.ID,
+			from:             &from,
+			to:               &types.TopologyToken{},
+			backwardOrdering: true,
+			leaveBound:       true,
+			filter:           &synctypes.RoomEventFilter{Limit: 10},
+		}
+		require.NoError(t, req.reanchorBackwardCursor(ctx))
+		require.Equal(t, from.Depth, req.from.Depth, "the leave bound was not re-anchored")
+
+		events, _, _, err := snapshot.GetEventsInTopologicalRange(
+			ctx, req.from, req.to, room.ID, req.filter, true,
+		)
+		require.NoError(t, err)
+		got := make(map[string]struct{}, len(events))
+		for _, ev := range events {
+			got[ev.EventID()] = struct{}{}
+		}
+		require.Contains(t, got, beforeLeave.EventID(), "pre-leave history is still returned")
+		require.NotContains(t, got, afterLeave.EventID(), "the post-leave event is not returned from the leave bound")
+	})
+}

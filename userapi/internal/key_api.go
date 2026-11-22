@@ -580,6 +580,19 @@ func (a *UserInternalAPI) queryKeysFromServer(
 	return resp, err
 }
 
+// deviceListIsFresh reports whether the database holds a complete, current
+// device list for the user. A refresh that is still in flight or failed is not
+// fresh, so callers must keep the federation fallback for it.
+func (a *UserInternalAPI) deviceListIsFresh(ctx context.Context, userID string) bool {
+	fresh, err := a.KeyDatabase.FreshDeviceLists(ctx, []string{userID})
+	if err != nil {
+		logrus.WithError(err).WithField("user_id", userID).
+			Warn("Failed to check whether the device list refresh completed")
+		return false
+	}
+	return len(fresh) == 1
+}
+
 func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	ctx context.Context, serverName string, devKeys map[string][]string, crossSigningKeys map[string]struct{},
 	wg *sync.WaitGroup, respMu *sync.Mutex, timeout time.Duration, resultCh chan<- *fclient.RespQueryKeys,
@@ -660,11 +673,17 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 			devKeys[userID] = []string{}
 			continue
 		}
-		// The device-list fetch that just succeeded also returns the user's
-		// cross-signing keys, so do not ask /keys/query for them again. The
-		// caller re-reads them from the database after this query completes.
-		delete(crossSigningKeys, userID)
-		delete(devKeys, userID)
+		// ManualUpdate only marks the list stale and wakes a worker; it does not
+		// prove the fetch completed. Keep the /keys/query request unless the
+		// database now reports the list fresh. In particular, keep the
+		// cross-signing request so a stale copy is not treated as authoritative.
+		if a.deviceListIsFresh(ctx, userID) {
+			// The completed device-list fetch also returns the user's
+			// cross-signing keys. The caller re-reads them from the database
+			// after this query completes.
+			delete(crossSigningKeys, userID)
+			delete(devKeys, userID)
+		}
 	}
 	if len(devKeys) == 0 {
 		return

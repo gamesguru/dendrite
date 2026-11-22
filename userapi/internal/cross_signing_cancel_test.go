@@ -8,6 +8,7 @@ import (
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
@@ -84,6 +85,26 @@ func TestCrossSigningCancellation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCrossSigningKeysFromDatabaseKeepsFederationKeys(t *testing.T) {
+	db := &cancellationKeyDB{}
+	a := &UserInternalAPI{KeyDatabase: db}
+	req := &api.QueryKeysRequest{UserToDevices: map[string][]string{"@a:test": nil}}
+	existing := fclient.CrossSigningKey{
+		Usage: []fclient.CrossSigningKeyPurpose{fclient.CrossSigningKeyPurposeMaster},
+		Keys:  map[gomatrixserverlib.KeyID]spec.Base64Bytes{"ed25519:federation": {1, 2, 3}},
+	}
+	res := &api.QueryKeysResponse{
+		MasterKeys:      map[string]fclient.CrossSigningKey{"@a:test": existing},
+		SelfSigningKeys: map[string]fclient.CrossSigningKey{},
+		UserSigningKeys: map[string]fclient.CrossSigningKey{},
+	}
+
+	a.crossSigningKeysFromDatabase(t.Context(), req, res)
+
+	require.Equal(t, existing, res.MasterKeys["@a:test"],
+		"a master key supplied by federation must not be replaced by the database fallback")
 }
 
 func TestQueryKeysAlreadyCanceled(t *testing.T) {

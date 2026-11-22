@@ -72,6 +72,10 @@ type StreamEvent struct {
 type RecentEvents struct {
 	Limited bool
 	Events  []StreamEvent
+	// PrevBatchAnchor overrides the first timeline event as the backward
+	// pagination anchor. It is set when the timeline starts after a hidden
+	// excluded-event gap that backward pagination must be able to reach.
+	PrevBatchAnchor *TopologyToken
 }
 
 // Range represents a range between two stream positions.

@@ -122,6 +122,16 @@ const selectExcludedEventsAfterTopologyPositionSQL = "" +
 	" WHERE t.room_id = $1 AND e.exclude_from_sync = TRUE" +
 	" AND t.topological_position > $2)"
 
+// The last backfilled event after a topological position, for anchoring
+// backward pagination when no delivered event follows it.
+const selectLastExcludedEventAfterTopologyPositionSQL = "" +
+	"SELECT t.topological_position, t.stream_position" +
+	" FROM syncapi_output_room_events_topology t" +
+	" JOIN syncapi_output_room_events e ON e.event_id = t.event_id" +
+	" WHERE t.room_id = $1 AND e.exclude_from_sync = TRUE" +
+	" AND t.topological_position > $2" +
+	" ORDER BY t.topological_position DESC, t.stream_position DESC LIMIT 1"
+
 const deleteEventFromTopologySQL = "" +
 	"DELETE FROM syncapi_output_room_events_topology WHERE event_id = $1"
 
@@ -134,23 +144,24 @@ const selectRoomEventTopologySQL = "" +
 	" WHERE t.room_id = $1 AND t.topological_position >= $2 ORDER BY t.stream_position, t.event_id"
 
 type outputRoomEventsTopologyStatements struct {
-	db                                            *sql.DB
-	lockRoomTopologyStmt                          *sql.Stmt
-	insertEventInTopologyStmt                     *sql.Stmt
-	selectEventIDsInRangeASCStmt                  *sql.Stmt
-	selectEventIDsInRangeDESCStmt                 *sql.Stmt
-	selectEventIDsBeforeStreamPositionStmt        *sql.Stmt
-	selectPositionInTopologyStmt                  *sql.Stmt
-	selectLiveStartPositionStmt                   *sql.Stmt
-	selectExcludedEventsAfterTopologyPositionStmt *sql.Stmt
-	selectPositionByStreamPositionStmt            *sql.Stmt
-	selectStreamToTopologicalPositionAscStmt      *sql.Stmt
-	selectStreamToTopologicalPositionDescStmt     *sql.Stmt
-	selectFirstSyncedDepthAfterStreamPositionStmt *sql.Stmt
-	updateEventPositionStmt                       *sql.Stmt
-	selectRoomEventTopologyStmt                   *sql.Stmt
-	purgeEventsTopologyStmt                       *sql.Stmt
-	deleteEventFromTopologyStmt                   *sql.Stmt
+	db                                               *sql.DB
+	lockRoomTopologyStmt                             *sql.Stmt
+	insertEventInTopologyStmt                        *sql.Stmt
+	selectEventIDsInRangeASCStmt                     *sql.Stmt
+	selectEventIDsInRangeDESCStmt                    *sql.Stmt
+	selectEventIDsBeforeStreamPositionStmt           *sql.Stmt
+	selectPositionInTopologyStmt                     *sql.Stmt
+	selectLiveStartPositionStmt                      *sql.Stmt
+	selectExcludedEventsAfterTopologyPositionStmt    *sql.Stmt
+	selectLastExcludedEventAfterTopologyPositionStmt *sql.Stmt
+	selectPositionByStreamPositionStmt               *sql.Stmt
+	selectStreamToTopologicalPositionAscStmt         *sql.Stmt
+	selectStreamToTopologicalPositionDescStmt        *sql.Stmt
+	selectFirstSyncedDepthAfterStreamPositionStmt    *sql.Stmt
+	updateEventPositionStmt                          *sql.Stmt
+	selectRoomEventTopologyStmt                      *sql.Stmt
+	purgeEventsTopologyStmt                          *sql.Stmt
+	deleteEventFromTopologyStmt                      *sql.Stmt
 }
 
 func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
@@ -170,6 +181,7 @@ func NewSqliteTopologyTable(db *sql.DB) (tables.Topology, error) {
 		{&s.selectPositionInTopologyStmt, selectPositionInTopologySQL},
 		{&s.selectLiveStartPositionStmt, selectLiveStartPositionSQL},
 		{&s.selectExcludedEventsAfterTopologyPositionStmt, selectExcludedEventsAfterTopologyPositionSQL},
+		{&s.selectLastExcludedEventAfterTopologyPositionStmt, selectLastExcludedEventAfterTopologyPositionSQL},
 		{&s.selectPositionByStreamPositionStmt, selectPositionByStreamPositionSQL},
 		{&s.selectStreamToTopologicalPositionAscStmt, selectStreamToTopologicalPositionAscSQL},
 		{&s.selectStreamToTopologicalPositionDescStmt, selectStreamToTopologicalPositionDescSQL},
@@ -362,6 +374,21 @@ func (s *outputRoomEventsTopologyStatements) HasExcludedEventsAfterTopologyPosit
 		ctx, roomID, position,
 	).Scan(&exists)
 	return exists, err
+}
+
+// LastExcludedEventAfterTopologyPosition returns the newest event excluded
+// from sync after a topological position.
+func (s *outputRoomEventsTopologyStatements) LastExcludedEventAfterTopologyPosition(
+	ctx context.Context, txn *sql.Tx, roomID string, position types.StreamPosition,
+) (types.TopologyToken, bool, error) {
+	var token types.TopologyToken
+	err := sqlutil.TxStmt(txn, s.selectLastExcludedEventAfterTopologyPositionStmt).QueryRowContext(
+		ctx, roomID, position,
+	).Scan(&token.Depth, &token.PDUPosition)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.TopologyToken{}, false, nil
+	}
+	return token, err == nil, err
 }
 
 // ProspectiveEventPosition returns the topological position that
