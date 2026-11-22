@@ -22,7 +22,7 @@ import (
 
 type failingNotificationStore struct{ storage.UserDatabase }
 
-func (failingNotificationStore) StoreNotificationEvent(context.Context, string, string, string, uint64) ([]string, error) {
+func (failingNotificationStore) StoreNotificationEvent(context.Context, string, string, string, uint64, int64) ([]string, error) {
 	return nil, errors.New("notification event storage failed")
 }
 

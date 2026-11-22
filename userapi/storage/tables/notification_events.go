@@ -90,3 +90,63 @@ func CreatePendingNotificationRefreshes(ctx context.Context, tx *sql.Tx) error {
 	PRIMARY KEY (room_id, localpart, server_name));`)
 	return err
 }
+
+// AddNotificationEventOriginTimestamp records the event's own timestamp.
+// Notification rows can be inserted later than the events they describe
+// (republished events, redelivery, retries), so both their ids and the output
+// stream position cannot order a read receipt against them. The event's
+// origin_server_ts is stable across reprocessing, so it can.
+func AddNotificationEventOriginTimestamp(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE userapi_notification_events ADD COLUMN origin_ts BIGINT NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT room_id, event_id, notification_json FROM userapi_notifications`)
+	if err != nil {
+		return err
+	}
+	type notificationEvent struct {
+		roomID, eventID string
+		originTS        int64
+	}
+	var events []notificationEvent
+	for rows.Next() {
+		var roomID, eventID string
+		var raw []byte
+		if err = rows.Scan(&roomID, &eventID, &raw); err != nil {
+			break
+		}
+		var notification api.Notification
+		if err = json.Unmarshal(raw, &notification); err != nil {
+			break
+		}
+		events = append(events, notificationEvent{roomID: roomID, eventID: eventID, originTS: int64(notification.Event.OriginServerTS)})
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if _, err = tx.ExecContext(ctx, `UPDATE userapi_notification_events SET origin_ts = $1 WHERE room_id = $2 AND event_id = $3 AND origin_ts = 0`, event.originTS, event.roomID, event.eventID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CreateNotificationReceiptPositions stores the latest timeline position read
+// by each user in a room/thread. It lets notification events processed late be
+// marked read immediately instead of relying on notification insertion order.
+func CreateNotificationReceiptPositions(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `CREATE TABLE userapi_notification_receipt_positions (
+	room_id TEXT NOT NULL, localpart TEXT NOT NULL, server_name TEXT NOT NULL, thread_id TEXT NOT NULL,
+	origin_ts BIGINT NOT NULL, notification_id BIGINT NOT NULL,
+	PRIMARY KEY (room_id, localpart, server_name, thread_id));
+	CREATE INDEX userapi_notification_receipt_positions_room_idx
+	ON userapi_notification_receipt_positions(room_id, thread_id, origin_ts);`)
+	return err
+}

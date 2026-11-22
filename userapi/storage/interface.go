@@ -203,7 +203,7 @@ type Notification interface {
 	// CompleteNotificationRefresh removes a pending count refresh after publish.
 	CompleteNotificationRefresh(ctx context.Context, roomID, userID string) error
 	DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error)
-	StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64) (users []string, err error)
+	StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64, originTS int64) (users []string, err error)
 	SetNotificationsReadForReceipt(ctx context.Context, localpart string, serverName spec.ServerName, roomID, eventID, threadID string) (affected bool, err error)
 	SetNotificationsRead(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64, read bool) (affected bool, err error)
 	GetNotifications(ctx context.Context, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error)
