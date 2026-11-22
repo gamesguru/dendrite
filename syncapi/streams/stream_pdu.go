@@ -1168,24 +1168,21 @@ func topologicalRecentEvents(
 					if posErr != nil {
 						return nil, posErr
 					}
-					if depth > lastExcluded.Depth ||
-						(depth == lastExcluded.Depth && stream > lastExcluded.PDUPosition) {
+					if (depth > lastExcluded.Depth ||
+						(depth == lastExcluded.Depth && stream > lastExcluded.PDUPosition)) &&
+						stream > lastExcluded.PDUPosition {
 						afterGap = append(afterGap, ev)
 					}
 				}
 				picked = afterGap
 				res.Limited = true
-				// The explicit anchor is the final cursor position, already
-				// normalized to avoid replaying delivered events from the window.
+				// prev_batch is a stream cursor. Place it just after the hidden
+				// gap so pagination can return the hidden events, and retain only
+				// timeline events whose stream positions are beyond that cursor.
+				// This avoids replay when stream order and topology order differ.
 				anchor := lastExcluded
-				if len(picked) > 0 {
-					ev := picked[0]
-					depth, stream, posErr := snapshot.PositionInTopology(ctx, ev.EventID())
-					if posErr != nil {
-						return nil, posErr
-					}
-					anchor = types.TopologyToken{Depth: depth, PDUPosition: stream}
-					anchor.Decrement()
+				if anchor.PDUPosition < types.StreamPosition(math.MaxInt64) {
+					anchor.PDUPosition++
 				}
 				res.PrevBatchAnchor = &anchor
 			}

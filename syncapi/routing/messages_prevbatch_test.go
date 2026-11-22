@@ -193,6 +193,7 @@ func TestBackwardMessagesLeaveBoundIgnoresLatePostLeaveEvent(t *testing.T) {
 		late, err := snapshot.EventPositionInTopology(ctx, afterLeave.EventID())
 		require.NoError(t, err)
 		require.Greater(t, late.Depth, from.Depth, "the late event would raise the leave bound")
+		leaveDepth := from.Depth
 
 		req := &messagesReq{
 			ctx:              ctx,
@@ -206,7 +207,7 @@ func TestBackwardMessagesLeaveBoundIgnoresLatePostLeaveEvent(t *testing.T) {
 			filter:           &synctypes.RoomEventFilter{Limit: 10},
 		}
 		require.NoError(t, req.reanchorBackwardCursor(ctx))
-		require.Equal(t, from.Depth, req.from.Depth, "the leave bound was not re-anchored")
+		require.Equal(t, leaveDepth, req.from.Depth, "the leave bound was not re-anchored")
 
 		events, _, _, err := snapshot.GetEventsInTopologicalRange(
 			ctx, req.from, req.to, room.ID, req.filter, true,
@@ -240,6 +241,7 @@ func TestMessagesHandlerUsesLeaveBoundInsteadOfClientStreamCursor(t *testing.T) 
 		afterLeave := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{"body": "after leave"})
 
 		var afterLeavePosition types.StreamPosition
+		var beforeLeavePosition types.StreamPosition
 		for _, ev := range room.Events() {
 			var state []*rstypes.HeaderedEvent
 			var addState []string
@@ -251,6 +253,9 @@ func TestMessagesHandlerUsesLeaveBoundInsteadOfClientStreamCursor(t *testing.T) 
 			require.NoError(t, writeErr)
 			if ev.EventID() == afterLeave.EventID() {
 				afterLeavePosition = position
+			}
+			if ev.EventID() == beforeLeave.EventID() {
+				beforeLeavePosition = position
 			}
 		}
 
@@ -272,5 +277,23 @@ func TestMessagesHandlerUsesLeaveBoundInsteadOfClientStreamCursor(t *testing.T) 
 		require.Contains(t, got, beforeLeave.EventID())
 		require.NotContains(t, got, afterLeave.EventID())
 		require.Empty(t, body.StartStream, "the overridden client stream cursor must not be returned")
+
+		// An earlier client cursor is already the tighter bound. The leave
+		// path must not widen it and replay the event at that cursor.
+		earlierFrom := types.StreamingToken{PDUPosition: beforeLeavePosition}.String()
+		earlierReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/messages?dir=b&from=%s&limit=10", earlierFrom), nil)
+		earlierResponse := OnIncomingMessagesRequest(
+			earlierReq, db, room.ID, device,
+			leaveBoundRoomserver{leaveEventID: leave.EventID(), membership: bobJoin},
+			&config.SyncAPI{}, nil, nil,
+		)
+		require.Equal(t, http.StatusOK, earlierResponse.Code)
+		earlierBody, ok := earlierResponse.JSON.(messagesResp)
+		require.True(t, ok)
+		for _, ev := range earlierBody.Chunk {
+			require.NotEqual(t, beforeLeave.EventID(), ev.EventID,
+				"the earlier client cursor must not be widened to the leave event")
+			require.NotEqual(t, afterLeave.EventID(), ev.EventID)
+		}
 	})
 }

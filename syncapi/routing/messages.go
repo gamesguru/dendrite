@@ -398,12 +398,30 @@ func OnIncomingMessagesRequest(
 			}
 		}
 		if backwardOrdering {
-			from = token
-			// The client token is no longer the active bound. Leaving it set
-			// would make retrieveEvents query by the stale stream position.
-			fromStream = nil
-			fromTopologyToken = false
-			leaveBound = true
+			// Bound the page by whichever is earlier: the client's cursor or
+			// the user's leave event. A cursor beyond the leave must not expose
+			// post-leave events, but an earlier cursor must not be widened to
+			// the leave event, which would replay events the client has
+			// already seen.
+			var afterLeave bool
+			if fromStream != nil {
+				// retrieveEvents uses this stream position directly, so compare
+				// it with the leave event's stream position as well as the
+				// resolved topology token.
+				afterLeave = fromStream.PDUPosition > token.PDUPosition
+			} else {
+				afterLeave = from.Depth > token.Depth ||
+					(from.Depth == token.Depth && from.PDUPosition > token.PDUPosition)
+			}
+			if afterLeave {
+				from = token
+				// The client token is no longer the active bound. Leaving it
+				// set would make retrieveEvents query by the stale stream
+				// position.
+				fromStream = nil
+				fromTopologyToken = false
+				leaveBound = true
+			}
 		}
 	}
 
