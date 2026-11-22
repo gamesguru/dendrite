@@ -109,6 +109,45 @@ func TestLateNotificationBehindReceiptIsRead(t *testing.T) {
 	})
 }
 
+func TestLateNotificationReceiptUsesRoomOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		originTS []spec.Timestamp
+	}{
+		{name: "equal timestamps", originTS: []spec.Timestamp{100, 100, 100, 100}},
+		{name: "reversed timestamps", originTS: []spec.Timestamp{300, 100, 400, 50}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+				db, cleanup := mustCreateUserDatabase(t, backend)
+				defer cleanup()
+				roomID := "!room:test"
+				add := func(eventID string, streamPos uint64, depth int64, originTS spec.Timestamp) {
+					t.Helper()
+					require.NoError(t, db.InsertNotification(t.Context(), "alice", "localhost", eventID, streamPos, nil,
+						&api.Notification{RoomID: roomID, Event: synctypes.ClientEvent{Content: []byte(`{}`), OriginServerTS: originTS}}))
+					_, err := db.StoreNotificationEvent(t.Context(), roomID, eventID, "main", streamPos, depth)
+					require.NoError(t, err)
+				}
+
+				// The receipt's room-order position is (10, 20). The other events
+				// arrive later in the notification stream, but their timestamps
+				// must not decide whether they fall before or after this boundary.
+				add("$receipt", 20, 10, tc.originTS[0])
+				_, err := db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", roomID, "$receipt", "")
+				require.NoError(t, err)
+				add("$before", 21, 9, tc.originTS[1])
+				add("$same-depth-before", 19, 10, tc.originTS[2])
+				add("$after", 23, 11, tc.originTS[3])
+
+				total, _, err := db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", roomID)
+				require.NoError(t, err)
+				require.EqualValues(t, 1, total, "only the event after the receipt should remain unread")
+			})
+		})
+	}
+}
+
 func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
 		conn, cleanup := test.PrepareDBConnectionString(t, backend)
@@ -137,7 +176,8 @@ func TestNotificationReceiptUpgradeAndRestart(t *testing.T) {
    DELETE FROM db_migrations WHERE version IN (
      'userapi: notification event threads',
      'userapi: notification event origin timestamp',
-     'userapi: notification receipt positions');`)
+     'userapi: notification receipt positions',
+     'userapi: notification room order');`)
 		require.NoError(t, err)
 		require.NoError(t, db.DB.Close())
 		db = open()

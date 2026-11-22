@@ -150,3 +150,19 @@ func CreateNotificationReceiptPositions(ctx context.Context, tx *sql.Tx) error {
 	ON userapi_notification_receipt_positions(room_id, thread_id, origin_ts);`)
 	return err
 }
+
+// AddNotificationRoomOrder stores the room topology depth used to compare
+// receipt boundaries. Stream position breaks ties between events at the same
+// depth; origin_server_ts is not an ordering key because it can tie or regress.
+func AddNotificationRoomOrder(ctx context.Context, tx *sql.Tx) error {
+	// Leave rows written before this migration at depth 0. They fall before
+	// every event that has a real depth, so a new receipt still clears the
+	// notifications they predate, while their origin_server_ts is never mixed
+	// with a depth as if the two were comparable.
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE userapi_notification_events ADD COLUMN room_depth BIGINT NOT NULL DEFAULT 0;
+	ALTER TABLE userapi_notification_receipt_positions ADD COLUMN room_depth BIGINT NOT NULL DEFAULT 0;
+	ALTER TABLE userapi_notification_receipt_positions ADD COLUMN stream_pos BIGINT NOT NULL DEFAULT 0;`); err != nil {
+		return err
+	}
+	return nil
+}

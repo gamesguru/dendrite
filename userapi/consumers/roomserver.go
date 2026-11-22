@@ -567,7 +567,7 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	var users []string
 	threadID, err := receipts.EventThreadID(ctx, s.rsAPI, event)
 	if err == nil {
-		users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos, int64(event.OriginServerTS()))
+		users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos, event.Depth())
 	}
 	// Counts are published once the event's thread is recorded, so that a
 	// new notification is counted in its thread rather than the main timeline.

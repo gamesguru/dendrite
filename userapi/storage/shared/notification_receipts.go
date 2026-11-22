@@ -12,45 +12,36 @@ import (
 // StoreNotificationEvent records ordering and thread identity after notification processing.
 // Events without notifications are included so receipts on one's own events work too.
 // It applies receipts which arrived first and returns users whose counts changed.
-// The originTS argument is the event's origin_server_ts, which stays the same if
-// the event is processed again, unlike the notification id or the output stream
-// position.
-func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64, originTS int64) (users []string, err error) {
+// The room depth and stream position form the persisted room-order boundary.
+// Event timestamps are not ordered reliably, and notification processing can be
+// late.
+func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64, roomDepth int64) (users []string, err error) {
 	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		if err := lockNotificationReceipts(ctx, txn, roomID); err != nil {
 			return err
 		}
-		if _, err := txn.ExecContext(ctx, `INSERT INTO userapi_notification_events (room_id, event_id, thread_id, stream_pos, notification_id, origin_ts)
-	VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(id), 0) FROM userapi_notifications WHERE room_id = $1), $5)
-	ON CONFLICT (room_id, event_id) DO UPDATE SET origin_ts = EXCLUDED.origin_ts`, roomID, eventID, threadID, pos, originTS); err != nil {
-			return err
-		}
-		var notificationID int64
-		if err := txn.QueryRowContext(ctx, `SELECT notification_id FROM userapi_notification_events WHERE room_id = $1 AND event_id = $2`, roomID, eventID).Scan(&notificationID); err != nil {
+		if _, err := txn.ExecContext(ctx, `INSERT INTO userapi_notification_events (room_id, event_id, thread_id, stream_pos, notification_id, origin_ts, room_depth)
+	VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(id), 0) FROM userapi_notifications WHERE room_id = $1), 0, $5)
+	ON CONFLICT (room_id, event_id) DO UPDATE SET room_depth = EXCLUDED.room_depth`, roomID, eventID, threadID, pos, roomDepth); err != nil {
 			return err
 		}
 		// A receipt may have been recorded before this event's notification
 		// was inserted. Apply every stored room/thread high-water mark now.
-		// Events from before the origin timestamp migration fall back to the
-		// old notification-id ordering.
-		rows, err := txn.QueryContext(ctx, `SELECT localpart, server_name, thread_id, origin_ts, notification_id
+		rows, err := txn.QueryContext(ctx, `SELECT localpart, server_name, thread_id, room_depth, stream_pos
 		FROM userapi_notification_receipt_positions
 		WHERE room_id = $1 AND (thread_id = '' OR thread_id = $2)
-		AND (
-			(CAST($3 AS BIGINT) > 0 AND origin_ts > 0 AND origin_ts >= CAST($3 AS BIGINT))
-			OR ((CAST($3 AS BIGINT) = 0 OR origin_ts = 0) AND notification_id >= $4)
-		)`, roomID, threadID, originTS, notificationID)
+		AND (room_depth > $3 OR (room_depth = $3 AND stream_pos >= $4))`, roomID, threadID, roomDepth, pos)
 		if err != nil {
 			return err
 		}
 		type receiptPosition struct {
 			localpart, server, thread string
-			originTS, notificationID  int64
+			roomDepth, streamPos      int64
 		}
 		var receiptPositions []receiptPosition
 		for rows.Next() {
 			var receipt receiptPosition
-			if err = rows.Scan(&receipt.localpart, &receipt.server, &receipt.thread, &receipt.originTS, &receipt.notificationID); err != nil {
+			if err = rows.Scan(&receipt.localpart, &receipt.server, &receipt.thread, &receipt.roomDepth, &receipt.streamPos); err != nil {
 				break
 			}
 			receiptPositions = append(receiptPositions, receipt)
@@ -66,7 +57,7 @@ func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, 
 		}
 		changedUsers := make(map[string]struct{})
 		for _, receipt := range receiptPositions {
-			changed, updateErr := markNotificationsReadThrough(ctx, txn, receipt.localpart, spec.ServerName(receipt.server), roomID, receipt.originTS, receipt.notificationID, receipt.thread)
+			changed, updateErr := markNotificationsReadThrough(ctx, txn, receipt.localpart, spec.ServerName(receipt.server), roomID, receipt.roomDepth, receipt.streamPos, receipt.thread)
 			if updateErr != nil {
 				return updateErr
 			}
@@ -132,21 +123,21 @@ func (d *Database) SetNotificationsReadForReceipt(ctx context.Context, localpart
 }
 
 func readNotificationReceipt(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID, eventID, threadID string) (bool, error) {
-	var originTS, notificationID int64
-	if err := txn.QueryRowContext(ctx, `SELECT origin_ts, notification_id FROM userapi_notification_events WHERE room_id = $1 AND event_id = $2`, roomID, eventID).Scan(&originTS, &notificationID); err != nil {
+	var roomDepth, streamPos int64
+	if err := txn.QueryRowContext(ctx, `SELECT room_depth, stream_pos FROM userapi_notification_events WHERE room_id = $1 AND event_id = $2`, roomID, eventID).Scan(&roomDepth, &streamPos); err != nil {
 		return false, err
 	}
 	if _, err := txn.ExecContext(ctx, `INSERT INTO userapi_notification_receipt_positions
-	(room_id, localpart, server_name, thread_id, origin_ts, notification_id) VALUES ($1, $2, $3, $4, $5, $6)
+		(room_id, localpart, server_name, thread_id, origin_ts, notification_id, room_depth, stream_pos) VALUES ($1, $2, $3, $4, 0, 0, $5, $6)
 	ON CONFLICT (room_id, localpart, server_name, thread_id) DO UPDATE SET
-	origin_ts = CASE WHEN userapi_notification_receipt_positions.origin_ts < excluded.origin_ts THEN excluded.origin_ts ELSE userapi_notification_receipt_positions.origin_ts END,
-	notification_id = CASE WHEN userapi_notification_receipt_positions.notification_id < excluded.notification_id THEN excluded.notification_id ELSE userapi_notification_receipt_positions.notification_id END`, roomID, localpart, serverName, threadID, originTS, notificationID); err != nil {
+	room_depth = CASE WHEN (userapi_notification_receipt_positions.room_depth, userapi_notification_receipt_positions.stream_pos) < (excluded.room_depth, excluded.stream_pos) THEN excluded.room_depth ELSE userapi_notification_receipt_positions.room_depth END,
+	stream_pos = CASE WHEN (userapi_notification_receipt_positions.room_depth, userapi_notification_receipt_positions.stream_pos) < (excluded.room_depth, excluded.stream_pos) THEN excluded.stream_pos ELSE userapi_notification_receipt_positions.stream_pos END`, roomID, localpart, serverName, threadID, roomDepth, streamPos); err != nil {
 		return false, err
 	}
-	return markNotificationsReadThrough(ctx, txn, localpart, serverName, roomID, originTS, notificationID, threadID)
+	return markNotificationsReadThrough(ctx, txn, localpart, serverName, roomID, roomDepth, streamPos, threadID)
 }
 
-func markNotificationsReadThrough(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string, originTS, notificationID int64, threadID string) (bool, error) {
+func markNotificationsReadThrough(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string, roomDepth, streamPos int64, threadID string) (bool, error) {
 	// Named placeholders are bound in the order they first appear, so $4 and $5
 	// must come before the optional $6. Keep this order.
 	query := `UPDATE userapi_notifications SET read = TRUE
@@ -154,11 +145,8 @@ func markNotificationsReadThrough(ctx context.Context, txn *sql.Tx, localpart st
 	AND event_id IN (
 		SELECT event_id FROM userapi_notification_events
 		WHERE room_id = $3
-		AND (
-			(origin_ts > 0 AND origin_ts <= $4)
-			OR (($4 = 0 OR origin_ts = 0) AND notification_id <= $5)
-		)`
-	args := []any{localpart, serverName, roomID, originTS, notificationID}
+		AND (room_depth < $4 OR (room_depth = $4 AND stream_pos <= $5))`
+	args := []any{localpart, serverName, roomID, roomDepth, streamPos}
 	if threadID != "" {
 		query += ` AND thread_id = $6`
 		args = append(args, threadID)

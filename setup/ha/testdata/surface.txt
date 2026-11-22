@@ -460,10 +460,20 @@ column userapi_login_tokens | token_expires_at | timestamp without time zone | N
 column userapi_login_tokens | user_id | text | NO |
 column userapi_notification_events | event_id | text | NO |
 column userapi_notification_events | notification_id | bigint | NO |
+column userapi_notification_events | origin_ts | bigint | NO | 0
+column userapi_notification_events | room_depth | bigint | NO | 0
 column userapi_notification_events | room_id | text | NO |
 column userapi_notification_events | stream_pos | bigint | NO |
 column userapi_notification_events | thread_id | text | NO |
 column userapi_notification_receipt_locks | room_id | text | NO |
+column userapi_notification_receipt_positions | localpart | text | NO |
+column userapi_notification_receipt_positions | notification_id | bigint | NO |
+column userapi_notification_receipt_positions | origin_ts | bigint | NO |
+column userapi_notification_receipt_positions | room_depth | bigint | NO | 0
+column userapi_notification_receipt_positions | room_id | text | NO |
+column userapi_notification_receipt_positions | server_name | text | NO |
+column userapi_notification_receipt_positions | stream_pos | bigint | NO | 0
+column userapi_notification_receipt_positions | thread_id | text | NO |
 column userapi_notifications | event_id | text | NO |
 column userapi_notifications | highlight | boolean | NO |
 column userapi_notifications | id | bigint | NO | nextval('userapi_notifications_id_seq'::regclass)
@@ -721,6 +731,8 @@ index userapi_login_tokens | userapi_login_tokens_pkey | CREATE UNIQUE INDEX use
 index userapi_notification_events | userapi_notification_events_pkey | CREATE UNIQUE INDEX userapi_notification_events_pkey ON public.userapi_notification_events USING btree (room_id, event_id)
 index userapi_notification_events | userapi_notification_events_thread_idx | CREATE INDEX userapi_notification_events_thread_idx ON public.userapi_notification_events USING btree (room_id, thread_id)
 index userapi_notification_receipt_locks | userapi_notification_receipt_locks_pkey | CREATE UNIQUE INDEX userapi_notification_receipt_locks_pkey ON public.userapi_notification_receipt_locks USING btree (room_id)
+index userapi_notification_receipt_positions | userapi_notification_receipt_positions_pkey | CREATE UNIQUE INDEX userapi_notification_receipt_positions_pkey ON public.userapi_notification_receipt_positions USING btree (room_id, localpart, server_name, thread_id)
+index userapi_notification_receipt_positions | userapi_notification_receipt_positions_room_idx | CREATE INDEX userapi_notification_receipt_positions_room_idx ON public.userapi_notification_receipt_positions USING btree (room_id, thread_id, origin_ts)
 index userapi_notifications | userapi_notification_localpart_id_idx | CREATE INDEX userapi_notification_localpart_id_idx ON public.userapi_notifications USING btree (localpart, server_name, id)
 index userapi_notifications | userapi_notification_localpart_room_id_event_id_idx | CREATE INDEX userapi_notification_localpart_room_id_event_id_idx ON public.userapi_notifications USING btree (localpart, server_name, room_id, event_id)
 index userapi_notifications | userapi_notification_localpart_room_id_id_idx | CREATE INDEX userapi_notification_localpart_room_id_id_idx ON public.userapi_notifications USING btree (localpart, server_name, room_id, id)
@@ -847,6 +859,7 @@ constraint userapi_external_ids | userapi_external_ids_pkey | PRIMARY KEY (provi
 constraint userapi_login_tokens | userapi_login_tokens_pkey | PRIMARY KEY (token)
 constraint userapi_notification_events | userapi_notification_events_pkey | PRIMARY KEY (room_id, event_id)
 constraint userapi_notification_receipt_locks | userapi_notification_receipt_locks_pkey | PRIMARY KEY (room_id)
+constraint userapi_notification_receipt_positions | userapi_notification_receipt_positions_pkey | PRIMARY KEY (room_id, localpart, server_name, thread_id)
 constraint userapi_notifications | userapi_notifications_pkey | PRIMARY KEY (id)
 constraint userapi_openid_tokens | userapi_openid_tokens_pkey | PRIMARY KEY (token)
 constraint userapi_pending_notification_receipts | userapi_pending_notification_receipts_pkey | PRIMARY KEY (room_id, event_id, localpart, server_name, thread_id)
@@ -927,7 +940,10 @@ migration userapi: add is active
 migration userapi: add last_seen_ts
 migration userapi: add refresh tokens
 migration userapi: case-fold email 3PIDs
+migration userapi: notification event origin timestamp
 migration userapi: notification event threads
+migration userapi: notification receipt positions
+migration userapi: notification room order
 migration userapi: pending notification refreshes
 migration userapi: rename tables
 migration userapi: server names

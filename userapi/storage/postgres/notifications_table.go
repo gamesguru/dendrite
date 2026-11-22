@@ -89,6 +89,7 @@ func NewPostgresNotificationTable(ctx context.Context, db *sql.DB) (tables.Notif
 	m.AddMigrations(sqlutil.Migration{Version: "userapi: pending notification refreshes", Up: tables.CreatePendingNotificationRefreshes})
 	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification event origin timestamp", Up: tables.AddNotificationEventOriginTimestamp})
 	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification receipt positions", Up: tables.CreateNotificationReceiptPositions})
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification room order", Up: tables.AddNotificationRoomOrder})
 	if err = m.Up(ctx); err != nil {
 		return nil, err
 	}
