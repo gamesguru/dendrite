@@ -854,7 +854,12 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// Applies the history visibility rules
 	events, err := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents, internal.SyncEndpoint)
 	if err != nil {
-		if abandonsSync(err) {
+		// The membership cap's DeadlineExceeded is our own bound, not the
+		// client leaving and not a database failover. Treating it as an
+		// abandoned sync leaves next_batch unchanged, so a saturated pool
+		// wedges the client after its initial sync. Deliver the conservative
+		// page and advance instead.
+		if ctx.Err() != nil || (abandonsSync(err) && !errors.Is(err, context.DeadlineExceeded)) {
 			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 		}
 		// Do not wedge the whole sync on one room's membership lookup. The
