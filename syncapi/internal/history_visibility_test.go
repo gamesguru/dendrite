@@ -314,7 +314,9 @@ func TestApplyHistoryVisibility_MembershipLookupError(t *testing.T) {
 	if !errors.Is(err, lookupErr) {
 		t.Fatalf("expected the membership lookup error, got %v", err)
 	}
-	if filtered != nil {
-		t.Fatalf("expected no events on a failed lookup, got %d", len(filtered))
+	// The conservative page is still returned so a sync can deliver it
+	// instead of stalling; pagination callers use the error to retry.
+	if len(filtered) != 1 {
+		t.Fatalf("expected the conservative page to keep the shared-history event, got %d", len(filtered))
 	}
 }

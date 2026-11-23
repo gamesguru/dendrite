@@ -7,11 +7,14 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
@@ -102,4 +105,44 @@ func TestGetTimelineEvents_RoomContinuouslyLive_OnlyReturnsNewEvents(t *testing.
 	require.Len(t, timeline, 1)
 	assert.Equal(t, "$new:localhost", timeline[0].EventID)
 	assert.Equal(t, 1, numLive)
+}
+
+// A failed membership lookup must not drop the room's timeline from sliding
+// sync. The room would otherwise be omitted while the connection position
+// still advanced past its events, leaving the client stuck with no updates.
+func TestGetTimelineEvents_VisibilityLookupFailureKeepsTimeline(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	roomID := "!visibility:localhost"
+	userID := "@alice:localhost"
+	rp := &RequestPool{rsAPI: &membershipErrorRoomserverAPI{}}
+
+	snapshot := newMockSnapshot()
+	snapshot.SetRecentEvents(roomID, types.RecentEvents{
+		Events: []types.StreamEvent{
+			createMockTimelineEvent("$visible:localhost", 95, `{"msgtype":"m.text","body":"still delivered"}`),
+		},
+	})
+
+	roomState := types.RoomStreamState{
+		Status:    types.HaveSentRoomLive,
+		LastToken: &types.StreamingToken{PDUPosition: 90},
+	}
+	fromToken := &types.StreamingToken{PDUPosition: 90}
+	currentPos := types.StreamingToken{PDUPosition: 100}
+
+	timeline, _, numLive, err := rp.getTimelineEvents(ctx, snapshot, roomID, userID, 10, roomState, currentPos, fromToken)
+	require.NoError(t, err, "a membership lookup failure must not fail the room")
+	require.Len(t, timeline, 1, "the conservatively filtered timeline is still delivered")
+	assert.Equal(t, "$visible:localhost", timeline[0].EventID)
+	assert.Equal(t, 1, numLive)
+}
+
+type membershipErrorRoomserverAPI struct {
+	mockRoomserverAPI
+}
+
+func (m *membershipErrorRoomserverAPI) QueryMembershipAtEvent(context.Context, spec.RoomID, []string, spec.SenderID) (map[string]*rstypes.HeaderedEvent, error) {
+	return nil, errors.New("membership lookup failed")
 }

@@ -177,13 +177,6 @@ func ApplyHistoryVisibilityFilter(
 			"elapsed_ms": elapsed.Milliseconds(),
 		}).Warn("Slow membership lookup for history visibility")
 	}
-	// Report a failed lookup instead of serving a filtered page. The caller
-	// would otherwise advance its pagination cursor past events that were
-	// omitted only because the membership was unknown, losing them for good.
-	if lookupErr != nil {
-		return nil, fmt.Errorf("history visibility membership lookup: %w", lookupErr)
-	}
-
 	// MSC4354: joined users see unexpired sticky events whatever the history
 	// visibility. Sync v2 and sliding sync timelines keep the usual rules, as
 	// in Synapse, since both deliver sticky events in a section of their own.
@@ -262,7 +255,10 @@ func ApplyHistoryVisibilityFilter(
 		annotateRequesterMembership(eventsFiltered, visibilities, senderID)
 	}
 	calculateHistoryVisibilityDuration.With(prometheus.Labels{"api": endpoint}).Observe(float64(time.Since(start).Milliseconds()))
-	return eventsFiltered, nil
+	// Return the conservatively filtered page with the error. Callers that
+	// paginate must retry rather than advance past it, while syncs may choose
+	// to deliver it to keep the stream moving.
+	return eventsFiltered, lookupErr
 }
 
 // redactErasedSenders replaces the events at the given indexes, which the
@@ -429,7 +425,9 @@ func ApplyTimelineHistoryVisibilityFilter(
 	startTime := time.Now()
 	events, err := ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, recentEvents, alwaysIncludeIDs, *parsedUserID, endpoint)
 	if err != nil {
-		return nil, err
+		// events is the conservative page; let the caller decide whether to
+		// retry (pagination) or deliver it (sync).
+		return events, err
 	}
 	elapsed := time.Since(startTime)
 	entry := logrus.WithFields(logrus.Fields{

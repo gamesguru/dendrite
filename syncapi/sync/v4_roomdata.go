@@ -430,7 +430,14 @@ func (rp *RequestPool) visibleStreamEvents(
 	}
 	visible, err := syncinternal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, rp.rsAPI, roomID, userID, headered, syncinternal.SlidingSyncEndpoint)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			// The long poll was canceled; the client is gone.
+			return nil, err
+		}
+		// Do not fail the room because one membership lookup failed. The
+		// returned page is filtered conservatively, and delivering it keeps
+		// the sliding sync position moving instead of wedging the client.
+		logrus.WithError(err).WithField("room_id", roomID).Warn("applying history visibility failed; serving the filtered timeline")
 	}
 	if len(visible) == len(events) {
 		return events, nil
