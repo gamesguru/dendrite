@@ -854,18 +854,19 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// Applies the history visibility rules
 	events, err := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents, internal.SyncEndpoint)
 	if err != nil {
+		// Any failure other than the membership lookup's own cap leaves the
+		// timeline incomplete: events whose membership could not be resolved
+		// are omitted, so advancing would never deliver them. Stay at the old
+		// position and let the next sync retry.
+		if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
+		}
 		// The membership cap's DeadlineExceeded is our own bound, not the
 		// client leaving and not a database failover. Treating it as an
 		// abandoned sync leaves next_batch unchanged, so a saturated pool
 		// wedges the client after its initial sync. Deliver the conservative
-		// page and advance instead.
-		if ctx.Err() != nil || (abandonsSync(err) && !errors.Is(err, context.DeadlineExceeded)) {
-			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
-		}
-		// Do not wedge the whole sync on one room's membership lookup. The
-		// page is filtered conservatively (unknown membership is leave) and
-		// the room keeps moving; a later sync can deliver the events once the
-		// lookup succeeds again.
+		// page and advance instead; the page was filtered without the missing
+		// memberships, so a later sync or backfill can still recover them.
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
 	}
 
