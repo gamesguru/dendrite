@@ -35,6 +35,10 @@ func WithConnectionGuard(applicationName string, afterConnect func(context.Conte
 
 var skipSanityChecks = flag.Bool("skip-db-sanity", false, "Ignore sanity checks on the database connections (NOT RECOMMENDED!)")
 
+// minRecommendedMaxOpenConns is the smallest shared pool that should be
+// configured; smaller pools starve concurrent sync and history requests.
+const minRecommendedMaxOpenConns = 10
+
 // Open opens a database specified by its database driver name and a driver-specific data source name,
 // usually consisting of at least a database name and connection information.
 func Open(dbProperties *config.DatabaseOptions, writer Writer, options ...ConnectionOption) (*sql.DB, error) {
@@ -68,7 +72,9 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer, options ...Connec
 			"max_idle_conns":    dbProperties.MaxIdleConns(),
 			"conn_max_lifetime": dbProperties.ConnMaxLifetime(),
 		})
-		logger.Debug("Setting DB connection limits")
+		// Log at info so an operator can confirm the effective limits from the
+		// startup log without enabling debug logging.
+		logger.Info("Setting DB connection limits")
 		db.SetMaxOpenConns(dbProperties.MaxOpenConns())
 		db.SetMaxIdleConns(dbProperties.MaxIdleConns())
 		db.SetConnMaxLifetime(dbProperties.ConnMaxLifetime())
@@ -76,6 +82,8 @@ func Open(dbProperties *config.DatabaseOptions, writer Writer, options ...Connec
 		if !*skipSanityChecks {
 			if dbProperties.MaxOpenConns() == 0 {
 				logrus.Warnf("WARNING: Configuring 'max_open_conns' to be unlimited is not recommended. This can result in bad performance or deadlocks.")
+			} else if dbProperties.MaxOpenConns() < minRecommendedMaxOpenConns {
+				logger.Warnf("WARNING: max_open_conns is only %d; a shared pool this small can starve sync and history requests. Consider at least 10.", dbProperties.MaxOpenConns())
 			}
 
 			if driverName == "pgx" {
