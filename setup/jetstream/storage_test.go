@@ -288,7 +288,14 @@ func TestHAAllowsRoomWakeupConsumer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			invalid, createErr := js.AddConsumer(stream, &tc.config)
 			require.NoError(t, createErr)
-			require.ErrorContains(t, validateConsumers(t.Context(), consumerJS, stream, cfg), "offline")
+			// A clustered create is acknowledged before every server's consumer
+			// listing reflects it, so poll rather than reading once.
+			var validationErr error
+			require.Eventually(t, func() bool {
+				validationErr = validateConsumers(t.Context(), consumerJS, stream, cfg)
+				return validationErr != nil
+			}, 5*time.Second, 10*time.Millisecond)
+			require.ErrorContains(t, validationErr, "offline")
 			require.NoError(t, js.DeleteConsumer(stream, invalid.Name))
 		})
 	}
