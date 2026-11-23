@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
@@ -25,6 +26,8 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
+
+const federatedRoomHierarchyTimeout = 10 * time.Second
 
 // Traverse the room hierarchy using the provided walker up to the provided limit,
 // returning a new walker which can be used to fetch the next page.
@@ -61,7 +64,7 @@ func (querier *Queryer) QueryNextRoomHierarchyPage(ctx context.Context, walker r
 
 		// If the context is canceled, we might still have discovered rooms
 		// return them to the client and let the client know there _may_ be more rooms.
-		if errors.Is(ctx.Err(), context.Canceled) {
+		if ctx.Err() != nil {
 			break
 		}
 
@@ -452,14 +455,15 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 		return nil
 	}
 	util.GetLogger(ctx).Debugf("Querying %s via %+v", roomID, vias)
-	innerCtx := context.Background()
+	innerCtx, cancel := context.WithTimeout(ctx, federatedRoomHierarchyTimeout)
+	defer cancel()
 	var gotNotFound bool
 	// query more of the spaces graph using these servers
 	for _, serverName := range vias {
 		if serverName == string(querier.Cfg.Global.ServerName) {
 			continue
 		}
-		res, err := querier.FSAPI.RoomHierarchies(innerCtx, querier.Cfg.Global.ServerName, spec.ServerName(serverName), roomIDStr, suggestedOnly) //nolint:contextcheck
+		res, err := querier.FSAPI.RoomHierarchies(innerCtx, querier.Cfg.Global.ServerName, spec.ServerName(serverName), roomIDStr, suggestedOnly)
 		if err != nil {
 			var fedErr *fs.FederationClientError
 			if errors.As(err, &fedErr) && fedErr.Code == http.StatusNotFound {
@@ -490,7 +494,7 @@ func federatedRoomInfo(ctx context.Context, querier *Queryer, caller types.Devic
 		return &res
 	}
 	// All vias failed - cache this negative result to avoid repeated failed attempts
-	if !gotNotFound {
+	if !gotNotFound && ctx.Err() == nil {
 		util.GetLogger(ctx).Debugf("All federation attempts failed for %s, caching negative result", roomID)
 		querier.Cache.StoreRoomHierarchyFailure(roomIDStr)
 	}
