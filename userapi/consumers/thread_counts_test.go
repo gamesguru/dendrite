@@ -26,6 +26,10 @@ func (failingNotificationStore) StoreNotificationEvent(context.Context, string, 
 	return nil, errors.New("notification event storage failed")
 }
 
+func (failingNotificationStore) NotificationEventDepths(context.Context, string, []string) (map[string]int64, error) {
+	return nil, nil
+}
+
 type retryCopyRoomserver struct {
 	rsapi.UserRoomserverAPI
 	currentStateCalls int
