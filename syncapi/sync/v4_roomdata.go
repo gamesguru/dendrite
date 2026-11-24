@@ -9,6 +9,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -438,15 +439,15 @@ func (rp *RequestPool) visibleStreamEvents(
 			// The long poll was canceled; the client is gone.
 			return nil, err
 		}
-		// A lookup failure withholds the events whose membership could not
-		// be resolved. If any were withheld, fail the room so its position
-		// stays put and the next sync retries them; serving the remainder
-		// would advance past them for good. With nothing withheld the page
-		// is complete and can be served.
-		if len(visible) < len(events) {
+		// Only the membership lookup's own cap may be tolerated, and then only
+		// when nothing was withheld: otherwise fail the room so its position
+		// stays put and the next sync retries. Serving the remainder would
+		// advance past the withheld events for good. Any other failure
+		// (including storage errors) fails the room outright.
+		if !errors.Is(err, syncinternal.ErrMembershipLookupTimeout) || len(visible) < len(events) {
 			return nil, err
 		}
-		logrus.WithError(err).WithField("room_id", roomID).Warn("applying history visibility failed but nothing was withheld; serving the timeline")
+		logrus.WithError(err).WithField("room_id", roomID).Warn("membership lookup timed out but nothing was withheld; serving the timeline")
 	}
 	if len(visible) == len(events) {
 		return events, nil

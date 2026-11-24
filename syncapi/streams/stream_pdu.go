@@ -859,7 +859,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 		// timeline incomplete: events whose membership could not be resolved
 		// are omitted, so advancing would never deliver them. Stay at the old
 		// position and let the next sync retry.
-		if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil || !errors.Is(err, internal.ErrMembershipLookupTimeout) {
 			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 		}
 		// The membership cap's DeadlineExceeded is our own bound, not the

@@ -454,3 +454,19 @@ func TestRoomThreadNotificationCounts(t *testing.T) {
 		require.Empty(t, counts)
 	})
 }
+
+// Redelivering an event must not move the position first recorded for it.
+func TestNotificationEventKeepsFirstKnownPosition(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, backend)
+		defer cleanup()
+		_, err := db.StoreNotificationEvent(t.Context(), "!room:test", "$e", "main", 5, 50, 1)
+		require.NoError(t, err)
+		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$e", "main", 9, 90, 1)
+		require.NoError(t, err)
+		var depth, pos int64
+		require.NoError(t, db.(*shared.Database).DB.QueryRowContext(t.Context(), `SELECT room_depth, stream_pos FROM userapi_notification_events WHERE room_id = '!room:test' AND event_id = '$e'`).Scan(&depth, &pos))
+		require.EqualValues(t, 50, depth)
+		require.EqualValues(t, 5, pos)
+	})
+}

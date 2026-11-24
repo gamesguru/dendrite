@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -13,6 +14,7 @@ import (
 
 	roomserverAPI "codefloe.com/pat-s/zendrite/roomserver/api"
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
+	"codefloe.com/pat-s/zendrite/syncapi/internal"
 	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
@@ -56,6 +58,8 @@ func (unresolvedMembershipSnapshot) EventPositionInTopology(context.Context, str
 type unresolvedMembershipRoomserver struct {
 	noPartialStateRooms
 	err error
+	// block makes the lookup wait for its context, as a stalled database would.
+	block bool
 }
 
 func (r unresolvedMembershipRoomserver) QuerySenderIDForUser(_ context.Context, _ spec.RoomID, userID spec.UserID) (*spec.SenderID, error) {
@@ -63,7 +67,11 @@ func (r unresolvedMembershipRoomserver) QuerySenderIDForUser(_ context.Context, 
 	return &senderID, nil
 }
 
-func (r unresolvedMembershipRoomserver) QueryMembershipAtEvent(context.Context, spec.RoomID, []string, spec.SenderID) (map[string]*rstypes.HeaderedEvent, error) {
+func (r unresolvedMembershipRoomserver) QueryMembershipAtEvent(ctx context.Context, _ spec.RoomID, _ []string, _ spec.SenderID) (map[string]*rstypes.HeaderedEvent, error) {
+	if r.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return nil, r.err
 }
 
@@ -104,8 +112,10 @@ func TestIncrementalSyncAdvancesPastTimedOutMembershipLookup(t *testing.T) {
 	snapshot := unresolvedMembershipSnapshot{
 		failoverSnapshot: failoverSnapshot{roomID: room.ID, events: []*rstypes.HeaderedEvent{message}},
 	}
-	lookupErr := fmt.Errorf("roomserver lookup: %w", context.DeadlineExceeded)
-	provider := &PDUStreamProvider{rsAPI: unresolvedMembershipRoomserver{err: lookupErr}}
+	old := internal.MembershipLookupTimeout
+	internal.MembershipLookupTimeout = 50 * time.Millisecond
+	defer func() { internal.MembershipLookupTimeout = old }()
+	provider := &PDUStreamProvider{rsAPI: unresolvedMembershipRoomserver{block: true}}
 	req := &types.SyncRequest{
 		Context:           t.Context(),
 		Device:            &userapi.Device{UserID: alice.ID},
@@ -124,6 +134,30 @@ func TestIncrementalSyncAdvancesPastTimedOutMembershipLookup(t *testing.T) {
 	require.Empty(t, jr.Timeline.Events, "the withheld events are not delivered")
 	require.NotNil(t, jr.Timeline.PrevBatch, "prev_batch must reach the withheld events")
 	require.Equal(t, types.StreamingToken{PDUPosition: 5}.String(), *jr.Timeline.PrevBatch, "prev_batch is the withheld event itself, not just before it")
+}
+
+// A deadline reached inside a downstream call is not our membership cap, so
+// the position must be held rather than advanced past the withheld events.
+func TestIncrementalSyncStaysBehindDownstreamDeadline(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice, test.RoomHistoryVisibility(gomatrixserverlib.HistoryVisibilityJoined))
+	message := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "downstream deadline"})
+	snapshot := unresolvedMembershipSnapshot{
+		failoverSnapshot: failoverSnapshot{roomID: room.ID, events: []*rstypes.HeaderedEvent{message}},
+	}
+	lookupErr := fmt.Errorf("roomserver lookup: %w", context.DeadlineExceeded)
+	provider := &PDUStreamProvider{rsAPI: unresolvedMembershipRoomserver{err: lookupErr}}
+	req := &types.SyncRequest{
+		Context:           t.Context(),
+		Device:            &userapi.Device{UserID: alice.ID},
+		Rooms:             map[string]string{},
+		Response:          types.NewResponse(),
+		Filter:            synctypes.DefaultFilter(),
+		Log:               logrus.NewEntry(logrus.StandardLogger()),
+		MembershipChanges: map[string]struct{}{},
+	}
+	from, to := types.StreamPosition(10), types.StreamPosition(20)
+	require.Equal(t, from, provider.IncrementalSync(t.Context(), snapshot, req, from, to))
 }
 
 var _ roomserverAPI.SyncRoomserverAPI = unresolvedMembershipRoomserver{}

@@ -107,10 +107,10 @@ func TestGetTimelineEvents_RoomContinuouslyLive_OnlyReturnsNewEvents(t *testing.
 	assert.Equal(t, 1, numLive)
 }
 
-// A failed membership lookup must not drop the room's timeline from sliding
-// sync. The room would otherwise be omitted while the connection position
-// still advanced past its events, leaving the client stuck with no updates.
-func TestGetTimelineEvents_VisibilityLookupFailureKeepsTimeline(t *testing.T) {
+// A failed membership lookup that is not the lookup's own cap must fail the
+// room: serving the filtered page would advance the connection position past
+// events that were never delivered, and no later sync would retry them.
+func TestGetTimelineEvents_VisibilityLookupFailureFailsRoom(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -121,7 +121,7 @@ func TestGetTimelineEvents_VisibilityLookupFailureKeepsTimeline(t *testing.T) {
 	snapshot := newMockSnapshot()
 	snapshot.SetRecentEvents(roomID, types.RecentEvents{
 		Events: []types.StreamEvent{
-			createMockTimelineEvent("$visible:localhost", 95, `{"msgtype":"m.text","body":"still delivered"}`),
+			createMockTimelineEvent("$visible:localhost", 95, `{"msgtype":"m.text","body":"held back"}`),
 		},
 	})
 
@@ -132,11 +132,8 @@ func TestGetTimelineEvents_VisibilityLookupFailureKeepsTimeline(t *testing.T) {
 	fromToken := &types.StreamingToken{PDUPosition: 90}
 	currentPos := types.StreamingToken{PDUPosition: 100}
 
-	timeline, _, numLive, err := rp.getTimelineEvents(ctx, snapshot, roomID, userID, 10, roomState, currentPos, fromToken)
-	require.NoError(t, err, "a membership lookup failure must not fail the room")
-	require.Len(t, timeline, 1, "the conservatively filtered timeline is still delivered")
-	assert.Equal(t, "$visible:localhost", timeline[0].EventID)
-	assert.Equal(t, 1, numLive)
+	_, _, _, err := rp.getTimelineEvents(ctx, snapshot, roomID, userID, 10, roomState, currentPos, fromToken)
+	require.Error(t, err, "a membership lookup failure must hold the room's position")
 }
 
 type membershipErrorRoomserverAPI struct {

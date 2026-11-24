@@ -51,7 +51,15 @@ var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 // lookup may hold a request open. A stalled database must not keep the
 // request, its goroutine and its connections alive for minutes: the page
 // falls back to the conservative "leave" default instead.
-const membershipLookupTimeout = 30 * time.Second
+//
+// It is a variable so tests can shorten it.
+var MembershipLookupTimeout = 30 * time.Second
+
+// ErrMembershipLookupTimeout marks a failure caused by MembershipLookupTimeout
+// expiring, as opposed to a deadline reached inside a downstream call.
+// Callers may advance past it only when they make the withheld events
+// recoverable.
+var ErrMembershipLookupTimeout = errors.New("history visibility membership lookup timed out")
 
 var historyVisibilityPriority = map[gomatrixserverlib.HistoryVisibility]uint8{
 	spec.WorldReadable:                         0,
@@ -147,9 +155,15 @@ func ApplyHistoryVisibilityFilter(
 		return nil, err
 	}
 	visibilityStarted := time.Now()
-	lookupCtx, cancel := context.WithTimeout(ctx, membershipLookupTimeout)
+	lookupCtx, cancel := context.WithTimeout(ctx, MembershipLookupTimeout)
 	visibilities, membershipKnown, lookupErr := visibilityForEvents(lookupCtx, rsAPI, events, senderID, firstEvRoomID)
+	// Our own cap fired only if the lookup context expired while the caller's
+	// is still live; a deadline returned by a downstream call does not count.
+	capExpired := lookupErr != nil && ctx.Err() == nil && errors.Is(lookupCtx.Err(), context.DeadlineExceeded)
 	cancel()
+	if capExpired {
+		lookupErr = fmt.Errorf("%w: %w", ErrMembershipLookupTimeout, lookupErr)
+	}
 	elapsed := time.Since(visibilityStarted)
 	switch {
 	case ctx.Err() != nil:

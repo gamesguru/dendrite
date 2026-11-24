@@ -27,8 +27,8 @@ func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, 
 		if _, err := txn.ExecContext(ctx, `INSERT INTO userapi_notification_events (room_id, event_id, thread_id, stream_pos, notification_id, origin_ts, room_depth)
 	VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(id), 0) FROM userapi_notifications WHERE room_id = $1), $5, $6)
 	ON CONFLICT (room_id, event_id) DO UPDATE SET
-		room_depth = CASE WHEN EXCLUDED.room_depth > 0 THEN EXCLUDED.room_depth ELSE userapi_notification_events.room_depth END,
-		stream_pos = CASE WHEN EXCLUDED.room_depth > 0 THEN EXCLUDED.stream_pos ELSE userapi_notification_events.stream_pos END,
+		room_depth = CASE WHEN userapi_notification_events.room_depth <= 0 AND EXCLUDED.room_depth > 0 THEN EXCLUDED.room_depth ELSE userapi_notification_events.room_depth END,
+		stream_pos = CASE WHEN userapi_notification_events.room_depth <= 0 AND EXCLUDED.room_depth > 0 THEN EXCLUDED.stream_pos ELSE userapi_notification_events.stream_pos END,
 		origin_ts = CASE WHEN EXCLUDED.origin_ts > 0 THEN EXCLUDED.origin_ts ELSE userapi_notification_events.origin_ts END`,
 			roomID, eventID, threadID, pos, originTS, roomDepth); err != nil {
 			return err
@@ -166,7 +166,27 @@ func readNotificationReceipt(ctx context.Context, txn *sql.Tx, localpart string,
 	if err := txn.QueryRowContext(ctx, `SELECT room_depth, stream_pos, receipt_event_id FROM userapi_notification_receipt_positions WHERE room_id = $1 AND localpart = $2 AND server_name = $3 AND thread_id = $4`, roomID, localpart, serverName, threadID).Scan(&savedDepth, &savedPos, &savedEvent); err != nil {
 		return false, err
 	}
-	return markNotificationsReadThrough(ctx, txn, localpart, serverName, roomID, savedDepth, savedPos, savedEvent, threadID)
+	changed, err := markNotificationsReadThrough(ctx, txn, localpart, serverName, roomID, savedDepth, savedPos, savedEvent, threadID)
+	if err != nil {
+		return false, err
+	}
+	if roomDepth <= 0 && savedDepth > 0 {
+		// Preserve this receipt for the event's eventual depth recovery while
+		// leaving the already-known high-water boundary untouched.
+		if _, err = txn.ExecContext(ctx, `INSERT INTO userapi_pending_notification_receipts
+			(room_id, event_id, localpart, server_name, thread_id, created_ts)
+			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+			roomID, eventID, localpart, serverName, threadID, time.Now().UnixMilli()); err != nil {
+			return false, err
+		}
+	}
+	if roomDepth > 0 || savedEvent == eventID {
+		return changed, nil
+	}
+	// The receipt's own event has no known depth, so the saved boundary may
+	// not cover it. Acknowledge that exact event without moving the boundary.
+	exact, err := markNotificationsReadThrough(ctx, txn, localpart, serverName, roomID, -1, 0, eventID, threadID)
+	return changed || exact, err
 }
 
 func markNotificationsReadThrough(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string, roomDepth, streamPos int64, receiptEventID, threadID string) (bool, error) {
