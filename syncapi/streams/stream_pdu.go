@@ -163,7 +163,7 @@ func (p *PDUStreamProvider) CompleteSync(
 				return from
 			}
 			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
-			continue
+			return from
 		}
 		req.Response.Rooms.Join[roomID] = jr
 		req.Rooms[roomID] = spec.Join
@@ -226,7 +226,7 @@ func (p *PDUStreamProvider) CompleteSync(
 					return from
 				}
 				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
-				continue
+				return from
 			}
 			req.Response.Rooms.Peek[roomID] = jr
 		}
@@ -1295,10 +1295,46 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if !isPeek {
 		events, err = internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, recentEvents, internal.SyncEndpoint)
 		if err != nil {
-			if abandonsSync(err) {
+			if ctx.Err() != nil || abandonsSync(err) {
 				return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 			}
-			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
+			if !errors.Is(err, internal.ErrMembershipLookupTimeout) {
+				return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
+			}
+			// Keep the visible tail and expose the omitted events through a limited
+			// timeline. The stream position can then advance without losing the
+			// events whose visibility lookup timed out.
+			visibleIDs := make(map[string]struct{}, len(events))
+			for _, ev := range events {
+				visibleIDs[ev.EventID()] = struct{}{}
+			}
+			lastWithheld := -1
+			for i, ev := range recentEvents {
+				if _, ok := visibleIDs[ev.EventID()]; !ok {
+					lastWithheld = i
+				}
+			}
+			if lastWithheld >= 0 {
+				gapEvent := recentEvents[lastWithheld]
+				anchor, anchorErr := snapshot.EventPositionInTopology(ctx, gapEvent.EventID())
+				if anchorErr != nil {
+					return nil, fmt.Errorf("snapshot.EventPositionInTopology for withheld event: %w", anchorErr)
+				}
+				prevBatchAnchor = &anchor
+				visibleTail := make(map[string]struct{}, len(recentEvents)-lastWithheld-1)
+				for _, ev := range recentEvents[lastWithheld+1:] {
+					visibleTail[ev.EventID()] = struct{}{}
+				}
+				kept := make([]*rstypes.HeaderedEvent, 0, len(visibleTail))
+				for _, ev := range events {
+					if _, ok := visibleTail[ev.EventID()]; ok {
+						kept = append(kept, ev)
+					}
+				}
+				events = kept
+				limited = true
+			}
+			err = nil
 		}
 	}
 	if !stateAfter {

@@ -682,6 +682,10 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 	prevIDs := event.PrevEventIDs()
 	maxPrev := int64(-1)
 	if len(prevIDs) > 0 {
+		effectiveDepths, err := s.db.NotificationEventDepths(ctx, event.RoomID().String(), prevIDs)
+		if err != nil {
+			return 0, fmt.Errorf("query effective notification predecessor depths: %w", err)
+		}
 		var response rsapi.QueryEventsByIDResponse
 		if err := s.rsAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{
 			RoomID: event.RoomID().String(), EventIDs: prevIDs,
@@ -689,8 +693,12 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 			return 0, fmt.Errorf("query notification event predecessors: %w", err)
 		}
 		for _, prev := range response.Events {
-			if prev.Depth() > maxPrev {
-				maxPrev = prev.Depth()
+			prevDepth := prev.Depth()
+			if effectiveDepth, ok := effectiveDepths[prev.EventID()]; ok {
+				prevDepth = effectiveDepth
+			}
+			if prevDepth > maxPrev {
+				maxPrev = prevDepth
 			}
 		}
 	}

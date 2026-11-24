@@ -4,10 +4,48 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 )
+
+// NotificationEventDepths returns effective room depths already recorded for
+// the requested events. Events without a known effective depth are omitted.
+func (d *Database) NotificationEventDepths(ctx context.Context, roomID string, eventIDs []string) (depths map[string]int64, err error) {
+	depths = make(map[string]int64)
+	if len(eventIDs) == 0 {
+		return depths, nil
+	}
+	args := make([]any, 1, len(eventIDs)+1)
+	args[0] = roomID
+	placeholders := make([]string, len(eventIDs))
+	for i, eventID := range eventIDs {
+		args = append(args, eventID)
+		placeholders[i] = fmt.Sprintf("$%d", len(args))
+	}
+	rows, err := d.DB.QueryContext(ctx, `SELECT event_id, room_depth FROM userapi_notification_events WHERE room_id = $1 AND event_id IN (`+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	for rows.Next() {
+		var eventID string
+		var roomDepth int64
+		if err = rows.Scan(&eventID, &roomDepth); err != nil {
+			return nil, err
+		}
+		if roomDepth > 0 {
+			depths[eventID] = roomDepth
+		}
+	}
+	return depths, rows.Err()
+}
 
 // StoreNotificationEvent records ordering and thread identity after notification processing.
 // Events without notifications are included so receipts on one's own events work too.

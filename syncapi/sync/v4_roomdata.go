@@ -730,17 +730,17 @@ func (rp *RequestPool) getRequiredStateDelta(
 		if ev.StateKey() == nil {
 			continue // not a state event
 		}
-		if rp.matchesRequiredState(ev.HeaderedEvent, userID, config, lazySenders) {
-			stateKey := *ev.StateKey()
-			if ev.Type() == spec.MRoomMember {
-				resolved, resolveErr := rp.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
-				if resolveErr != nil {
-					return nil, false, resolveErr
-				}
-				if resolved != nil {
-					stateKey = resolved.String()
-				}
+		stateKey := *ev.StateKey()
+		if ev.Type() == spec.MRoomMember {
+			resolved, resolveErr := rp.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
+			if resolveErr != nil {
+				return nil, false, resolveErr
 			}
+			if resolved != nil {
+				stateKey = resolved.String()
+			}
+		}
+		if rp.matchesRequiredStateKey(ev.HeaderedEvent, stateKey, userID, config, lazySenders) {
 			tuple := gomatrixserverlib.StateKeyTuple{
 				EventType: ev.Type(),
 				StateKey:  stateKey,
@@ -763,7 +763,24 @@ func (rp *RequestPool) getRequiredStateDelta(
 	}
 	result := make([]*rstypes.HeaderedEvent, 0, len(changedState))
 	for _, tuple := range changedState {
-		if currentEvent := current[tuple]; currentEvent != nil && rp.matchesRequiredState(currentEvent, userID, config, lazySenders) {
+		currentEvent := current[tuple]
+		if currentEvent == nil {
+			continue
+		}
+		stateKey := ""
+		if currentEvent.StateKey() != nil {
+			stateKey = *currentEvent.StateKey()
+		}
+		if currentEvent.Type() == spec.MRoomMember {
+			resolved, resolveErr := rp.rsAPI.QueryUserIDForSender(ctx, currentEvent.RoomID(), spec.SenderID(stateKey))
+			if resolveErr != nil {
+				return nil, false, resolveErr
+			}
+			if resolved != nil {
+				stateKey = resolved.String()
+			}
+		}
+		if rp.matchesRequiredStateKey(currentEvent, stateKey, userID, config, lazySenders) {
 			result = append(result, currentEvent)
 		}
 	}
@@ -1088,11 +1105,20 @@ func (rp *RequestPool) matchesRequiredState(
 	config *types.RequiredStateConfig,
 	lazySenders map[string]bool,
 ) bool {
-	eventType := event.Type()
 	stateKey := ""
 	if event.StateKey() != nil {
 		stateKey = *event.StateKey()
 	}
+	return rp.matchesRequiredStateKey(event, stateKey, userID, config, lazySenders)
+}
+
+func (rp *RequestPool) matchesRequiredStateKey(
+	event *rstypes.HeaderedEvent,
+	stateKey, userID string,
+	config *types.RequiredStateConfig,
+	lazySenders map[string]bool,
+) bool {
+	eventType := event.Type()
 
 	// Check if excluded
 	for _, pattern := range config.Exclude {

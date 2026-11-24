@@ -178,8 +178,12 @@ func TestNotificationRoomDepthLiftsAboveParents(t *testing.T) {
 	child := room.CreateEvent(t, user, "m.room.message", map[string]any{"body": "child"},
 		test.WithDepth(1), test.WithPrevEvents(parent.EventID()))
 
-	consumer := OutputRoomEventConsumer{rsAPI: &parentDepthRoomserver{parent: parent}}
+	db, cleanup := mustCreateDatabase(t, test.DBTypeSQLite)
+	defer cleanup()
+	_, err := db.StoreNotificationEvent(t.Context(), room.ID, parent.EventID(), "main", 1, 2000, 0)
+	require.NoError(t, err)
+	consumer := OutputRoomEventConsumer{db: db, rsAPI: &parentDepthRoomserver{parent: parent}}
 	depth, err := consumer.notificationRoomDepth(t.Context(), child)
 	require.NoError(t, err)
-	require.Equal(t, int64(1001), depth, "the child must sort after its stored parent")
+	require.Equal(t, int64(2001), depth, "the child must sort after its parent's effective depth")
 }

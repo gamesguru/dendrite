@@ -204,6 +204,7 @@ type Notification interface {
 	CompleteNotificationRefresh(ctx context.Context, roomID, userID string) error
 	DeleteNotificationsUpTo(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64) (affected bool, err error)
 	StoreNotificationEvent(ctx context.Context, roomID, eventID, threadID string, pos uint64, roomDepth, originTS int64) (users []string, err error)
+	NotificationEventDepths(ctx context.Context, roomID string, eventIDs []string) (map[string]int64, error)
 	SetNotificationsReadForReceipt(ctx context.Context, localpart string, serverName spec.ServerName, roomID, eventID, threadID string) (affected bool, err error)
 	SetNotificationsRead(ctx context.Context, localpart string, serverName spec.ServerName, roomID string, pos uint64, read bool) (affected bool, err error)
 	GetNotifications(ctx context.Context, localpart string, serverName spec.ServerName, fromID int64, limit int, filter tables.NotificationFilter) ([]*api.Notification, int64, error)

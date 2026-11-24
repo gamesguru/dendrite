@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -61,6 +62,40 @@ func TestGetRequiredState_NonLazyPattern_DeliversStateChangedDuringGap(t *testin
 	require.Len(t, requiredState, 1,
 		"the power_levels change from inside the gap must be delivered now that the room is relevant again")
 	assert.Equal(t, "m.room.power_levels", requiredState[0].Type)
+}
+
+type pseudoIDRequiredStateRoomserver struct {
+	mockRoomserverAPI
+	userID string
+}
+
+func (r pseudoIDRequiredStateRoomserver) QueryUserIDForSender(context.Context, spec.RoomID, spec.SenderID) (*spec.UserID, error) {
+	return spec.NewUserID(r.userID, true)
+}
+
+func TestGetRequiredStateDeltaMatchesResolvedPseudoID(t *testing.T) {
+	t.Parallel()
+
+	roomID := "!pseudo-required-state:localhost"
+	userID := "@alice:localhost"
+	memberID := "@bob:localhost"
+	const pseudoID = "pseudo-bob"
+	rp := &RequestPool{rsAPI: &pseudoIDRequiredStateRoomserver{userID: memberID}}
+	snapshot := newMockSnapshot()
+	member := createMockStateStreamEvent("$member:localhost", "m.room.member", pseudoID, 60, `{"membership":"join"}`)
+	snapshot.SetRecentEvents(roomID, types.RecentEvents{Events: []types.StreamEvent{member}})
+	snapshot.SetStateEvent(roomID, "m.room.member", memberID, member.HeaderedEvent)
+
+	requiredState, err := rp.getRequiredState(
+		context.Background(), snapshot, roomID, userID,
+		&types.RequiredStateConfig{Include: [][]string{{"m.room.member", memberID}}},
+		[]synctypes.ClientEvent{}, false,
+		types.RoomStreamState{Status: types.HaveSentRoomPreviously, LastToken: &types.StreamingToken{PDUPosition: 50}},
+		types.StreamingToken{PDUPosition: 100},
+	)
+	require.NoError(t, err)
+	require.Len(t, requiredState, 1)
+	assert.Equal(t, member.EventID(), requiredState[0].EventID)
 }
 
 // TestGetRequiredState_NonLazyPattern_NoChangeSinceLastSent_ReturnsEmpty ensures
