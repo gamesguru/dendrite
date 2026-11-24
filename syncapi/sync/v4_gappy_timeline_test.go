@@ -132,8 +132,11 @@ func TestGetTimelineEvents_VisibilityLookupFailureFailsRoom(t *testing.T) {
 	fromToken := &types.StreamingToken{PDUPosition: 90}
 	currentPos := types.StreamingToken{PDUPosition: 100}
 
-	_, _, _, err := rp.getTimelineEvents(ctx, snapshot, roomID, userID, 10, roomState, currentPos, fromToken)
+	timeline, limited, numLive, err := rp.getTimelineEvents(ctx, snapshot, roomID, userID, 10, roomState, currentPos, fromToken)
 	require.Error(t, err, "a membership lookup failure must hold the room's position")
+	require.Nil(t, timeline)
+	require.False(t, limited)
+	require.Zero(t, numLive)
 }
 
 type membershipErrorRoomserverAPI struct {

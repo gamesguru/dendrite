@@ -14,7 +14,10 @@ import (
 func TestUnknownDepthReceiptPreservesAndRecoversKnownBoundary(t *testing.T) {
 	db, cleanup := mustCreateUserDatabase(t, test.DBTypeSQLite)
 	defer cleanup()
-	sharedDB := db.(*shared.Database)
+	sharedDB, ok := db.(*shared.Database)
+	if !ok {
+		t.Fatalf("expected *shared.Database, got %T", db)
+	}
 	roomID := "!room:test"
 
 	_, err := db.StoreNotificationEvent(t.Context(), roomID, "$known", "main", 10, 100, 1)
