@@ -172,12 +172,18 @@ func AddNotificationRoomOrderRecovery(ctx context.Context, tx *sql.Tx) error {
 	UPDATE userapi_notification_receipt_positions SET room_depth = -1 WHERE room_depth = 0;`); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE userapi_notification_receipt_positions SET receipt_event_id = (
+	_, err := tx.ExecContext(ctx, `UPDATE userapi_notification_receipt_positions SET receipt_event_id = COALESCE((
 		SELECT MIN(event_id) FROM userapi_notification_events e
 		WHERE e.room_id = userapi_notification_receipt_positions.room_id
 		AND e.origin_ts = userapi_notification_receipt_positions.origin_ts
 		AND e.notification_id = userapi_notification_receipt_positions.notification_id
 		HAVING COUNT(*) = 1
-	) WHERE receipt_event_id = ''`)
+	), ''), stream_pos = COALESCE((
+		SELECT MIN(e.stream_pos) FROM userapi_notification_events e
+		WHERE e.room_id = userapi_notification_receipt_positions.room_id
+		AND e.origin_ts = userapi_notification_receipt_positions.origin_ts
+		AND e.notification_id = userapi_notification_receipt_positions.notification_id
+		HAVING COUNT(*) = 1
+	), stream_pos) WHERE receipt_event_id = ''`)
 	return err
 }

@@ -199,8 +199,9 @@ func TestNotificationReceiptHistoricalRowsFollowOriginOrder(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", "!room:test", "$receipt", "")
 		require.NoError(t, err)
-		// Reprocessing recovers authoritative room order: $old is before the
-		// receipt, while $old-after is after it despite their timestamps.
+		// Until an event is reprocessed its depth is unknown, so the receipt
+		// covers it by stream position (the only order legacy rows have). That
+		// already marked $old-after read; reprocessing cannot unread it.
 		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$old", "main", 1, 8, 100)
 		require.NoError(t, err)
 		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$old-after", "main", 2, 12, 350)
@@ -212,7 +213,60 @@ func TestNotificationReceiptHistoricalRowsFollowOriginOrder(t *testing.T) {
 
 		total, _, err := db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
 		require.NoError(t, err)
-		require.EqualValues(t, 2, total, "the historical event after the receipt and the later event stay unread")
+		require.EqualValues(t, 1, total, "legacy rows are covered by stream position; only the later event stays unread")
+	})
+}
+
+// After an upgrade, retained notification events have no room depth until they
+// are reprocessed. A receipt on a newer event must still clear those older
+// notifications instead of leaving their unread badge stuck.
+func TestNotificationReceiptClearsLegacyEventsAfterUpgrade(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+		conn, cleanup := test.PrepareDBConnectionString(t, backend)
+		defer cleanup()
+		open := func() *shared.Database {
+			cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+			store, err := storage.NewUserDatabase(t.Context(), cm, &config.DatabaseOptions{ConnectionString: config.DataSource(conn)}, "localhost", bcrypt.MinCost, openIDLifetimeMS, loginTokenLifetime, "_server")
+			require.NoError(t, err)
+			db, ok := store.(*shared.Database)
+			require.True(t, ok)
+			return db
+		}
+		insert := func(db *shared.Database, eventID string, pos int) {
+			t.Helper()
+			require.NoError(t, db.InsertNotification(t.Context(), "alice", "localhost", eventID, uint64(pos), nil,
+				&api.Notification{RoomID: "!room:test", Event: synctypes.ClientEvent{Content: []byte(`{}`)}}))
+		}
+
+		db := open()
+		insert(db, "$old", 1)
+		insert(db, "$older", 2)
+		// Recreate a pre-upgrade database, so the retained events have an
+		// unknown room depth and their order cannot be reconstructed.
+		_, err := db.DB.ExecContext(t.Context(), `DROP TABLE userapi_notification_events;
+   DROP TABLE userapi_pending_notification_receipts;
+   DROP TABLE userapi_notification_receipt_locks;
+   DROP TABLE userapi_notification_receipt_positions;
+   DELETE FROM db_migrations WHERE version IN (
+     'userapi: notification event threads',
+     'userapi: notification event origin timestamp',
+     'userapi: notification receipt positions',
+     'userapi: notification room order',
+     'userapi: notification room order recovery');`)
+		require.NoError(t, err)
+		require.NoError(t, db.DB.Close())
+		db = open()
+		defer func() { require.NoError(t, db.DB.Close()) }()
+
+		insert(db, "$new", 3)
+		_, err = db.StoreNotificationEvent(t.Context(), "!room:test", "$new", "main", 3, 10, 300)
+		require.NoError(t, err)
+		_, err = db.SetNotificationsReadForReceipt(t.Context(), "alice", "localhost", "!room:test", "$new", "")
+		require.NoError(t, err)
+
+		total, _, err := db.GetRoomNotificationCounts(t.Context(), "alice", "localhost", "!room:test")
+		require.NoError(t, err)
+		require.Zero(t, total, "the newer receipt clears the retained notifications")
 	})
 }
 

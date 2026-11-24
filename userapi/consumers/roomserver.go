@@ -17,6 +17,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
+	"codefloe.com/pat-s/zendrite/internal/depth"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/pushgateway"
 	"codefloe.com/pat-s/zendrite/internal/pushrules"
@@ -567,7 +568,12 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	var users []string
 	threadID, err := receipts.EventThreadID(ctx, s.rsAPI, event)
 	if err == nil {
-		users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos, event.Depth(), int64(event.OriginServerTS()))
+		roomDepth, depthErr := s.notificationRoomDepth(ctx, event)
+		if depthErr != nil {
+			err = depthErr
+		} else {
+			users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos, roomDepth, int64(event.OriginServerTS()))
+		}
 	}
 	// Counts are published once the event's thread is recorded, so that a
 	// new notification is counted in its thread rather than the main timeline.
@@ -670,6 +676,25 @@ func (s *OutputRoomEventConsumer) localRoomMembers(ctx context.Context, roomID s
 	}
 
 	return members, totalCount, nil
+}
+
+func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, event *rstypes.HeaderedEvent) (int64, error) {
+	prevIDs := event.PrevEventIDs()
+	maxPrev := int64(-1)
+	if len(prevIDs) > 0 {
+		var response rsapi.QueryEventsByIDResponse
+		if err := s.rsAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{
+			RoomID: event.RoomID().String(), EventIDs: prevIDs,
+		}, &response); err != nil {
+			return 0, fmt.Errorf("query notification event predecessors: %w", err)
+		}
+		for _, prev := range response.Events {
+			if prev.Depth() > maxPrev {
+				maxPrev = prev.Depth()
+			}
+		}
+	}
+	return depth.LiftAbovePrevEvents(event.Depth(), maxPrev), nil
 }
 
 // roomName returns the name in the event (if type==m.room.name), or

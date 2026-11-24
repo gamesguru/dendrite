@@ -852,6 +852,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	}
 
 	// Applies the history visibility rules
+	var gapEnd *rstypes.HeaderedEvent
 	events, err := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents, internal.SyncEndpoint)
 	if err != nil {
 		// Any failure other than the membership lookup's own cap leaves the
@@ -862,12 +863,38 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 		}
 		// The membership cap's DeadlineExceeded is our own bound, not the
-		// client leaving and not a database failover. Treating it as an
-		// abandoned sync leaves next_batch unchanged, so a saturated pool
-		// wedges the client after its initial sync. Deliver the conservative
-		// page and advance instead; the page was filtered without the missing
-		// memberships, so a later sync or backfill can still recover them.
+		// client leaving and not a database failover. Holding the position
+		// would wedge a client behind a saturated pool, so advance, but make
+		// the withheld events a recoverable gap. Deliver only the events after
+		// the last withheld one and mark the timeline limited; prev_batch then
+		// reaches the last withheld event (and everything older), so /messages
+		// can fetch the gap and the events before it.
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
+		visibleIDs := make(map[string]struct{}, len(events))
+		for _, ev := range events {
+			visibleIDs[ev.EventID()] = struct{}{}
+		}
+		lastWithheld := -1
+		for i, ev := range recentEvents {
+			if _, ok := visibleIDs[ev.EventID()]; !ok {
+				lastWithheld = i
+			}
+		}
+		if lastWithheld >= 0 {
+			gapEnd = recentEvents[lastWithheld]
+			tail := make(map[string]struct{}, len(recentEvents)-lastWithheld)
+			for _, ev := range recentEvents[lastWithheld+1:] {
+				tail[ev.EventID()] = struct{}{}
+			}
+			kept := make([]*rstypes.HeaderedEvent, 0, len(tail))
+			for _, ev := range events {
+				if _, ok := tail[ev.EventID()]; ok {
+					kept = append(kept, ev)
+				}
+			}
+			events = kept
+			limited = true
+		}
 	}
 
 	bwExtrems, bwErr := snapshot.BackwardExtremitiesForRoom(ctx, delta.RoomID)
@@ -896,6 +923,16 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	prevBatch, err := snapshot.GetBackwardTopologyPos(ctx, events)
 	if err != nil {
 		return r.From, fmt.Errorf("p.DB.GetBackwardTopologyPos: %w", err)
+	}
+	if gapEnd != nil && len(events) == 0 {
+		// Nothing survived the visibility filter after the gap. A normal
+		// prev_batch decrements before the oldest delivered event, but there is
+		// none; point it at the last withheld event itself so a backward page
+		// includes that event rather than starting just after it.
+		prevBatch, err = snapshot.EventPositionInTopology(ctx, gapEnd.EventID())
+		if err != nil {
+			return r.From, fmt.Errorf("p.DB.EventPositionInTopology: %w", err)
+		}
 	}
 	if err = ctx.Err(); err != nil {
 		return r.From, err
@@ -947,7 +984,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// correct even when no membership event is in this range. An unchanged
 	// joined room still belongs in the response only when a stream produced
 	// room data; the other stream providers can add that later if needed.
-	if len(events) == 0 && len(delta.StateEvents) == 0 && !hasMembershipChange &&
+	if len(events) == 0 && gapEnd == nil && len(delta.StateEvents) == 0 && !hasMembershipChange &&
 		!delta.NewlyJoined && !req.WantFullState {
 		return latestPosition, nil
 	}

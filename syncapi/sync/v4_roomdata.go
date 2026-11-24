@@ -205,7 +205,11 @@ func (rp *RequestPool) BuildRoomData(
 			}).Warn("[V4_SYNC] Slow timeline build")
 		}
 		if timelineErr != nil {
+			// Fatal for this room, like required state below: sending the room
+			// without its timeline would advance its position past events
+			// that were never delivered. Skipping it leaves the position alone.
 			logrus.WithError(timelineErr).WithField("room_id", roomID).Error("Failed to get timeline events")
+			return nil, fmt.Errorf("get timeline for %s: %w", roomID, timelineErr)
 		} else {
 			roomData.Timeline = timeline
 			timelineLimited = limited
@@ -434,10 +438,15 @@ func (rp *RequestPool) visibleStreamEvents(
 			// The long poll was canceled; the client is gone.
 			return nil, err
 		}
-		// Do not fail the room because one membership lookup failed. The
-		// returned page is filtered conservatively, and delivering it keeps
-		// the sliding sync position moving instead of wedging the client.
-		logrus.WithError(err).WithField("room_id", roomID).Warn("applying history visibility failed; serving the filtered timeline")
+		// A lookup failure withholds the events whose membership could not
+		// be resolved. If any were withheld, fail the room so its position
+		// stays put and the next sync retries them; serving the remainder
+		// would advance past them for good. With nothing withheld the page
+		// is complete and can be served.
+		if len(visible) < len(events) {
+			return nil, err
+		}
+		logrus.WithError(err).WithField("room_id", roomID).Warn("applying history visibility failed but nothing was withheld; serving the timeline")
 	}
 	if len(visible) == len(events) {
 		return events, nil
@@ -721,9 +730,19 @@ func (rp *RequestPool) getRequiredStateDelta(
 			continue // not a state event
 		}
 		if rp.matchesRequiredState(ev.HeaderedEvent, userID, config, lazySenders) {
+			stateKey := *ev.StateKey()
+			if ev.Type() == spec.MRoomMember {
+				resolved, resolveErr := rp.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
+				if resolveErr != nil {
+					return nil, false, resolveErr
+				}
+				if resolved != nil {
+					stateKey = resolved.String()
+				}
+			}
 			tuple := gomatrixserverlib.StateKeyTuple{
 				EventType: ev.Type(),
-				StateKey:  *ev.StateKey(),
+				StateKey:  stateKey,
 			}
 			if _, ok := seenState[tuple]; !ok {
 				seenState[tuple] = struct{}{}

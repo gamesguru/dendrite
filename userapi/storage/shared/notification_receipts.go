@@ -170,7 +170,7 @@ func readNotificationReceipt(ctx context.Context, txn *sql.Tx, localpart string,
 }
 
 func markNotificationsReadThrough(ctx context.Context, txn *sql.Tx, localpart string, serverName spec.ServerName, roomID string, roomDepth, streamPos int64, receiptEventID, threadID string) (bool, error) {
-	query := `UPDATE userapi_notifications SET read = TRUE WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND NOT read AND event_id IN (SELECT event_id FROM userapi_notification_events WHERE room_id = $3 AND (($4 > 0 AND room_depth > 0 AND (room_depth < $4 OR (room_depth = $4 AND stream_pos <= $5))) OR ($4 <= 0 AND event_id = $6))`
+	query := `UPDATE userapi_notifications SET read = TRUE WHERE localpart = $1 AND server_name = $2 AND room_id = $3 AND NOT read AND event_id IN (SELECT event_id FROM userapi_notification_events WHERE room_id = $3 AND (($4 > 0 AND ((room_depth > 0 AND (room_depth < $4 OR (room_depth = $4 AND stream_pos <= $5))) OR (room_depth <= 0 AND stream_pos <= $5))) OR ($4 <= 0 AND event_id = $6))`
 	args := []any{localpart, serverName, roomID, roomDepth, streamPos, receiptEventID}
 	if threadID != "" {
 		query += ` AND thread_id = $7`

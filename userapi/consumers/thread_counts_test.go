@@ -35,6 +35,10 @@ func (r *retryCopyRoomserver) QueryMembershipsForRoom(context.Context, *rsapi.Qu
 	return nil
 }
 
+func (r *retryCopyRoomserver) QueryEventsByID(context.Context, *rsapi.QueryEventsByIDRequest, *rsapi.QueryEventsByIDResponse) error {
+	return nil
+}
+
 func (r *retryCopyRoomserver) JoinedUserCount(context.Context, string) (int, error) { return 0, nil }
 
 func (r *retryCopyRoomserver) QueryCurrentState(context.Context, *rsapi.QueryCurrentStateRequest, *rsapi.QueryCurrentStateResponse) error {
@@ -149,4 +153,33 @@ func TestProcessMessageRetriesWhenPushRuleCopyAndLaterStepFail(t *testing.T) {
 	err := consumer.processMessage(t.Context(), join, 1)
 	require.ErrorIs(t, err, errRetryPushRuleCopy)
 	require.ErrorContains(t, err, "notification event storage failed")
+}
+
+type parentDepthRoomserver struct {
+	rsapi.UserRoomserverAPI
+	parent *types.HeaderedEvent
+}
+
+func (r *parentDepthRoomserver) QueryEventsByID(_ context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	for _, eventID := range req.EventIDs {
+		if eventID == r.parent.EventID() {
+			res.Events = append(res.Events, r.parent)
+		}
+	}
+	return nil
+}
+
+// A remote depth reset can make a child claim a depth below its stored parent.
+// Notification ordering must lift it above the parent, as sync's topology does.
+func TestNotificationRoomDepthLiftsAboveParents(t *testing.T) {
+	user := test.NewUser(t)
+	room := test.NewRoom(t, user)
+	parent := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "parent"}, test.WithDepth(1000))
+	child := room.CreateEvent(t, user, "m.room.message", map[string]any{"body": "child"},
+		test.WithDepth(1), test.WithPrevEvents(parent.EventID()))
+
+	consumer := OutputRoomEventConsumer{rsAPI: &parentDepthRoomserver{parent: parent}}
+	depth, err := consumer.notificationRoomDepth(t.Context(), child)
+	require.NoError(t, err)
+	require.Equal(t, int64(1001), depth, "the child must sort after its stored parent")
 }

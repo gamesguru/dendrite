@@ -506,6 +506,46 @@ func TestSelectMembershipsIncludesResyncedStateAtEarlierStreamToken(t *testing.T
 	})
 }
 
+// A resync stores the room's CURRENT members, not the members it had at an
+// earlier token. If a member joined after that token, the resync's position-zero
+// row must not make /members?at report them as having already joined.
+func TestSelectMembershipsExcludesResyncedStateAddedAfterToken(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		positions := MustWriteEvents(t, db, r.Events())
+		atToken := positions[len(positions)-1]
+
+		bobJoin := r.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{bobJoin})
+		// The resync stamps its current members at a later stream position with
+		// topological position zero, as PopulateRoomStateAfterResync does.
+		_, err := db.PopulateRoomStateAfterResync(ctx, []*rstypes.HeaderedEvent{bobJoin})
+		require.NoError(t, err)
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		streamOnly := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: atToken}
+		got, err := snapshot.SelectMemberships(ctx, r.ID, streamOnly, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, got, bobJoin.EventID(), "a member added after the stream token must not be included")
+
+		topologyOnly := types.TopologyToken{
+			Depth:       types.StreamPosition(r.Events()[len(r.Events())-1].Depth()),
+			PDUPosition: atToken,
+		}
+		got, err = snapshot.SelectMemberships(ctx, r.ID, topologyOnly, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, got, bobJoin.EventID(), "a member added after the topology token must not be included")
+	})
+}
+
 // The purpose of this test is to ensure that backfill does indeed go backwards, using a topology token.
 func TestGetEventsInRangeWithTopologyToken(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {

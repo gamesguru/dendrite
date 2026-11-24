@@ -141,17 +141,20 @@ const purgeMembershipsSQL = "" +
 	"DELETE FROM syncapi_memberships WHERE room_id = $1"
 
 // Rows written by a partial-state resync carry topological position 0: they
-// are the state the join already implied, not events that happened after the
-// client's token. A stream token therefore includes them even though the
-// resync stamped them at a later stream position, or /members?at= would omit
-// members the room already had when the token was issued (MSC3706).
+// are the room's current membership stamped with the resync's stream position,
+// not events at the room's start. Bound them by that stream position for both
+// stream and topology tokens, so a member added after the requested token is
+// not reported as having been in the room then. Real memberships still compare
+// by topology position.
 const selectMembersSQL = `
 	SELECT event_id FROM (
 		SELECT DISTINCT ON (m.room_id, m.user_id) m.room_id, m.user_id, m.event_id, m.membership FROM syncapi_memberships m
 		WHERE m.room_id = $1 AND (($2 = 9223372036854775807 AND
-				(m.stream_pos <= $3 OR m.topological_pos = 0))
+			m.stream_pos <= $3)
 			OR ($2 <> 9223372036854775807 AND
-				(m.topological_pos < $2 OR (m.topological_pos = $2 AND m.stream_pos <= $3))))
+				((m.topological_pos = 0 AND m.stream_pos <= $3)
+				OR (m.topological_pos > 0 AND
+					(m.topological_pos < $2 OR (m.topological_pos = $2 AND m.stream_pos <= $3))))))
 		ORDER BY m.room_id, m.user_id, m.stream_pos DESC, ` + isCurrentMemberEventSQL + ` DESC
 	) t
 	WHERE ($4::text IS NULL OR t.membership = $4)
