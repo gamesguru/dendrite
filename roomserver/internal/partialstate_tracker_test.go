@@ -103,3 +103,20 @@ func TestAwaitUnPartialStateHoldsForTheSyncAPI(t *testing.T) {
 		require.NoError(t, tracker.AwaitUnPartialState(context.Background(), roomID, notPartial))
 	})
 }
+
+func TestAwaitResyncCompleteDoesNotWaitForTheSyncAPI(t *testing.T) {
+	const roomID = "!room:test"
+	tracker := NewPartialStateTracker()
+	tracker.MarkSyncPending(roomID, time.Minute)
+	done := make(chan error, 1)
+	go func() {
+		done <- tracker.AwaitResyncComplete(context.Background(), roomID, func(context.Context) (bool, error) {
+			return true, nil
+		})
+	}()
+
+	require.Eventually(t, func() bool { return tracker.HasResyncObservers(roomID) }, time.Second, time.Millisecond)
+	tracker.NotifyResyncComplete(roomID)
+	require.NoError(t, <-done)
+	assert.True(t, tracker.isSyncPending(roomID), "syncapi still has its own catch-up window")
+}

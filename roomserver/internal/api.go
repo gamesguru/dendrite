@@ -669,6 +669,18 @@ func (r *RoomserverInternalAPI) AwaitRoomFullState(ctx context.Context, roomID s
 	})
 }
 
+// AwaitRoomResyncComplete blocks until the roomserver has finished populating
+// its state, without waiting for syncapi's copy to catch up.
+func (r *RoomserverInternalAPI) AwaitRoomResyncComplete(ctx context.Context, roomID string) error {
+	return r.PartialStateTracker.AwaitResyncComplete(ctx, roomID, func(ctx context.Context) (bool, error) {
+		info, err := r.DB.RoomInfo(ctx, roomID)
+		if err != nil || info == nil {
+			return false, err
+		}
+		return r.DB.IsRoomPartialState(ctx, info.RoomNID)
+	})
+}
+
 // NotifyUnPartialStated notifies observers that a room has completed its partial state resync.
 // It emits an output event for downstream components (like syncapi) to take in the
 // resynced state. Callers waiting for full state are released when the sync API
@@ -677,6 +689,9 @@ func (r *RoomserverInternalAPI) AwaitRoomFullState(ctx context.Context, roomID s
 // The hooks run first, so that what they change, such as which device lists are cached,
 // is in place by the time anything waiting is released.
 func (r *RoomserverInternalAPI) NotifyUnPartialStated(roomID string) {
+	if r.PartialStateTracker != nil {
+		r.PartialStateTracker.NotifyResyncComplete(roomID)
+	}
 	r.runUnPartialStatedHooks(roomID)
 	release := func() {
 		if r.PartialStateTracker != nil {

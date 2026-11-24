@@ -196,8 +196,12 @@ type PartialStateAwaiterAPI interface {
 	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state.
 	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
 	// AwaitRoomFullState blocks until the room has full state or the context ends.
-	// A room that is not partial returns at once.
+	// It also waits for syncapi to store the resynced state. A room that is not
+	// partial returns at once unless syncapi is still catching up.
 	AwaitRoomFullState(ctx context.Context, roomID string) error
+	// AwaitRoomResyncComplete blocks until the roomserver has finished populating
+	// its state. It does not wait for syncapi storage to catch up.
+	AwaitRoomResyncComplete(ctx context.Context, roomID string) error
 	// AckUnPartialStated tells the roomserver that the sync API has taken in the state
 	// of a room that finished its resync, which releases the requests waiting for it.
 	AckUnPartialStated(roomID string)
