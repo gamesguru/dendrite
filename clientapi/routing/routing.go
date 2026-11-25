@@ -340,6 +340,12 @@ func Setup(
 		}),
 	).Methods(http.MethodPost, http.MethodOptions)
 
+	zendriteAdminRouter.Handle("/admin/refetchPruned",
+		httputil.MakeAdminAPI("admin_refetch_pruned", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return AdminRefetchPruned(req, device, rsAPI)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+
 	zendriteAdminRouter.Handle("/admin/importEvents/{roomID}",
 		httputil.MakeAdminAPI("admin_import_events", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
 			return AdminImportEvents(req, device, rsAPI, zendriteCfg.Global.ServerName)

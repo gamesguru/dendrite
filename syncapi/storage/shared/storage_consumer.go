@@ -7,8 +7,11 @@
 package shared
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +22,7 @@ import (
 	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"codefloe.com/pat-s/zendrite/internal/depth"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
@@ -424,8 +428,42 @@ func (d *Database) WriteEvent(
 	transactionID *api.TransactionID, excludeFromSync bool,
 	historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 ) (pduPosition types.StreamPosition, returnErr error) {
+	return d.writeEvent(ctx, ev, addStateEvents, addStateEventIDs, removeStateEventIDs, transactionID,
+		excludeFromSync, historyVisibility, nil, purgePrevEventIDs...)
+}
+
+func (d *Database) WriteOldEvent(
+	ctx context.Context,
+	ev *rstypes.HeaderedEvent,
+	historyVisibility gomatrixserverlib.HistoryVisibility,
+	classifier tables.EventSyncClassifier,
+	purgePrevEventIDs ...string,
+) (types.StreamPosition, error) {
+	return d.writeEvent(ctx, ev, nil, nil, nil, nil, false, historyVisibility, classifier, purgePrevEventIDs...)
+}
+
+func (d *Database) writeEvent(
+	ctx context.Context,
+	ev *rstypes.HeaderedEvent,
+	addStateEvents []*rstypes.HeaderedEvent,
+	addStateEventIDs, removeStateEventIDs []string,
+	transactionID *api.TransactionID,
+	excludeFromSync bool,
+	historyVisibility gomatrixserverlib.HistoryVisibility,
+	classifier tables.EventSyncClassifier,
+	purgePrevEventIDs ...string,
+) (pduPosition types.StreamPosition, returnErr error) {
 	returnErr = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		var err error
+		if err = d.Topology.LockRoomTopology(ctx, txn, ev.RoomID().String()); err != nil {
+			return fmt.Errorf("d.Topology.LockRoomTopology: %w", err)
+		}
+		if classifier != nil {
+			state := &DatabaseTransaction{Database: d, ctx: ctx, txn: txn}
+			if excludeFromSync, err = classifier(ctx, state); err != nil {
+				return fmt.Errorf("%w: %s: %w", tables.ErrEventSyncClassification, ev.EventID(), err)
+			}
+		}
 		ev.Visibility = historyVisibility
 		pos, err := d.OutputEvents.InsertEvent(
 			ctx, txn, ev, addStateEventIDs, removeStateEventIDs, transactionID, excludeFromSync, historyVisibility,
@@ -493,10 +531,220 @@ func (d *Database) WriteEvent(
 	return pduPosition, returnErr
 }
 
+func (d *Database) UpdateUnredactedEventJSON(ctx context.Context, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (written bool, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		written, err = d.OutputEvents.UpdateUnredactedEventJSON(ctx, txn, eventID, expectedJSON, event)
+		return err
+	})
+	if err != nil {
+		// The row is only written if the transaction commits, so a failed
+		// commit must not report the write as having happened.
+		return false, err
+	}
+	return written, nil
+}
+
 func (d *Database) UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		return d.OutputEvents.UpdateEventJSON(ctx, txn, eventID, event)
 	})
+}
+
+// ReplaceEventJSON copies verified event fields into the existing sync API
+// rows while retaining the unsigned metadata local to each row. Current state
+// is updated only if the event is still current when this transaction runs.
+func (d *Database) ReplaceEventJSON(ctx context.Context, eventID string, fetched *rstypes.HeaderedEvent, dryRun bool) (outputStatus, stateStatus, outputHash, stateHash string, err error) {
+	err = d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		outputRows, err := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
+		if err != nil {
+			return err
+		}
+		if len(outputRows) > 0 {
+			local := outputRows[0].HeaderedEvent
+			if gjson.GetBytes(local.Unsigned(), "redacted_because").Exists() {
+				outputStatus = "redacted"
+			} else {
+				merged, err := mergeFetchedEventWithLocalUnsigned(fetched, local)
+				if err != nil {
+					return fmt.Errorf("merge output event unsigned: %w", err)
+				}
+				outputHash, err = headeredEventHash(merged)
+				if err != nil {
+					return err
+				}
+				outputStatus = "would_update_output"
+				if !dryRun {
+					expected, err := json.Marshal(local)
+					if err != nil {
+						return err
+					}
+					written, err := d.OutputEvents.UpdateUnredactedEventJSON(ctx, txn, eventID, expected, merged)
+					if err != nil {
+						return err
+					}
+					if !written {
+						check, checkErr := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
+						if checkErr != nil {
+							return checkErr
+						}
+						switch {
+						case len(check) == 0:
+							outputStatus = "not_present"
+						case gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists():
+							outputStatus = "redacted"
+						default:
+							outputStatus = "write_skipped"
+						}
+					} else {
+						stored, err := d.OutputEvents.SelectEvents(ctx, txn, []string{eventID}, nil, false)
+						if err != nil {
+							return fmt.Errorf("read back output event %s: %w", eventID, err)
+						}
+						if len(stored) != 1 {
+							return fmt.Errorf("output event %s failed read-back verification", eventID)
+						}
+						if err := verifyRefetchedContent(eventID, stored[0].HeaderedEvent, fetched); err != nil {
+							return err
+						}
+						if err := d.insertRelation(ctx, txn, merged); err != nil {
+							return fmt.Errorf("index restored event relation %s: %w", eventID, err)
+						}
+						outputStatus = "updated_output"
+					}
+				}
+			}
+		} else {
+			outputStatus = "not_present"
+		}
+
+		stateRows, err := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
+		if err != nil {
+			return err
+		}
+		if len(stateRows) > 0 && stateRows[0].EventID() == eventID {
+			local := stateRows[0].HeaderedEvent
+			if gjson.GetBytes(local.Unsigned(), "redacted_because").Exists() {
+				stateStatus = "redacted"
+				return nil
+			}
+			merged, err := mergeFetchedEventWithLocalUnsigned(fetched, local)
+			if err != nil {
+				return fmt.Errorf("merge current-state event unsigned: %w", err)
+			}
+			stateHash, err = headeredEventHash(merged)
+			if err != nil {
+				return err
+			}
+			stateStatus = "would_update_state"
+			if !dryRun {
+				expected, err := json.Marshal(local)
+				if err != nil {
+					return err
+				}
+				updated, err := d.CurrentRoomState.UpdateUnredactedEventJSON(ctx, txn, eventID, expected, merged)
+				if err != nil {
+					return err
+				}
+				if !updated {
+					check, checkErr := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
+					if checkErr != nil {
+						return checkErr
+					}
+					switch {
+					case len(check) == 0 || check[0].EventID() != eventID:
+						stateStatus = "not_present"
+					case gjson.GetBytes(check[0].Unsigned(), "redacted_because").Exists():
+						stateStatus = "redacted"
+					default:
+						stateStatus = "write_skipped"
+					}
+					return nil
+				}
+				stored, err := d.CurrentRoomState.SelectEventsWithEventIDs(ctx, txn, []string{eventID})
+				if err != nil {
+					return fmt.Errorf("read back current-state event %s: %w", eventID, err)
+				}
+				if len(stored) != 1 {
+					return fmt.Errorf("current-state event %s failed read-back verification", eventID)
+				}
+				if err := verifyRefetchedContent(eventID, stored[0].HeaderedEvent, fetched); err != nil {
+					return err
+				}
+				stateStatus = "updated_state"
+			}
+		} else {
+			stateStatus = "not_present"
+		}
+		return nil
+	})
+	if err != nil {
+		return "error", "error", "", "", err
+	}
+	return outputStatus, stateStatus, outputHash, stateHash, nil
+}
+
+func headeredEventHash(event *rstypes.HeaderedEvent) (string, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func verifyRefetchedContent(eventID string, stored, fetched *rstypes.HeaderedEvent) error {
+	roomVersion, err := gomatrixserverlib.GetRoomVersion(fetched.Version())
+	if err != nil {
+		return err
+	}
+	parsed, err := roomVersion.NewEventFromUntrustedJSON(stored.JSON())
+	if err != nil {
+		return fmt.Errorf("reparse stored event %s: %w", eventID, err)
+	}
+	if parsed.Redacted() || !bytes.Equal(parsed.Content(), fetched.Content()) {
+		return fmt.Errorf("event %s failed read-back content-hash verification", eventID)
+	}
+	return nil
+}
+
+func mergeFetchedEventWithLocalUnsigned(fetched, local *rstypes.HeaderedEvent) (*rstypes.HeaderedEvent, error) {
+	data := fetched.JSON()
+	for _, key := range []string{"unsigned", "signatures"} {
+		var localValue gjson.Result
+		if key == "unsigned" {
+			localValue = gjson.ParseBytes(local.Unsigned())
+		} else {
+			localValue = gjson.GetBytes(local.JSON(), key)
+		}
+		var err error
+		if localValue.Exists() {
+			data, err = sjson.SetRawBytes(data, key, []byte(localValue.Raw))
+		} else if key == "unsigned" {
+			data, err = sjson.DeleteBytes(data, key)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	version, err := gomatrixserverlib.GetRoomVersion(fetched.Version())
+	if err != nil {
+		return nil, err
+	}
+	// The source copy has already passed untrusted parsing and its hash check.
+	// Trusted parsing here is needed to retain the row-local unsigned section,
+	// which untrusted parsing deliberately strips.
+	pdu, err := version.NewEventFromTrustedJSON(data, false)
+	if err != nil {
+		return nil, err
+	}
+	if (fetched.Version() == gomatrixserverlib.RoomVersionV1 || fetched.Version() == gomatrixserverlib.RoomVersionV2) &&
+		!gjson.GetBytes(data, "signatures").IsObject() {
+		return nil, fmt.Errorf("room version %s requires event signatures", fetched.Version())
+	}
+	if !bytes.Equal(pdu.Content(), fetched.Content()) {
+		return nil, fmt.Errorf("merged event content changed")
+	}
+	return &rstypes.HeaderedEvent{PDU: pdu, Visibility: local.Visibility}, nil
 }
 
 // This function should always be called within a sqlutil.Writer for safety in SQLite.
@@ -917,6 +1165,10 @@ func (d *Database) SelectMembershipForUser(ctx context.Context, roomID, userID s
 // returns "leave" without an error; other database errors propagate.
 func (d *Database) SelectMembershipForUserAtStreamPosition(ctx context.Context, roomID, userID string, streamPos int64) (membership, eventID string, err error) {
 	return d.Memberships.SelectMembershipForUserAtStreamPosition(ctx, nil, roomID, userID, streamPos)
+}
+
+func (d *Database) SelectRoomEventsAfterID(ctx context.Context, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error) {
+	return d.OutputEvents.SelectRoomEventsAfterID(ctx, nil, roomID, afterID, limit)
 }
 
 func (d *Database) ReIndex(ctx context.Context, limit, afterID int64) (map[int64]rstypes.HeaderedEvent, error) {

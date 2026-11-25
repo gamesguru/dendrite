@@ -29,7 +29,7 @@ type server struct {
 func Version(msc4521 bool) util.JSONResponse {
 	v := &version{
 		Server: server{
-			Name:    "Zendrite",
+			Name:    "Dendrite",
 			Version: internal.VersionString(),
 		},
 	}

@@ -8,6 +8,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -45,6 +46,20 @@ var calculateHistoryVisibilityDuration = prometheus.NewHistogramVec(
 	},
 	[]string{"api"},
 )
+
+// membershipLookupTimeout caps how long one history visibility membership
+// lookup may hold a request open. A stalled database must not keep the
+// request, its goroutine and its connections alive for minutes: the page
+// falls back to the conservative "leave" default instead.
+//
+// It is a variable so tests can shorten it.
+var MembershipLookupTimeout = 30 * time.Second
+
+// ErrMembershipLookupTimeout marks a failure caused by MembershipLookupTimeout
+// expiring, as opposed to a deadline reached inside a downstream call.
+// Callers may advance past it only when they make the withheld events
+// recoverable.
+var ErrMembershipLookupTimeout = errors.New("history visibility membership lookup timed out")
 
 var historyVisibilityPriority = map[gomatrixserverlib.HistoryVisibility]uint8{
 	spec.WorldReadable:                         0,
@@ -139,8 +154,43 @@ func ApplyHistoryVisibilityFilter(
 	if err != nil {
 		return nil, err
 	}
-	visibilities, membershipKnown := visibilityForEvents(ctx, rsAPI, events, senderID, firstEvRoomID)
-
+	visibilityStarted := time.Now()
+	lookupCtx, cancel := context.WithTimeout(ctx, MembershipLookupTimeout)
+	visibilities, membershipKnown, lookupErr := visibilityForEvents(lookupCtx, rsAPI, events, senderID, firstEvRoomID)
+	// Our own cap fired only if the lookup context expired while the caller's
+	// is still live; a deadline returned by a downstream call does not count.
+	capExpired := lookupErr != nil && ctx.Err() == nil && errors.Is(lookupCtx.Err(), context.DeadlineExceeded)
+	cancel()
+	if capExpired {
+		lookupErr = fmt.Errorf("%w: %w", ErrMembershipLookupTimeout, lookupErr)
+	}
+	elapsed := time.Since(visibilityStarted)
+	switch {
+	case ctx.Err() != nil:
+		// The caller has gone away. That is the expected end of a long poll
+		// or a canceled page, not a slow lookup.
+		logrus.WithFields(logrus.Fields{
+			"room_id":    firstEvRoomID.String(),
+			"endpoint":   endpoint,
+			"events":     len(events),
+			"elapsed_ms": elapsed.Milliseconds(),
+		}).Debug("History visibility membership lookup canceled by caller")
+	case lookupErr != nil:
+		logrus.WithFields(logrus.Fields{
+			"room_id":    firstEvRoomID.String(),
+			"endpoint":   endpoint,
+			"events":     len(events),
+			"elapsed_ms": elapsed.Milliseconds(),
+			"timed_out":  errors.Is(lookupErr, context.DeadlineExceeded),
+		}).WithError(lookupErr).Warn("History visibility membership lookup failed")
+	case elapsed > time.Second:
+		logrus.WithFields(logrus.Fields{
+			"room_id":    firstEvRoomID.String(),
+			"endpoint":   endpoint,
+			"events":     len(events),
+			"elapsed_ms": elapsed.Milliseconds(),
+		}).Warn("Slow membership lookup for history visibility")
+	}
 	// MSC4354: joined users see unexpired sticky events whatever the history
 	// visibility. Sync v2 and sliding sync timelines keep the usual rules, as
 	// in Synapse, since both deliver sticky events in a section of their own.
@@ -219,7 +269,10 @@ func ApplyHistoryVisibilityFilter(
 		annotateRequesterMembership(eventsFiltered, visibilities, senderID)
 	}
 	calculateHistoryVisibilityDuration.With(prometheus.Labels{"api": endpoint}).Observe(float64(time.Since(start).Milliseconds()))
-	return eventsFiltered, nil
+	// Return the conservatively filtered page with the error. Callers that
+	// paginate must retry rather than advance past it, while syncs may choose
+	// to deliver it to keep the stream moving.
+	return eventsFiltered, lookupErr
 }
 
 // redactErasedSenders replaces the events at the given indexes, which the
@@ -297,7 +350,7 @@ func visibilityForEvents(
 	rsAPI api.SyncRoomserverAPI,
 	events []*types.HeaderedEvent,
 	senderID *spec.SenderID, roomID spec.RoomID,
-) (result map[string]eventVisibility, membershipKnown bool) {
+) (result map[string]eventVisibility, membershipKnown bool, err error) {
 	eventIDs := make([]string, len(events))
 	for i := range events {
 		eventIDs[i] = events[i].EventID()
@@ -307,13 +360,11 @@ func visibilityForEvents(
 	membershipKnown = true
 
 	// get the membership events for all eventIDs
-	var err error
 	membershipEvents := make(map[string]*types.HeaderedEvent)
 	if senderID != nil {
 		membershipEvents, err = rsAPI.QueryMembershipAtEvent(ctx, roomID, eventIDs, *senderID)
 		if err != nil {
 			membershipKnown = false
-			logrus.WithError(err).Error("visibilityForEvents: failed to fetch membership at event, defaulting to 'leave'")
 		}
 	}
 
@@ -330,8 +381,8 @@ func visibilityForEvents(
 			continue
 		}
 
-		membership, err := ev.Membership()
-		if err != nil {
+		membership, membershipErr := ev.Membership()
+		if membershipErr != nil {
 			result[eventID] = vis
 			continue
 		}
@@ -339,7 +390,7 @@ func visibilityForEvents(
 
 		result[eventID] = vis
 	}
-	return result, membershipKnown
+	return result, membershipKnown, err
 }
 
 // ApplyTimelineHistoryVisibilityFilter applies the history visibility filter
@@ -388,13 +439,21 @@ func ApplyTimelineHistoryVisibilityFilter(
 	startTime := time.Now()
 	events, err := ApplyHistoryVisibilityFilter(ctx, snapshot, rsAPI, recentEvents, alwaysIncludeIDs, *parsedUserID, endpoint)
 	if err != nil {
-		return nil, err
+		// events is the conservative page; let the caller decide whether to
+		// retry (pagination) or deliver it (sync).
+		return events, err
 	}
-	logrus.WithFields(logrus.Fields{
-		"duration": time.Since(startTime),
+	elapsed := time.Since(startTime)
+	entry := logrus.WithFields(logrus.Fields{
+		"duration": elapsed,
 		"room_id":  roomID,
 		"before":   len(recentEvents),
 		"after":    len(events),
-	}).Debugf("Applied history visibility (%s)", endpoint)
+	})
+	if elapsed > time.Second {
+		entry.Warnf("Slow history visibility filter (%s)", endpoint)
+	} else {
+		entry.Debugf("Applied history visibility (%s)", endpoint)
+	}
 	return events, nil
 }

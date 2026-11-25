@@ -77,12 +77,23 @@ func (t *EDUCache) GetTypingUsers(roomID string) []string {
 func (t *EDUCache) GetTypingUsersIfUpdatedAfter(
 	roomID string, position int64,
 ) (users []string, updated bool) {
+	users, _, updated = t.GetTypingUsersAndPositionIfUpdatedAfter(roomID, position)
+	return users, updated
+}
+
+// GetTypingUsersAndPositionIfUpdatedAfter is GetTypingUsersIfUpdatedAfter that
+// also returns the room's typing sync position read in the same critical
+// section as the users, so the position is never older than the users returned.
+func (t *EDUCache) GetTypingUsersAndPositionIfUpdatedAfter(
+	roomID string, position int64,
+) (users []string, roomPosition int64, updated bool) {
 	t.RLock()
 	defer t.RUnlock()
 
 	roomData, ok := t.data[roomID]
 	if ok && roomData.syncPosition > position {
 		updated = true
+		roomPosition = roomData.syncPosition
 		userSet := roomData.userSet
 		users = make([]string, 0, len(userSet))
 		for userID := range userSet {
@@ -91,6 +102,36 @@ func (t *EDUCache) GetTypingUsersIfUpdatedAfter(
 	}
 
 	return
+}
+
+// TypingSnapshot returns the typing users in the given rooms whose position is
+// after position, plus the cache's latest position. Everything is read under
+// one lock, so the cursor and the users describe the same point in time.
+//
+// Every update after position in the requested rooms is included. Any update
+// made after the snapshot has a position above the returned latest, so a
+// cursor at latest cannot skip it, even when it lands in a room that a
+// per-room scan would already have passed. Updates at or below position, which
+// the caller has already seen, and updates in rooms not in roomIDs are not
+// included, though their positions may be at or below latest.
+func (t *EDUCache) TypingSnapshot(roomIDs []string, position int64) (map[string][]string, int64) {
+	t.RLock()
+	defer t.RUnlock()
+
+	latest := t.latestSyncPosition
+	users := make(map[string][]string, len(roomIDs))
+	for _, roomID := range roomIDs {
+		roomData, ok := t.data[roomID]
+		if !ok || roomData.syncPosition <= position {
+			continue
+		}
+		list := make([]string, 0, len(roomData.userSet))
+		for userID := range roomData.userSet {
+			list = append(list, userID)
+		}
+		users[roomID] = list
+	}
+	return users, latest
 }
 
 // AddTypingUser sets an user as typing in a room.

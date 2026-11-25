@@ -92,6 +92,10 @@ const insertEventSQL = "" +
 	"ON CONFLICT ON CONSTRAINT syncapi_output_room_event_id_idx DO UPDATE SET exclude_from_sync = syncapi_output_room_events.exclude_from_sync " +
 	"RETURNING id"
 
+const selectRoomEventsAfterIDSQL = "" +
+	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events" +
+	" WHERE room_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3"
+
 const selectEventsSQL = "" +
 	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events WHERE event_id = ANY($1)"
 
@@ -104,18 +108,12 @@ const selectEventsWithFilterSQL = "" +
 	" AND ( $6::bool   IS NULL OR     contains_url = $6 )" +
 	" LIMIT $7"
 
-const selectRecentEventsSQL = "" +
-	"SELECT event_id, id, headered_event_json, session_id, exclude_from_sync, transaction_id, history_visibility FROM syncapi_output_room_events" +
-	" WHERE room_id = $1 AND id > $2 AND id <= $3" +
-	" AND ( $4::text[] IS NULL OR     sender  = ANY($4)  )" +
-	" AND ( $5::text[] IS NULL OR NOT(sender  = ANY($5)) )" +
-	" AND ( $6::text[] IS NULL OR     type LIKE ANY($6)  )" +
-	" AND ( $7::text[] IS NULL OR NOT(type LIKE ANY($7)) )" +
-	" ORDER BY id DESC LIMIT $8"
-
-// selectRecentEventsForSyncSQL contains an optimization to get the recent events for a list of rooms, using a LATERAL JOIN
-// The sub select inside LATERAL () is executed for all room_ids it gets as a parameter $1.
-const selectRecentEventsForSyncSQL = `
+// The recent-events queries take a list of rooms ($1) and use a LATERAL JOIN so the
+// per-room limit is applied inside the sub select, which is executed for every room ID.
+// The query for sync additionally leaves out events marked as excluded from sync; the
+// two must otherwise stay identical, as both are called with the same arguments and
+// scanned by the same code.
+const selectRecentEventsHead = `
 WITH room_ids AS (
      SELECT unnest($1::text[]) AS room_id
 )
@@ -126,7 +124,9 @@ FROM room_ids,
                     FROM syncapi_output_room_events recent_events
                     WHERE
                       recent_events.room_id = room_ids.room_id
-                      AND recent_events.exclude_from_sync = FALSE
+`
+
+const selectRecentEventsTail = `
                       AND id > $2 AND id <= $3
                       AND ( $4::text[] IS NULL OR     sender  = ANY($4)  )
                       AND ( $5::text[] IS NULL OR NOT(sender  = ANY($5)) )
@@ -137,11 +137,62 @@ FROM room_ids,
               ) AS x
 `
 
+// selectRecentEventsSQL returns the recent events of every room in $1, including those
+// excluded from sync.
+const selectRecentEventsSQL = selectRecentEventsHead + selectRecentEventsTail
+
+// selectRecentEventsForSyncSQL returns the recent events of every room in $1 that are
+// not excluded from sync.
+const selectRecentEventsForSyncSQL = selectRecentEventsHead +
+	"                      AND recent_events.exclude_from_sync = FALSE" + selectRecentEventsTail
+
 const selectMaxEventIDSQL = "" +
 	"SELECT MAX(id) FROM syncapi_output_room_events"
 
 const updateEventJSONSQL = "" +
 	"UPDATE syncapi_output_room_events SET headered_event_json=$1, origin_server_ts=$3 WHERE event_id=$2"
+
+// invalidJSONEscapeSQL matches the escapes PostgreSQL rejects when casting
+// text to json or jsonb: a NUL escape, or a lone surrogate escape. A backslash
+// run must have odd length to start an escape, so escaped backslashes such as
+// \\u0000 text do not match, and a valid surrogate pair does not match either.
+// A high surrogate only pairs with an immediately following active low escape.
+// An escaped high, such as the literal text \\ud83d, cannot pair, so a
+// following \ude00 is matched as a lone low. The lookbehind stays fixed width
+// because PostgreSQL before 18 rejects variable-length lookbehind.
+// An equality guard falls back to exact text for matches, so distinct values
+// such as \u0000 and \uFFFD never compare equal.
+const invalidJSONEscapeSQL = `'(?<!\\)(\\\\)*(\\u0000|\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}|(\\\\)+u[dD][89abAB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2})'`
+
+// sanitizeEscapeSQL is the broader pattern used only to sanitize JSON before
+// inspecting it. Over-matching valid escapes is harmless there.
+const sanitizeEscapeSQL = `'\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})'`
+
+// The nulSafeJSONB function casts a text expression holding event JSON to
+// JSONB. The JSONB type rejects the \u0000 escape and lone surrogate escapes
+// that valid event content can contain, and one such row must not make a
+// guarded update fail. Those escapes are replaced by U+FFFD first; the result
+// is used only to inspect the top-level redaction marker.
+func nulSafeJSONB(expr string) string {
+	return "(CASE WHEN " + expr + " LIKE '%\\\\u%'" +
+		" THEN regexp_replace(" + expr + ", " + sanitizeEscapeSQL + ", '\\\\uFFFD', 'g')" +
+		" ELSE " + expr + " END)::jsonb"
+}
+
+// The redacted_because guard makes the write conditional on the stored event
+// not being redacted; the check and the write are one statement. Read the same
+// JSON path as IsRedacted so that a redacted_because key in the event content
+// does not count as a redaction. The expected copy may differ from the stored
+// text in key order or spacing, so valid JSON is compared semantically. JSON
+// carrying an escape PostgreSQL cannot parse is compared as exact text, which
+// preserves its string values and still protects it from an overwrite.
+var updateUnredactedEventJSONSQL = "" +
+	"UPDATE syncapi_output_room_events SET headered_event_json=$1, contains_url=$2, origin_server_ts=$3 WHERE event_id=$4" +
+	" AND CASE WHEN headered_event_json ~ " + invalidJSONEscapeSQL +
+	" OR $5::text ~ " + invalidJSONEscapeSQL +
+	" THEN headered_event_json = $5::text" +
+	" ELSE headered_event_json::jsonb = $5::text::jsonb END" +
+	" AND (" + nulSafeJSONB("headered_event_json") + " -> 'unsigned' -> 'redacted_because') IS NULL"
 
 // In order for us to apply the state updates correctly, rows need to be ordered in the order they were received (id).
 const selectStateInRangeFilteredSQL = "" +
@@ -225,6 +276,7 @@ type outputRoomEventsStatements struct {
 	selectTimestampBackwardStmt          *sql.Stmt
 	insertEventStmt                      *sql.Stmt
 	selectEventsStmt                     *sql.Stmt
+	selectRoomEventsAfterIDStmt          *sql.Stmt
 	selectEventsWitFilterStmt            *sql.Stmt
 	selectMaxEventIDStmt                 *sql.Stmt
 	selectRecentEventsStmt               *sql.Stmt
@@ -232,6 +284,7 @@ type outputRoomEventsStatements struct {
 	selectStateInRangeFilteredStmt       *sql.Stmt
 	selectStateInRangeStmt               *sql.Stmt
 	updateEventJSONStmt                  *sql.Stmt
+	updateUnredactedEventJSONStmt        *sql.Stmt
 	deleteEventsForRoomStmt              *sql.Stmt
 	selectContextEventStmt               *sql.Stmt
 	selectContextBeforeEventStmt         *sql.Stmt
@@ -294,6 +347,7 @@ func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, err
 		{&s.selectTimestampBackwardStmt, selectTimestampBackwardSQL},
 		{&s.insertEventStmt, insertEventSQL},
 		{&s.selectEventsStmt, selectEventsSQL},
+		{&s.selectRoomEventsAfterIDStmt, selectRoomEventsAfterIDSQL},
 		{&s.selectEventsWitFilterStmt, selectEventsWithFilterSQL},
 		{&s.selectMaxEventIDStmt, selectMaxEventIDSQL},
 		{&s.selectRecentEventsStmt, selectRecentEventsSQL},
@@ -301,6 +355,7 @@ func NewPostgresEventsTable(ctx context.Context, db *sql.DB) (tables.Events, err
 		{&s.selectStateInRangeFilteredStmt, selectStateInRangeFilteredSQL},
 		{&s.selectStateInRangeStmt, selectStateInRangeSQL},
 		{&s.updateEventJSONStmt, updateEventJSONSQL},
+		{&s.updateUnredactedEventJSONStmt, updateUnredactedEventJSONSQL},
 		{&s.deleteEventsForRoomStmt, deleteEventsForRoomSQL},
 		{&s.selectContextEventStmt, selectContextEventSQL},
 		{&s.selectContextBeforeEventStmt, selectContextBeforeEventSQL},
@@ -327,6 +382,35 @@ func (s *outputRoomEventsStatements) UpdateEventJSON(ctx context.Context, txn *s
 	updateEventJSONStmt := sqlutil.TxStmt(txn, s.updateEventJSONStmt)
 	_, err = updateEventJSONStmt.ExecContext(ctx, headeredJSON, eventID, event.OriginServerTS())
 	return err
+}
+
+// UpdateUnredactedEventJSON writes only if the stored JSON matches expectedJSON
+// and the event is not redacted.
+func (s *outputRoomEventsStatements) UpdateUnredactedEventJSON(ctx context.Context, txn *sql.Tx, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error) {
+	headeredJSON, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	headeredJSON, err = restoreEventID(headeredJSON, eventID)
+	if err != nil {
+		return false, err
+	}
+	containsURL := eventContainsURL(event.Content())
+	res, err := sqlutil.TxStmt(txn, s.updateUnredactedEventJSONStmt).ExecContext(ctx, headeredJSON, containsURL, event.OriginServerTS(), eventID, string(expectedJSON))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func eventContainsURL(content []byte) bool {
+	var fields map[string]any
+	if json.Unmarshal(content, &fields) != nil {
+		return false
+	}
+	_, ok := fields["url"]
+	return ok
 }
 
 func restoreEventID(eventJSON []byte, eventID string) ([]byte, error) {
@@ -657,6 +741,17 @@ func (s *outputRoomEventsStatements) SelectEvents(
 		return returnEvents, nil
 	}
 	return streamEvents, nil
+}
+
+func (s *outputRoomEventsStatements) SelectRoomEventsAfterID(
+	ctx context.Context, txn *sql.Tx, roomID string, afterID types.StreamPosition, limit int,
+) ([]types.StreamEvent, error) {
+	rows, err := sqlutil.TxStmt(txn, s.selectRoomEventsAfterIDStmt).QueryContext(ctx, roomID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "SelectRoomEventsAfterID: rows.close() failed")
+	return rowsToStreamEvents(rows)
 }
 
 func (s *outputRoomEventsStatements) DeleteEventsForRoom(

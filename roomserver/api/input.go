@@ -119,6 +119,11 @@ type InputRoomEvent struct {
 	// event. This is used by admin endpoints (e.g. downloadState) that need to
 	// inject events into rooms where the sender may lack the necessary power level.
 	SkipEventAuth bool `json:"skip_event_auth,omitempty"`
+	// GapFill marks a KindOld event fetched while filling a DAG gap. It is
+	// informational; sync timeline visibility is determined from the event's
+	// prospective topological position and the room's live boundary, not from
+	// the path by which the event arrived.
+	GapFill bool `json:"gap_fill,omitempty"`
 }
 
 // TransactionID contains the transaction ID sent by a client when sending an

@@ -87,6 +87,11 @@ func NewSQLiteNotificationTable(ctx context.Context, db *sql.DB) (tables.Notific
 	m := sqlutil.NewMigrator(db)
 	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification event threads", Up: tables.CreateNotificationEvents})
 	m.AddMigrations(sqlutil.Migration{Version: "userapi: pending notification refreshes", Up: tables.CreatePendingNotificationRefreshes})
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification event origin timestamp", Up: tables.AddNotificationEventOriginTimestamp})
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification receipt positions", Up: tables.CreateNotificationReceiptPositions})
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification room order", Up: tables.AddNotificationRoomOrder})
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification room order recovery", Up: tables.AddNotificationRoomOrderRecovery})
+	m.AddMigrations(sqlutil.Migration{Version: "userapi: notification depth checkpoints", Up: tables.CreateNotificationDepthCheckpoints})
 	if err = m.Up(ctx); err != nil {
 		return nil, err
 	}

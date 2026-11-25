@@ -162,6 +162,44 @@ func TestGetOrCreateRoomInfoWithPartiallyPopulatedCache(t *testing.T) {
 	})
 }
 
+func TestClearPartialStateMarksStoredSnapshotsIncomplete(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		roomNID, err := db.RoomsTable.InsertRoomNID(ctx, nil, "!partial:test", gomatrixserverlib.RoomVersionV10)
+		assert.NoError(t, err)
+		assert.NoError(t, db.RoomsTable.UpdateLatestEventNIDs(ctx, nil, roomNID, []types.EventNID{1}, 1, 7))
+		assert.NoError(t, db.PartialStateTable.InsertPartialStateRoom(ctx, nil, roomNID, 1, "remote", nil, 12))
+
+		incomplete, err := db.StateSnapshotsIncomplete(ctx, roomNID)
+		assert.NoError(t, err)
+		assert.False(t, incomplete, "the marker must not be set before partial state is cleared")
+
+		_, err = db.ClearRoomPartialState(ctx, roomNID)
+		assert.NoError(t, err)
+		incomplete, err = db.StateSnapshotsIncomplete(ctx, roomNID)
+		assert.NoError(t, err)
+		assert.True(t, incomplete, "clearing partial state must retain a durable marker for old event snapshots")
+		resyncStateNID, err := db.ResyncStateNID(ctx, roomNID)
+		assert.NoError(t, err)
+		assert.Zero(t, resyncStateNID, "the incomplete-snapshot marker must not overload the state epoch")
+	})
+}
+
+func TestClearPartialStateForMissingRoomIsNoop(t *testing.T) {
+	ctx := context.Background()
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := mustCreateRoomserverDatabase(t, dbType) //nolint:contextcheck
+		defer close()
+
+		streamID, err := db.ClearRoomPartialState(ctx, 42)
+		assert.NoError(t, err)
+		assert.Zero(t, streamID)
+	})
+}
+
 func Test_GetUsersSharingRoomWithLocal(t *testing.T) {
 	ctx := context.Background()
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {

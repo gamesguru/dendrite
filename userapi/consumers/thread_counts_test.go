@@ -22,16 +22,36 @@ import (
 
 type failingNotificationStore struct{ storage.UserDatabase }
 
-func (failingNotificationStore) StoreNotificationEvent(context.Context, string, string, string, uint64) ([]string, error) {
+func (failingNotificationStore) StoreNotificationEvent(context.Context, string, string, string, uint64, int64, int64) ([]string, error) {
 	return nil, errors.New("notification event storage failed")
+}
+
+func (failingNotificationStore) NotificationEventDepths(context.Context, string, []string) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (failingNotificationStore) StoreNotificationDepthCheckpoints(context.Context, string, map[string]int64) error {
+	return nil
 }
 
 type retryCopyRoomserver struct {
 	rsapi.UserRoomserverAPI
 	currentStateCalls int
+	events            []*types.HeaderedEvent
 }
 
 func (r *retryCopyRoomserver) QueryMembershipsForRoom(context.Context, *rsapi.QueryMembershipsForRoomRequest, *rsapi.QueryMembershipsForRoomResponse) error {
+	return nil
+}
+
+func (r *retryCopyRoomserver) QueryEventsByID(_ context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	for _, event := range r.events {
+		for _, eventID := range req.EventIDs {
+			if event.EventID() == eventID {
+				res.Events = append(res.Events, event)
+			}
+		}
+	}
 	return nil
 }
 
@@ -49,11 +69,22 @@ func (r *retryCopyRoomserver) QueryCurrentState(context.Context, *rsapi.QueryCur
 type threadRoomserver struct {
 	rsapi.UserRoomserverAPI
 	member      synctypes.ClientEvent
+	events      []*types.HeaderedEvent
 	eventsError error
 }
 
-func (r *threadRoomserver) QueryEventsByID(context.Context, *rsapi.QueryEventsByIDRequest, *rsapi.QueryEventsByIDResponse) error {
-	return r.eventsError
+func (r *threadRoomserver) QueryEventsByID(_ context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	if r.eventsError != nil {
+		return r.eventsError
+	}
+	for _, event := range r.events {
+		for _, eventID := range req.EventIDs {
+			if event.EventID() == eventID {
+				res.Events = append(res.Events, event)
+			}
+		}
+	}
+	return nil
 }
 
 func (r *threadRoomserver) QueryMembershipsForRoom(_ context.Context, _ *rsapi.QueryMembershipsForRoomRequest, res *rsapi.QueryMembershipsForRoomResponse) error {
@@ -102,7 +133,7 @@ func TestThreadReplyCountedInThread(t *testing.T) {
 		publisher := &capturePublisher{}
 		cfg := &config.UserAPI{Matrix: &config.Global{ServerName: "test"}}
 		consumer := OutputRoomEventConsumer{
-			cfg: cfg, db: db, rsAPI: &threadRoomserver{member: member},
+			cfg: cfg, db: db, rsAPI: &threadRoomserver{member: member, events: room.Events()},
 			syncProducer: producers.NewSyncAPI(db, publisher, "client", "notifications"),
 		}
 		for i, event := range []*types.HeaderedEvent{root, reply} {
@@ -122,7 +153,7 @@ func TestThreadReplyCountedInThread(t *testing.T) {
 
 		// When the event's thread cannot be resolved, its stored notification
 		// is still published, counted in the main timeline.
-		consumer.rsAPI = &threadRoomserver{member: member, eventsError: errors.New("roomserver unavailable")}
+		consumer.rsAPI = &threadRoomserver{member: member, events: room.Events(), eventsError: errors.New("roomserver unavailable")}
 		reference := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{
 			"msgtype": "m.text", "body": "see above", "m.relates_to": map[string]any{"rel_type": "m.reference", "event_id": root.EventID()},
 		})
@@ -139,7 +170,7 @@ func TestProcessMessageRetriesWhenPushRuleCopyAndLaterStepFail(t *testing.T) {
 	room := test.NewRoom(t, user)
 	join := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
 
-	rsAPI := &retryCopyRoomserver{}
+	rsAPI := &retryCopyRoomserver{events: room.Events()}
 	consumer := OutputRoomEventConsumer{
 		cfg:   &config.UserAPI{Matrix: &config.Global{ServerName: "test"}},
 		db:    failingNotificationStore{},
@@ -149,4 +180,37 @@ func TestProcessMessageRetriesWhenPushRuleCopyAndLaterStepFail(t *testing.T) {
 	err := consumer.processMessage(t.Context(), join, 1)
 	require.ErrorIs(t, err, errRetryPushRuleCopy)
 	require.ErrorContains(t, err, "notification event storage failed")
+}
+
+type parentDepthRoomserver struct {
+	rsapi.UserRoomserverAPI
+	parent *types.HeaderedEvent
+}
+
+func (r *parentDepthRoomserver) QueryEventsByID(_ context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	for _, eventID := range req.EventIDs {
+		if eventID == r.parent.EventID() {
+			res.Events = append(res.Events, r.parent)
+		}
+	}
+	return nil
+}
+
+// A remote depth reset can make a child claim a depth below its stored parent.
+// Notification ordering must lift it above the parent, as sync's topology does.
+func TestNotificationRoomDepthLiftsAboveParents(t *testing.T) {
+	user := test.NewUser(t)
+	room := test.NewRoom(t, user)
+	parent := room.CreateAndInsert(t, user, "m.room.message", map[string]any{"body": "parent"}, test.WithDepth(1000))
+	child := room.CreateEvent(t, user, "m.room.message", map[string]any{"body": "child"},
+		test.WithDepth(1), test.WithPrevEvents(parent.EventID()))
+
+	db, cleanup := mustCreateDatabase(t, test.DBTypeSQLite)
+	defer cleanup()
+	_, err := db.StoreNotificationEvent(t.Context(), room.ID, parent.EventID(), "main", 1, 2000, 0)
+	require.NoError(t, err)
+	consumer := OutputRoomEventConsumer{db: db, rsAPI: &parentDepthRoomserver{parent: parent}}
+	depth, err := consumer.notificationRoomDepth(t.Context(), child)
+	require.NoError(t, err)
+	require.Equal(t, int64(2001), depth, "the child must sort after its parent's effective depth")
 }

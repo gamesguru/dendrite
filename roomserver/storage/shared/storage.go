@@ -28,6 +28,7 @@ import (
 	"codefloe.com/pat-s/zendrite/roomserver/storage/tables"
 	"codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/config"
+	"codefloe.com/pat-s/zendrite/syncapi/synctypes"
 )
 
 // Ideally, when we have both events we should redact the event JSON and forget about the redaction, but we currently
@@ -88,6 +89,13 @@ func (d *Database) SupportsConcurrentRoomInputs() bool {
 	return true
 }
 
+// DBPoolStats returns the connection pool counters. A request waiting for a
+// free connection never reaches the database, so this is the only view of
+// that wait.
+func (d *Database) DBPoolStats() sql.DBStats {
+	return d.DB.Stats()
+}
+
 func (d *Database) GetMembershipForHistoryVisibility(
 	ctx context.Context, userNID types.EventStateKeyNID, roomInfo *types.RoomInfo, eventIDs ...string,
 ) (map[string]*types.HeaderedEvent, error) {
@@ -130,36 +138,62 @@ func (d *Database) membershipFromHAMT(
 	// resolve each snapshot once.
 	bySnapshot := make(map[types.StateSnapshotNID]snapshotMembership)
 	var blockEventIDs []string
-	for _, eventID := range eventIDs {
-		// BulkSelectStateAtEventByID does not return the event ID, so ask for
-		// one event at a time rather than assuming the rows keep input order.
-		states, err := d.EventsTable.BulkSelectStateAtEventByID(ctx, nil, []string{eventID})
+	var blockMemberships map[string]*types.HeaderedEvent
+	// Resolve the whole batch in one read transaction. Fetch event snapshots in
+	// one query, then look up each distinct snapshot's membership tuple once.
+	err := sqlutil.WithTransaction(d.DB, func(txn *sql.Tx) error {
+		beforeStateSnapshots, err := d.EventsTable.BulkSelectStateAtEventByIDForHistoryVisibility(ctx, txn, eventIDs)
 		if err != nil {
-			return nil, false, err
+			return err
 		}
-		if len(states) != 1 {
-			return nil, false, types.MissingEventError(fmt.Sprintf("storage: event ID %q missing from the database", eventID))
-		}
-		snapshotNID := states[0].BeforeStateSnapshotNID
-		if snapshotNID == 0 {
-			continue
-		}
-		cached, seen := bySnapshot[snapshotNID]
-		if !seen {
-			entries, ok, err := d.stateHAMTEntriesForTuples(ctx, nil, snapshotNID, []types.StateKeyTuple{tuple})
-			if err != nil {
-				return nil, false, err
+		for _, eventID := range eventIDs {
+			stateAtEvent, ok := beforeStateSnapshots[eventID]
+			if !ok {
+				logrus.WithFields(logrus.Fields{
+					"room_nid": roomInfo.RoomNID,
+					"event_id": eventID,
+				}).Warn("Skipping history visibility membership lookup for missing event")
+				continue
 			}
-			cached = snapshotMembership{entries: entries, ok: ok}
-			bySnapshot[snapshotNID] = cached
+			snapshotNID := stateAtEvent.BeforeStateSnapshotNID
+			if snapshotNID == 0 {
+				if stateAtEvent.EventTypeNID == types.MRoomCreateNID && stateAtEvent.EventStateKeyNID == 1 {
+					continue
+				}
+				logrus.WithFields(logrus.Fields{
+					"room_nid": roomInfo.RoomNID,
+					"event_id": eventID,
+				}).Warn("Skipping history visibility membership lookup for event without recoverable state")
+				continue
+			}
+			cached, seen := bySnapshot[snapshotNID]
+			if !seen {
+				entries, ok, err := d.stateHAMTEntriesForTuples(ctx, txn, snapshotNID, []types.StateKeyTuple{tuple})
+				if err != nil {
+					return err
+				}
+				cached = snapshotMembership{entries: entries, ok: ok}
+				bySnapshot[snapshotNID] = cached
+			}
+			if !cached.ok {
+				blockEventIDs = append(blockEventIDs, eventID)
+				continue
+			}
+			if len(cached.entries) > 0 {
+				membershipNIDs[eventID] = cached.entries[len(cached.entries)-1].EventNID
+			}
 		}
-		if !cached.ok {
-			blockEventIDs = append(blockEventIDs, eventID)
-			continue
+		if len(blockEventIDs) > 0 {
+			var err error
+			blockMemberships, err = d.StateSnapshotTable.BulkSelectMembershipForHistoryVisibility(
+				ctx, txn, userNID, roomInfo, blockEventIDs...,
+			)
+			return err
 		}
-		if len(cached.entries) > 0 {
-			membershipNIDs[eventID] = cached.entries[len(cached.entries)-1].EventNID
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
 	}
 	eventNIDList := make([]types.EventNID, 0, len(membershipNIDs))
 	for _, nid := range membershipNIDs {
@@ -183,16 +217,8 @@ func (d *Database) membershipFromHAMT(
 			result[eventID] = &types.HeaderedEvent{}
 		}
 	}
-	if len(blockEventIDs) > 0 {
-		fromBlocks, err := d.StateSnapshotTable.BulkSelectMembershipForHistoryVisibility(
-			ctx, nil, userNID, roomInfo, blockEventIDs...,
-		)
-		if err != nil {
-			return nil, false, err
-		}
-		for eventID, event := range fromBlocks {
-			result[eventID] = event
-		}
+	for eventID, event := range blockMemberships {
+		result[eventID] = event
 	}
 	return result, true, nil
 }
@@ -424,6 +450,11 @@ func (d *Database) addState(
 	return
 }
 
+// HasValidatedRedactionForEvent reports whether any redaction of the event is validated.
+func (d *EventDatabase) HasValidatedRedactionForEvent(ctx context.Context, eventID string) (bool, error) {
+	return d.RedactionsTable.HasValidatedRedactionForEvent(ctx, nil, eventID)
+}
+
 func (d *EventDatabase) EventNIDs(
 	ctx context.Context, eventIDs []string,
 ) (map[string]types.EventMetadata, error) {
@@ -478,7 +509,9 @@ func (d *EventDatabase) snapshotNIDFromEventID(
 		return 0, err
 	}
 	if stateNID == 0 {
-		return 0, sql.ErrNoRows // effectively there's no state entry
+		// Distinguish "no before-state yet" from a missing event row so callers
+		// that must ignore the former still report the latter.
+		return 0, types.ErrNoStateSnapshot
 	}
 	return stateNID, err
 }
@@ -694,6 +727,10 @@ func (d *EventDatabase) events(
 		}
 		return results, nil
 	}
+	if txn == nil {
+		unlockEventCache := d.Cache.LockRoomServerEventCacheRead()
+		defer unlockEventCache()
+	}
 	eventJSONs, err := d.EventJSONTable.BulkSelectEventJSON(ctx, txn, eventNIDs)
 	if err != nil {
 		return nil, err
@@ -716,7 +753,7 @@ func (d *EventDatabase) events(
 		if err != nil {
 			return nil, err
 		}
-		if event := events[eventJSON.EventNID]; event != nil {
+		if event := events[eventJSON.EventNID]; event != nil && txn == nil {
 			d.Cache.StoreRoomServerEvent(eventJSON.EventNID, &types.HeaderedEvent{PDU: event})
 		}
 	}
@@ -917,6 +954,42 @@ func (d *EventDatabase) StoreOutlierEvent(
 	return d.storeEvent(ctx, event, roomInfo, eventTypeNID, eventStateKeyNID, authEventNIDs, isRejected, false)
 }
 
+// warnIfHashPruned logs an event that arrives in redacted form with no recorded
+// redaction, which is one signature of a content-hash failure. It only records
+// receipt-time evidence: the event is still stored, and nothing here touches the
+// network because this runs inside a database transaction.
+func (d *EventDatabase) warnIfHashPruned(
+	ctx context.Context, txn *sql.Tx, event gomatrixserverlib.PDU,
+	roomInfo *types.RoomInfo, isOutlier, recordPrevEvents bool,
+) {
+	// Parsing discarded `unsigned`, so only the redactions table can explain this.
+	if !event.Redacted() {
+		return
+	}
+	// A genuine redaction we already know about explains the redacted form.
+	// A redacted event can have several redaction rows, so ask whether any of
+	// them is validated rather than reading an arbitrary one.
+	validated, err := d.RedactionsTable.HasValidatedRedactionForEvent(ctx, txn, event.EventID())
+	if err != nil {
+		// Do not report a failed lookup as a content-hash failure.
+		logrus.WithError(err).WithField("event_id", event.EventID()).Warn("Failed to look up a redaction while classifying a redacted event")
+		return
+	}
+	if validated {
+		return
+	}
+	// A redaction we do not know about, or a content-hash failure: both leave a
+	// redacted event with no explanation. This is receipt-time evidence only.
+	logrus.WithFields(logrus.Fields{
+		"room_id":            event.RoomID().String(),
+		"event_id":           event.EventID(),
+		"sender":             event.SenderID(),
+		"room_version":       roomInfo.RoomVersion,
+		"is_outlier":         isOutlier,
+		"record_prev_events": recordPrevEvents,
+	}).Warn("Storing a redacted event with no recorded redaction (possibly a content-hash failure)")
+}
+
 func (d *EventDatabase) storeEvent(
 	ctx context.Context, event gomatrixserverlib.PDU,
 	roomInfo *types.RoomInfo, eventTypeNID types.EventTypeNID, eventStateKeyNID types.EventStateKeyNID,
@@ -951,8 +1024,31 @@ func (d *EventDatabase) storeEvent(
 			}
 		}
 
-		if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON()); err != nil {
-			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
+		d.warnIfHashPruned(ctx, txn, event, roomInfo, !recordPrevEvents, recordPrevEvents)
+
+		// A complete copy must never replace a stored event that a validated
+		// redaction covers, even if the stored JSON lacks redacted_because
+		// (for example a pruned outlier stored after the redaction arrived).
+		// InsertEvent also returns a revived rejected row instead of
+		// sql.ErrNoRows, so "already stored" is decided by the JSON row itself.
+		skipJSON := false
+		if !event.Redacted() {
+			validated, vErr := d.RedactionsTable.HasValidatedRedactionForEvent(ctx, txn, event.EventID())
+			if vErr != nil {
+				return fmt.Errorf("d.RedactionsTable.HasValidatedRedactionForEvent: %w", vErr)
+			}
+			if validated {
+				existing, jErr := d.EventJSONTable.BulkSelectEventJSON(ctx, txn, []types.EventNID{eventNID})
+				if jErr != nil {
+					return fmt.Errorf("d.EventJSONTable.BulkSelectEventJSON: %w", jErr)
+				}
+				skipJSON = len(existing) > 0
+			}
+		}
+		if !skipJSON {
+			if err = d.EventJSONTable.InsertEventJSON(ctx, txn, eventNID, event.JSON(), event.Redacted()); err != nil {
+				return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
+			}
 		}
 
 		if prevEvents := event.PrevEventIDs(); recordPrevEvents && len(prevEvents) > 0 {
@@ -975,6 +1071,9 @@ func (d *EventDatabase) storeEvent(
 	if err != nil {
 		return 0, types.StateAtEvent{}, fmt.Errorf("d.Writer.Do: %w", err)
 	}
+	// A duplicate may have upgraded a cached hash-pruned event to its complete
+	// JSON, so don't let readers keep serving the old copy.
+	d.Cache.InvalidateRoomServerEvent(eventNID)
 
 	// We should attempt to update the previous events table with any
 	// references that this new event makes. We do this using a latest
@@ -1159,6 +1258,7 @@ func (d *EventDatabase) MaybeRedactEvent(
 		err                           error
 		validated                     bool
 		ignoreRedaction               bool
+		redactedEventMutated          bool
 	)
 
 	wErr := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
@@ -1185,6 +1285,9 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("d.loadRedactionPair: %w", err)
 		case validated || redactedEvent == nil || redactionEvent == nil:
 			// we've seen this redaction before or there is nothing to redact
+			// In particular, already-validated redactions are not rewritten here;
+			// databases containing the old internal-wrapper shape in
+			// unsigned.redacted_because need a separate data repair.
 			return nil
 		case redactedEvent.RoomID().String() != redactionEvent.RoomID().String():
 			// redactions across rooms aren't allowed
@@ -1244,12 +1347,29 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return nil
 		}
 
+		// From here the possibly cached event is modified in place, so the cache
+		// entry is stale whether or not the transaction commits.
+		redactedEventMutated = true
 		// mark the event as redacted
 		if redactionsArePermanent {
 			redactedEvent.Redact()
 		}
 
-		err = redactedEvent.SetUnsignedField("redacted_because", redactionEvent)
+		// Store a client event, not the internal *types.Event wrapper: the
+		// wrapper serializes as {EventNID, Rejected, PDU}, so the redaction's
+		// content ends up nested under PDU instead of at the top level. Clients
+		// render unsigned.redacted_because.content.reason and crash when it is
+		// missing.
+		redactedBecause, clientErr := synctypes.ToClientEvent(
+			redactionEvent.PDU, synctypes.FormatSync,
+			func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+				return querier.QueryUserIDForSender(ctx, roomID, senderID)
+			},
+		)
+		if clientErr != nil {
+			return fmt.Errorf("synctypes.ToClientEvent: %w", clientErr)
+		}
+		err = redactedEvent.SetUnsignedField("redacted_because", redactedBecause)
 		if err != nil {
 			return fmt.Errorf("redactedEvent.SetUnsignedField: %w", err)
 		}
@@ -1259,9 +1379,9 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("redactedEvent.SetUnsignedField: %w", err)
 		}
 		// overwrite the eventJSON table
-		err = d.EventJSONTable.InsertEventJSON(ctx, txn, redactedEvent.EventNID, redactedEvent.JSON())
+		err = d.EventJSONTable.OverwriteEventJSON(ctx, txn, redactedEvent.EventNID, redactedEvent.JSON())
 		if err != nil {
-			return fmt.Errorf("d.EventJSONTable.InsertEventJSON: %w", err)
+			return fmt.Errorf("d.EventJSONTable.OverwriteEventJSON: %w", err)
 		}
 
 		err = d.RedactionsTable.MarkRedactionValidated(ctx, txn, redactionEvent.EventID(), true)
@@ -1275,14 +1395,16 @@ func (d *EventDatabase) MaybeRedactEvent(
 			return fmt.Errorf("d.AnnotationsTable.DeleteAnnotation: %w", err)
 		}
 
-		// We remove the entry from the cache, as if we just "StoreRoomServerEvent", we can't be
-		// certain that the cached entry actually is updated, since ristretto is eventual-persistent.
-		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
-
 		return nil
 	})
+	if redactedEventMutated {
+		// Invalidate after the transaction ends, on success and failure. This takes
+		// the cache write lock, waits for any pre-commit fill to finish, then removes
+		// it before later reads proceed. A rollback leaves the in-place edits cached.
+		d.Cache.InvalidateRoomServerEvent(redactedEvent.EventNID)
+	}
 	if wErr != nil {
-		return nil, nil, err
+		return nil, nil, wErr
 	}
 	if ignoreRedaction || redactionEvent == nil || redactedEvent == nil {
 		return nil, nil, nil
@@ -2203,7 +2325,7 @@ func (d *Database) ForgetRoom(ctx context.Context, senderID, roomID string, forg
 // PurgeRoom removes all information about a given room from the roomserver.
 // For large rooms this operation may take a considerable amount of time.
 // The room's state HAMT roots are deleted, but shared content-addressed HAMT
-// nodes are only reclaimed by CollectStateHAMTGarbage (backfill-state-hamt).
+// nodes are only reclaimed by CollectStateHAMTGarbage (dendrite-backfill-state-hamt).
 func (d *Database) PurgeRoom(ctx context.Context, roomID string) error {
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
 		roomNID, err := d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomID)
@@ -2706,6 +2828,16 @@ func (d *Database) IsRoomPartialState(ctx context.Context, roomNID types.RoomNID
 	return d.PartialStateTable.SelectPartialStateRoom(ctx, nil, roomNID)
 }
 
+// ResyncStateNID returns the state snapshot recorded after the room's last
+// partial state resync, or 0 if the room has never been resynced.
+func (d *Database) ResyncStateNID(ctx context.Context, roomNID types.RoomNID) (types.StateSnapshotNID, error) {
+	return d.RoomsTable.SelectResyncStateNID(ctx, nil, roomNID)
+}
+
+func (d *Database) StateSnapshotsIncomplete(ctx context.Context, roomNID types.RoomNID) (bool, error) {
+	return d.RoomsTable.SelectStateSnapshotsIncomplete(ctx, nil, roomNID)
+}
+
 // GetPartialStateServers returns the list of servers known to be in a partial state room.
 func (d *Database) GetPartialStateServers(ctx context.Context, roomNID types.RoomNID) ([]string, error) {
 	return d.PartialStateTable.SelectPartialStateServers(ctx, nil, roomNID)
@@ -2733,8 +2865,40 @@ func (d *Database) GetPartialStateJoinEventID(ctx context.Context, roomNID types
 // SetRoomPartialState marks a room as having partial state after a faster join.
 func (d *Database) SetRoomPartialState(ctx context.Context, roomNID types.RoomNID, joinEventNID types.EventNID, joinedVia string, serversInRoom []string, deviceListStreamID int64) error {
 	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.lockRoomByNID(ctx, txn, roomNID); err != nil {
+			return err
+		}
 		return d.PartialStateTable.InsertPartialStateRoom(ctx, txn, roomNID, joinEventNID, joinedVia, serversInRoom, deviceListStreamID)
 	})
+}
+
+// lockRoomByNID serializes room-scoped updates with other operations that
+// acquire the room row lock. Resolve the room ID in the same transaction so
+// the lock is acquired before reading or changing related room state.
+func (d *Database) lockRoomByNID(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) error {
+	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{roomNID})
+	if err != nil {
+		return fmt.Errorf("select room ID for room NID %d: %w", roomNID, err)
+	}
+	if len(roomIDs) == 0 {
+		return fmt.Errorf("room NID %d not found", roomNID)
+	}
+	lockedRoomNID, err := d.RoomsTable.SelectRoomNIDForUpdate(ctx, txn, roomIDs[0])
+	if err != nil {
+		return fmt.Errorf("lock room %s: %w", roomIDs[0], err)
+	}
+	if lockedRoomNID != roomNID {
+		return fmt.Errorf("room %s has NID %d, expected %d", roomIDs[0], lockedRoomNID, roomNID)
+	}
+	return nil
+}
+
+func (d *Database) roomExists(ctx context.Context, txn *sql.Tx, roomNID types.RoomNID) (bool, error) {
+	roomIDs, err := d.RoomsTable.BulkSelectRoomIDs(ctx, txn, []types.RoomNID{roomNID})
+	if err != nil {
+		return false, err
+	}
+	return len(roomIDs) > 0, nil
 }
 
 // GetMembersJoinedAfterPartialJoin returns the users who joined a partial state room after
@@ -2770,14 +2934,29 @@ func (d *Database) GetMembersJoinedAfterPartialJoin(ctx context.Context, roomNID
 	return later, joined, nil
 }
 
-// ClearRoomPartialState removes the partial state flag from a room after state has been fully synced
+// ClearRoomPartialState removes the partial state flag from a room
 // Returns the device list stream ID that was stored at join time for device list replay.
 func (d *Database) ClearRoomPartialState(ctx context.Context, roomNID types.RoomNID) (int64, error) {
 	var deviceListStreamID int64
 	err := d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		if err := d.lockRoomByNID(ctx, txn, roomNID); err != nil {
+			if exists, checkErr := d.roomExists(ctx, txn, roomNID); checkErr == nil && !exists {
+				return nil
+			}
+			return err
+		}
 		var err error
+		wasPartial, err := d.PartialStateTable.SelectPartialStateRoom(ctx, txn, roomNID)
+		if err != nil {
+			return err
+		}
 		deviceListStreamID, err = d.PartialStateTable.DeletePartialStateRoom(ctx, txn, roomNID)
-		return err
+		if err != nil || !wasPartial {
+			return err
+		}
+		// Do not overload resync_state_nid: it drives state-epoch suppression
+		// and must continue to describe an actual full-state resync.
+		return d.RoomsTable.MarkStateSnapshotsIncomplete(ctx, txn, roomNID)
 	})
 	return deviceListStreamID, err
 }

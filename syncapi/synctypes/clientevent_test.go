@@ -16,6 +16,8 @@ import (
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func queryUserIDForSender(senderID spec.SenderID) (*spec.UserID, error) {
@@ -435,12 +437,10 @@ func TestToClientEventsFormatSync(t *testing.T) { //nolint:gocyclo
 			Sender:         testUserID,
 		})
 
-	var prev PrevEventRef
-	prev.PrevContent = []byte(`{"name": "Goodbye World 2"}`)
-	prev.PrevSenderID = testUserID
-	expectedUnsigned, err := json.Marshal(prev)
+	// Only prev_sender changes; the rest of unsigned is kept as it was.
+	expectedUnsigned, err := sjson.SetBytes(ev2.Unsigned(), "prev_sender", testUserID)
 	if err != nil {
-		t.Fatalf("failed to marshal prev: %s", err)
+		t.Fatalf("failed to set prev_sender: %s", err)
 	}
 
 	ce2 := clientEvents[1]
@@ -463,6 +463,97 @@ func TestToClientEventsFormatSync(t *testing.T) { //nolint:gocyclo
 			Unsigned:       expectedUnsigned,
 			Sender:         testUserID,
 		})
+}
+
+func TestUpdatePseudoIDsPreservesMappedPrevSenderForTransformedStateEvents(t *testing.T) {
+	eventJSON := map[string]string{
+		"m.room.member":       `{"type":"m.room.member","state_key":"stateSenderKey","event_id":"$member:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"membership":"join"},"origin_server_ts":1,"unsigned":{"invite_room_state":[],"prev_content":{"membership":"leave"},"prev_sender":"oldSenderKey","replaces_state":"$prev:localhost"}}`,
+		"m.room.power_levels": `{"type":"m.room.power_levels","state_key":"","event_id":"$power:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"users":{"oldSenderKey":50}},"origin_server_ts":1,"unsigned":{"prev_content":{"users":{}},"prev_sender":"oldSenderKey","replaces_state":"$prev:localhost"}}`,
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		users := map[spec.SenderID]string{
+			"eventSenderKey": "@event:localhost",
+			"stateSenderKey": "@state:localhost",
+			"oldSenderKey":   "@previous:localhost",
+		}
+		userID, ok := users[senderID]
+		if !ok {
+			return nil, fmt.Errorf("unknown sender %q", senderID)
+		}
+		return spec.NewUserID(userID, true)
+	}
+
+	for eventType, raw := range eventJSON {
+		t.Run(eventType, func(t *testing.T) {
+			ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(raw), false)
+			if err != nil {
+				t.Fatalf("failed to create event: %s", err)
+			}
+			ce, err := ToClientEvent(ev, FormatSync, userIDForSender)
+			if err != nil {
+				t.Fatalf("failed to create ClientEvent: %s", err)
+			}
+			if got := gjson.GetBytes(ce.Unsigned, "prev_sender").String(); got != "@previous:localhost" {
+				t.Errorf("prev_sender: wanted mapped user ID, got %q", got)
+			}
+		})
+	}
+}
+
+func TestUpdatePseudoIDsPreservesMembershipAnnotation(t *testing.T) {
+	eventJSON := map[string]string{
+		"m.room.member":       `{"type":"m.room.member","state_key":"stateSenderKey","event_id":"$member:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"membership":"join"},"origin_server_ts":1,"unsigned":{}}`,
+		"m.room.power_levels": `{"type":"m.room.power_levels","state_key":"","event_id":"$power:localhost","room_id":"!test:localhost","sender":"eventSenderKey","content":{"users":{}},"origin_server_ts":1,"unsigned":{}}`,
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return spec.NewUserID("@"+string(senderID)+":localhost", true)
+	}
+
+	for name, raw := range eventJSON {
+		t.Run(name, func(t *testing.T) {
+			ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(raw), false)
+			if err != nil {
+				t.Fatalf("failed to create event: %s", err)
+			}
+			// ToClientEvent annotates the requester's membership before
+			// updatePseudoIDs replaces unsigned for these event types.
+			ce := ClientEvent{
+				Unsigned: spec.RawJSON(`{"membership":"join","io.element.msc4115.membership":"join"}`),
+			}
+			if err := updatePseudoIDs(&ce, ev, userIDForSender, FormatSync); err != nil {
+				t.Fatalf("failed to update pseudo IDs: %s", err)
+			}
+			if got := gjson.GetBytes(ce.Unsigned, "membership").String(); got != "join" {
+				t.Errorf("membership: wanted %q, got %q", "join", got)
+			}
+			if got := gjson.GetBytes(ce.Unsigned, "io\\.element\\.msc4115\\.membership").String(); got != "join" {
+				t.Errorf("io.element.msc4115.membership: wanted %q, got %q", "join", got)
+			}
+		})
+	}
+}
+
+// Mapping prev_sender must not drop the other unsigned fields.
+func TestToClientEventPreservesOtherUnsignedWhenMappingPrevSender(t *testing.T) {
+	ev, err := gomatrixserverlib.MustGetRoomVersion(gomatrixserverlib.RoomVersionPseudoIDs).NewEventFromTrustedJSON([]byte(`{"type":"m.room.name","state_key":"","event_id":"$n:localhost","room_id":"!test:localhost","sender":"senderKey","content":{"name":"new"},"origin_server_ts":1,"unsigned":{"age":42,"redacted_by":"$r:localhost","prev_content":{"name":"old"},"prev_sender":"oldKey","replaces_state":"$prev:localhost"}}`), false)
+	if err != nil {
+		t.Fatalf("failed to create event: %s", err)
+	}
+	userIDForSender := func(_ spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return spec.NewUserID("@"+string(senderID)+":localhost", true)
+	}
+	ce, err := ToClientEvent(ev, FormatSync, userIDForSender)
+	if err != nil {
+		t.Fatalf("failed to create ClientEvent: %s", err)
+	}
+	unsigned := gjson.ParseBytes(ce.Unsigned)
+	if got := unsigned.Get("prev_sender").String(); got != "@oldKey:localhost" {
+		t.Errorf("prev_sender: wanted mapped user ID, got %q", got)
+	}
+	if unsigned.Get("age").Int() != 42 || unsigned.Get("redacted_by").String() != "$r:localhost" ||
+		unsigned.Get("replaces_state").String() != "$prev:localhost" || !unsigned.Get("prev_content").Exists() {
+		t.Errorf("other unsigned fields were dropped: %s", ce.Unsigned)
+	}
 }
 
 func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { //nolint:gocyclo
@@ -530,13 +621,8 @@ func TestToClientEventsFormatSyncUnknownPrevSender(t *testing.T) { //nolint:gocy
 			Sender:         testUserID,
 		})
 
-	var prev PrevEventRef
-	prev.PrevContent = []byte(`{"name": "Goodbye World 2"}`)
-	prev.PrevSenderID = "unknownSenderID"
-	expectedUnsigned, err := json.Marshal(prev)
-	if err != nil {
-		t.Fatalf("failed to marshal prev: %s", err)
-	}
+	// An unmapped prev_sender leaves unsigned exactly as stored.
+	expectedUnsigned := ev2.Unsigned()
 
 	ce2 := clientEvents[1]
 	verifyEventFields(t,

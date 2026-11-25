@@ -9,6 +9,7 @@ package consumers
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/nats-io/nats.go"
@@ -188,6 +189,17 @@ func (s *PresenceConsumer) EmitPresence(ctx context.Context, userID string, pres
 }
 
 func (s *PresenceConsumer) writePresence(ctx context.Context, userID string, presence types.Presence, statusMsg *string, ts spec.Timestamp, fromSync bool) error {
+	current, lookupErr := s.db.GetPresences(ctx, []string{userID})
+	if lookupErr == nil && len(current) > 0 && current[0] != nil {
+		old := current[0]
+		statusUnchanged := fromSync || statusMsg == nil || equalStatusMessage(old.ClientFields.StatusMsg, statusMsg)
+		if old.Presence == presence && statusUnchanged &&
+			(ts <= old.LastActiveTS || ts-old.LastActiveTS <= spec.Timestamp(time.Minute.Milliseconds())) {
+			return nil
+		}
+	} else if lookupErr != nil {
+		logrus.WithError(lookupErr).WithField("user", userID).Warn("presence deduplication lookup failed; applying update")
+	}
 	pos, err := s.db.UpdatePresence(ctx, userID, presence, statusMsg, ts, fromSync)
 	if err != nil {
 		return err
@@ -195,4 +207,11 @@ func (s *PresenceConsumer) writePresence(ctx context.Context, userID string, pre
 	s.stream.Advance(pos)
 	s.notifier.OnNewPresence(ctx, types.StreamingToken{PresencePosition: pos}, userID)
 	return nil
+}
+
+func equalStatusMessage(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }

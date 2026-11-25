@@ -9,6 +9,7 @@ package caching
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -72,7 +73,8 @@ func NewRistrettoCache(maxCost config.DataUnit, maxAge time.Duration, enableProm
 		})
 	}
 	return &Caches{
-		close: cache.Close,
+		close:                  cache.Close,
+		roomServerEventCacheMu: &sync.RWMutex{},
 		RoomVersions: &RistrettoCachePartition[string, gomatrixserverlib.RoomVersion]{ // room ID -> room version
 			cache:  cache,
 			Prefix: roomVersionsCache,
@@ -177,6 +179,11 @@ func (c *RistrettoCostedCachePartition[K, V]) Set(key K, value V) {
 	c.setWithCost(key, value, int64(cost))
 }
 
+// Wait blocks until all queued cache operations have been applied.
+func (c *RistrettoCostedCachePartition[K, V]) Wait() {
+	c.cache.Wait()
+}
+
 type RistrettoCachePartition[K keyable, V any] struct {
 	cache   *ristretto.Cache[string, any]
 	Prefix  byte
@@ -210,6 +217,11 @@ func (c *RistrettoCachePartition[K, V]) Unset(key K) {
 		panic(fmt.Sprintf("invalid use of immutable cache tries to unset value of %v", key))
 	}
 	c.cache.Del(bkey)
+}
+
+// Wait blocks until all buffered writes of the underlying cache have been applied.
+func (c *RistrettoCachePartition[K, V]) Wait() {
+	c.cache.Wait()
 }
 
 func (c *RistrettoCachePartition[K, V]) Get(key K) (value V, ok bool) {

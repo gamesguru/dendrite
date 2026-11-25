@@ -9,8 +9,11 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -50,8 +53,13 @@ func (rp *RequestPool) detectRoomMembership(
 
 	result := roomMembershipResult{membership: pduMembership}
 
-	// Check for active invite that might override PDU membership
-	if currentPos.InvitePosition > 0 {
+	// A joined membership cannot be overridden by an invite. Avoid rereading
+	// the user's complete invite stream for every joined room; this runs for
+	// every room on every sliding sync request, and the invite stream can grow
+	// independently of the number of rooms the user is currently in.
+	// For leave/ban (and missing membership) rooms, an active invite can still
+	// supersede the PDU membership, so retain the invite lookup there.
+	if pduMembership != spec.Join && currentPos.InvitePosition > 0 {
 		inviteRange := types.Range{From: 0, To: currentPos.InvitePosition, Backwards: false}
 		invites, retired, _, inviteErr := snapshot.InviteEventsInRange(ctx, userID, inviteRange)
 		if inviteErr != nil {
@@ -192,9 +200,23 @@ func (rp *RequestPool) BuildRoomData(
 		if ignoreTimelineBound || isInitialForRoom {
 			timelineFromToken = nil
 		}
+		timelineStarted := time.Now()
 		timeline, limited, numLiveCount, timelineErr := rp.getTimelineEvents(ctx, snapshot, roomID, userID, timelineLimit, roomState, currentPos, timelineFromToken)
+		if elapsed := time.Since(timelineStarted); elapsed > time.Second {
+			logrus.WithFields(logrus.Fields{
+				"room_id":    roomID,
+				"events":     len(timeline),
+				"expanded":   ignoreTimelineBound,
+				"initial":    isInitialForRoom,
+				"elapsed_ms": elapsed.Milliseconds(),
+			}).Warn("[V4_SYNC] Slow timeline build")
+		}
 		if timelineErr != nil {
+			// Fatal for this room, like required state below: sending the room
+			// without its timeline would advance its position past events
+			// that were never delivered. Skipping it leaves the position alone.
 			logrus.WithError(timelineErr).WithField("room_id", roomID).Error("Failed to get timeline events")
+			return nil, fmt.Errorf("get timeline for %s: %w", roomID, timelineErr)
 		} else {
 			roomData.Timeline = timeline
 			timelineLimited = limited
@@ -209,6 +231,19 @@ func (rp *RequestPool) BuildRoomData(
 
 	// Get required state events
 	if shouldFetchRequiredState(requiredStateConfig) {
+		// State resyncs populate current_room_state without emitting an output
+		// event. A completion marker is therefore the only signal that a room
+		// this connection already received has restored state to send.
+		if markerRange, shouldCheck := requiredStateResyncMarkerRange(roomState, fromToken, currentPos); shouldCheck {
+			resynced, resyncErr := snapshot.UnPartialStatedRoomsInRange(ctx, userID, types.Range{
+				From: markerRange.From,
+				To:   markerRange.To,
+			})
+			if resyncErr != nil {
+				return nil, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", resyncErr)
+			}
+			forceRequiredState = forceRequiredState || slices.Contains(resynced, roomID)
+		}
 		logrus.WithFields(logrus.Fields{
 			"room_id":         roomID,
 			"user_id":         userID,
@@ -253,6 +288,20 @@ func (rp *RequestPool) BuildRoomData(
 	roomData.Heroes = rp.getHeroes(ctx, snapshot, roomID, userID)
 
 	return roomData, nil
+}
+
+func requiredStateResyncMarkerRange(roomState types.RoomStreamState, fromToken *types.StreamingToken, currentPos types.StreamingToken) (types.Range, bool) {
+	if fromToken == nil {
+		return types.Range{}, false
+	}
+	from := fromToken.PDUPosition
+	if roomState.LastToken != nil && roomState.LastToken.PDUPosition < from {
+		from = roomState.LastToken.PDUPosition
+	}
+	if currentPos.PDUPosition <= from {
+		return types.Range{}, false
+	}
+	return types.Range{From: from, To: currentPos.PDUPosition}, true
 }
 
 // getTimelineEvents retrieves recent timeline events for a room
@@ -419,7 +468,19 @@ func (rp *RequestPool) visibleStreamEvents(
 	}
 	visible, err := syncinternal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, rp.rsAPI, roomID, userID, headered, syncinternal.SlidingSyncEndpoint)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			// The long poll was canceled; the client is gone.
+			return nil, err
+		}
+		// Only the membership lookup's own cap may be tolerated, and then only
+		// when nothing was withheld: otherwise fail the room so its position
+		// stays put and the next sync retries. Serving the remainder would
+		// advance past the withheld events for good. Any other failure
+		// (including storage errors) fails the room outright.
+		if !errors.Is(err, syncinternal.ErrMembershipLookupTimeout) || len(visible) < len(events) {
+			return nil, err
+		}
+		logrus.WithError(err).WithField("room_id", roomID).Warn("membership lookup timed out but nothing was withheld; serving the timeline")
 	}
 	if len(visible) == len(events) {
 		return events, nil
@@ -675,8 +736,8 @@ func (rp *RequestPool) getRequiredStateDelta(
 			Backwards: true,
 		},
 		deltaFilter,
-		true, // chronological order
-		true, // only sync events
+		true,  // chronological order
+		false, // include excluded state events so state resyncs can repair client state
 	)
 	if err != nil {
 		return nil, false, err
@@ -687,13 +748,73 @@ func (rp *RequestPool) getRequiredStateDelta(
 		return nil, false, nil
 	}
 
-	var result []*rstypes.HeaderedEvent
+	// Excluded state PDUs don't appear in the timeline or add_state_ids, but
+	// they can still represent a current-state change (for example, a state
+	// resync restoring a join event). Use them only to identify changed state
+	// slots, then fetch each slot's current event so an old excluded PDU cannot
+	// overwrite newer state on the client. Keep the first-change order stable.
+	//
+	// A slot with no current event is dropped. Excluded events are mostly
+	// historical (backfill and gap-fill never touch current state), so sending
+	// one as a fallback could put a stale event in the client's required state.
+	var changedState []gomatrixserverlib.StateKeyTuple
+	seenState := make(map[gomatrixserverlib.StateKeyTuple]struct{}, len(events.Events))
 	for _, ev := range events.Events {
 		if ev.StateKey() == nil {
 			continue // not a state event
 		}
-		if rp.matchesRequiredState(ev.HeaderedEvent, userID, config, lazySenders) {
-			result = append(result, ev.HeaderedEvent)
+		stateKey := *ev.StateKey()
+		if ev.Type() == spec.MRoomMember {
+			resolved, resolveErr := rp.rsAPI.QueryUserIDForSender(ctx, ev.RoomID(), spec.SenderID(stateKey))
+			if resolveErr != nil {
+				return nil, false, resolveErr
+			}
+			if resolved != nil {
+				stateKey = resolved.String()
+			}
+		}
+		if rp.matchesRequiredStateKey(ev.HeaderedEvent, stateKey, userID, config, lazySenders) {
+			tuple := gomatrixserverlib.StateKeyTuple{
+				EventType: ev.Type(),
+				StateKey:  stateKey,
+			}
+			if _, ok := seenState[tuple]; !ok {
+				seenState[tuple] = struct{}{}
+				changedState = append(changedState, tuple)
+			}
+		}
+	}
+	if len(changedState) == 0 {
+		return nil, events.Limited, nil
+	}
+
+	// One query for every changed slot, not one per slot: a large gap can touch
+	// up to requiredStateDeltaLimit of them on every sync.
+	current, stateErr := snapshot.GetStateEvents(ctx, roomID, changedState)
+	if stateErr != nil {
+		return nil, false, stateErr
+	}
+	result := make([]*rstypes.HeaderedEvent, 0, len(changedState))
+	for _, tuple := range changedState {
+		currentEvent := current[tuple]
+		if currentEvent == nil {
+			continue
+		}
+		stateKey := ""
+		if currentEvent.StateKey() != nil {
+			stateKey = *currentEvent.StateKey()
+		}
+		if currentEvent.Type() == spec.MRoomMember {
+			resolved, resolveErr := rp.rsAPI.QueryUserIDForSender(ctx, currentEvent.RoomID(), spec.SenderID(stateKey))
+			if resolveErr != nil {
+				return nil, false, resolveErr
+			}
+			if resolved != nil {
+				stateKey = resolved.String()
+			}
+		}
+		if rp.matchesRequiredStateKey(currentEvent, stateKey, userID, config, lazySenders) {
+			result = append(result, currentEvent)
 		}
 	}
 	return result, events.Limited, nil
@@ -1017,11 +1138,20 @@ func (rp *RequestPool) matchesRequiredState(
 	config *types.RequiredStateConfig,
 	lazySenders map[string]bool,
 ) bool {
-	eventType := event.Type()
 	stateKey := ""
 	if event.StateKey() != nil {
 		stateKey = *event.StateKey()
 	}
+	return rp.matchesRequiredStateKey(event, stateKey, userID, config, lazySenders)
+}
+
+func (rp *RequestPool) matchesRequiredStateKey(
+	event *rstypes.HeaderedEvent,
+	stateKey, userID string,
+	config *types.RequiredStateConfig,
+	lazySenders map[string]bool,
+) bool {
+	eventType := event.Type()
 
 	// Check if excluded
 	for _, pattern := range config.Exclude {

@@ -48,6 +48,12 @@ Both use the flat wire format that clients expect:
 `GET /_matrix/client/versions` also advertises `org.matrix.msc4143` in `unstable_features`, but only while at least one focus is configured.
 Without `rtc_foci`, none of the above is served and clients have no focus to discover.
 
+### Protocol compatibility
+
+This implementation currently exposes the unstable MSC4143 transport-discovery endpoint only: `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports`. Its response uses the `rtc_transports` property and the legacy LiveKit transport type `livekit`. It does not yet expose the stable `GET /_matrix/client/v1/rtc/transports` endpoint or the stable `m.livekit` transport type.
+
+Clients that discover RTC through `/.well-known/matrix/client` or the unstable endpoint can use this configuration. A client that requires the stable endpoint or `m.livekit` may not discover the focus. When troubleshooting client differences, inspect the exact `rtc/transports` request path and response in the client network log.
+
 ## Call membership
 
 Element Call announces who is in a call with `m.rtc.member` events that it sends as sticky events ([MSC4354](https://github.com/matrix-org/matrix-spec-proposals/pull/4354)).

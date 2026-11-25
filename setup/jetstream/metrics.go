@@ -175,6 +175,13 @@ func (p *consumerProgress) acked() {
 	p.lastAck.SetToCurrentTime()
 }
 
+// RecordConsumerAck records an acknowledgement sent outside the worker, by a
+// callback that returned AckActionDefer, so the last-ack metric keeps advancing.
+// The durable argument is the configured name, without the pull suffix.
+func RecordConsumerAck(durable string) {
+	consumerLastAck.WithLabelValues(durable + pullDurableSuffix).SetToCurrentTime()
+}
+
 func unixSeconds(t time.Time) float64 {
 	return float64(t.UnixNano()) / float64(time.Second)
 }

@@ -115,7 +115,14 @@ type Global struct {
 	Cache Cache `yaml:"cache"`
 }
 
+// DefaultPresenceFederationInterval is the outbound presence flush interval
+// used when the configuration leaves it unset.
+const defaultPresenceFederationInterval = 5 * time.Second
+
 func (c *Global) Defaults(opts DefaultOpts) {
+	if c.Presence.FederationInterval == 0 {
+		c.Presence.FederationInterval = defaultPresenceFederationInterval
+	}
 	if opts.Generate {
 		c.ServerName = "localhost"
 		c.PrivateKeyPath = "matrix_key.pem"
@@ -142,6 +149,9 @@ func (c *Global) Defaults(opts DefaultOpts) {
 }
 
 func (c *Global) Verify(configErrs *ConfigErrors) {
+	if c.Presence.FederationInterval < time.Second || c.Presence.FederationInterval > time.Minute {
+		configErrs.Add("global.presence.federation_interval must be between 1s and 1m")
+	}
 	checkNotEmpty(configErrs, "global.server_name", string(c.ServerName))
 	checkNotEmpty(configErrs, "global.private_key", string(c.PrivateKeyPath))
 
@@ -474,6 +484,8 @@ type PresenceOptions struct {
 	EnableInbound bool `yaml:"enable_inbound"`
 	// Whether outbound presence events are allowed
 	EnableOutbound bool `yaml:"enable_outbound"`
+	// How often to flush coalesced outbound presence updates.
+	FederationInterval time.Duration `yaml:"federation_interval"`
 }
 
 // RTCFocus represents a MatrixRTC focus server configuration (MSC4143).

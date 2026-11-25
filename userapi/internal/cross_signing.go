@@ -454,9 +454,51 @@ func (a *UserInternalAPI) processOtherSignatures(
 	return nil
 }
 
+// crossSigningEntries records which cross-signing key types a QueryKeys
+// response currently holds, so a later database pass can distinguish its own
+// earlier entries from keys supplied by federation.
+func crossSigningEntries(res *api.QueryKeysResponse) map[string]map[fclient.CrossSigningKeyPurpose]struct{} {
+	entries := make(map[string]map[fclient.CrossSigningKeyPurpose]struct{})
+	add := func(userID string, keyType fclient.CrossSigningKeyPurpose) {
+		if entries[userID] == nil {
+			entries[userID] = make(map[fclient.CrossSigningKeyPurpose]struct{})
+		}
+		entries[userID][keyType] = struct{}{}
+	}
+	for userID := range res.MasterKeys {
+		add(userID, fclient.CrossSigningKeyPurposeMaster)
+	}
+	for userID := range res.SelfSigningKeys {
+		add(userID, fclient.CrossSigningKeyPurposeSelfSigning)
+	}
+	for userID := range res.UserSigningKeys {
+		add(userID, fclient.CrossSigningKeyPurposeUserSigning)
+	}
+	return entries
+}
+
+// crossSigningKeysFromDatabase loads cross-signing keys for the requested
+// users. On the first pass replace is nil and missing response entries are
+// filled from the database. A later pass (after federation) passes replace and
+// clearMissing to reload an authoritative database generation: replace swaps
+// an existing purpose for the current database key, while clearMissing drops a
+// purpose the database no longer has. All changes for one user are staged so a
+// failed signature read cannot pair a refreshed master key with a stale
+// self-signing key.
 func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 	ctx context.Context, req *api.QueryKeysRequest, res *api.QueryKeysResponse,
+	replace func(targetUserID string, keyType fclient.CrossSigningKeyPurpose) bool,
+	clearMissing ...func(targetUserID string, keyType fclient.CrossSigningKeyPurpose) bool,
 ) {
+	var clear func(targetUserID string, keyType fclient.CrossSigningKeyPurpose) bool
+	if len(clearMissing) > 0 {
+		clear = clearMissing[0]
+	}
+	purposes := []fclient.CrossSigningKeyPurpose{
+		fclient.CrossSigningKeyPurposeMaster,
+		fclient.CrossSigningKeyPurposeSelfSigning,
+		fclient.CrossSigningKeyPurposeUserSigning,
+	}
 	for targetUserID := range req.UserToDevices {
 		if ctx.Err() != nil {
 			return
@@ -470,9 +512,27 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 			continue
 		}
 
-		for keyType, key := range keys {
+		staged := make(map[fclient.CrossSigningKeyPurpose]fclient.CrossSigningKey)
+		failed := false
+		for _, keyType := range purposes {
+			key, haveKey := keys[keyType]
+			if !haveKey {
+				continue
+			}
 			if ctx.Err() != nil {
 				return
+			}
+			alreadyPresent := false
+			switch keyType {
+			case fclient.CrossSigningKeyPurposeMaster:
+				_, alreadyPresent = res.MasterKeys[targetUserID]
+			case fclient.CrossSigningKeyPurposeSelfSigning:
+				_, alreadyPresent = res.SelfSigningKeys[targetUserID]
+			case fclient.CrossSigningKeyPurposeUserSigning:
+				_, alreadyPresent = res.UserSigningKeys[targetUserID]
+			}
+			if alreadyPresent && (replace == nil || !replace(targetUserID, keyType)) {
+				continue
 			}
 			var keyID gomatrixserverlib.KeyID
 			for id := range key.Keys {
@@ -486,7 +546,8 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 					return
 				}
 				logrus.WithError(err).Errorf("Failed to get cross-signing signatures for user %q key %q", targetUserID, keyID)
-				continue
+				failed = true
+				break
 			}
 
 			appendSignature := func(originUserID string, originKeyID gomatrixserverlib.KeyID, signature spec.Base64Bytes) {
@@ -513,13 +574,34 @@ func (a *UserInternalAPI) crossSigningKeysFromDatabase(
 				}
 			}
 
+			staged[keyType] = key
+		}
+		// Keep the response's existing generation intact if any signature read
+		// failed. A partial refresh must not combine cached and newly fetched
+		// cross-signing keys.
+		if failed {
+			continue
+		}
+		for _, keyType := range purposes {
+			if clear != nil && clear(targetUserID, keyType) {
+				if _, present := keys[keyType]; !present {
+					switch keyType {
+					case fclient.CrossSigningKeyPurposeMaster:
+						delete(res.MasterKeys, targetUserID)
+					case fclient.CrossSigningKeyPurposeSelfSigning:
+						delete(res.SelfSigningKeys, targetUserID)
+					case fclient.CrossSigningKeyPurposeUserSigning:
+						delete(res.UserSigningKeys, targetUserID)
+					}
+				}
+			}
+		}
+		for keyType, key := range staged {
 			switch keyType {
 			case fclient.CrossSigningKeyPurposeMaster:
 				res.MasterKeys[targetUserID] = key
-
 			case fclient.CrossSigningKeyPurposeSelfSigning:
 				res.SelfSigningKeys[targetUserID] = key
-
 			case fclient.CrossSigningKeyPurposeUserSigning:
 				res.UserSigningKeys[targetUserID] = key
 			}

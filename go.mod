@@ -10,7 +10,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/dgraph-io/ristretto/v2 v2.4.2
-	github.com/gamesguru/gomatrixserverlib v0.0.0-20261115123726-d7cecfcc3345
+	github.com/gamesguru/gomatrixserverlib v0.0.0-20261117030336-0fb5ab84b4bc
+	github.com/gamesguru/rezzy/rezzy-ffi v0.0.0
 	github.com/gen2brain/webp v0.6.4
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/go-chi/chi/v5 v5.3.2
@@ -101,7 +102,6 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
-	github.com/gamesguru/rezzy/rezzy-ffi v0.0.0
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect

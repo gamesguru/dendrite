@@ -516,6 +516,24 @@ func mustCreateEvent(t *testing.T, ev fledglingEvent) (result *types.HeaderedEve
 	return h
 }
 
+// assertRedactedBecauseShape checks that unsigned.redacted_because is a client
+// event, not the internal *types.Event wrapper. The wrapper nests the redaction
+// under "PDU" and has no top-level content, which makes clients that render
+// redacted_because.content.reason crash. It also checks that the field matches
+// the redaction that produced it.
+func assertRedactedBecauseShape(t *testing.T, event, redaction gomatrixserverlib.PDU) {
+	t.Helper()
+	redactedBecause := gjson.GetBytes(event.Unsigned(), "redacted_because")
+	require.True(t, redactedBecause.IsObject(), "redacted_because must be an object")
+	assert.True(t, redactedBecause.Get("content").IsObject(), "redacted_because must have a content object")
+	assert.False(t, redactedBecause.Get("PDU").Exists(), "redacted_because must not contain the internal PDU wrapper")
+	assert.Equal(t, redaction.EventID(), redactedBecause.Get("event_id").String(), "redacted_because must carry the redaction event ID")
+	assert.Equal(t, redaction.EventID(), gjson.GetBytes(event.Unsigned(), "redacted_by").String())
+	if reason := gjson.GetBytes(redaction.Content(), "reason"); reason.Exists() {
+		assert.Equal(t, reason.String(), redactedBecause.Get("content.reason").String())
+	}
+}
+
 func TestRedaction(t *testing.T) {
 	alice := test.NewUser(t)
 	bob := test.NewUser(t)
@@ -540,6 +558,7 @@ func TestRedaction(t *testing.T) {
 					Redacts:    redactedEvent.EventID(),
 					Depth:      redactedEvent.Depth() + 1,
 					PrevEvents: []any{redactedEvent.EventID()},
+					Content:    map[string]any{"reason": "spam"},
 				})
 				room.InsertEvent(t, builderEv)
 			},
@@ -735,6 +754,7 @@ func TestRedaction(t *testing.T) {
 					assert.NoError(t, err)
 					if redactedEvent != nil {
 						assert.Equal(t, ev.Redacts(), redactedEvent.EventID())
+						assertRedactedBecauseShape(t, redactedEvent, ev.PDU)
 					}
 					if ev.Type() == spec.MRoomRedaction {
 						nids, err := db.EventNIDs(ctx, []string{ev.Redacts()})
@@ -743,6 +763,11 @@ func TestRedaction(t *testing.T) {
 						assert.NoError(t, err)
 						assert.Equal(t, 1, len(evs))
 						assert.Equal(t, tc.wantRedacted, evs[0].Redacted())
+						if tc.wantRedacted {
+							// The in-memory event above is not proof that the
+							// client-shaped JSON was persisted; reload it.
+							assertRedactedBecauseShape(t, evs[0], ev.PDU)
+						}
 					}
 				}
 			})
@@ -873,6 +898,7 @@ func TestRedactionNoPowerLevels(t *testing.T) {
 					assert.NoError(t, err)
 					if redactedEvent != nil {
 						assert.Equal(t, ev.Redacts(), redactedEvent.EventID())
+						assertRedactedBecauseShape(t, redactedEvent, ev.PDU)
 					}
 					if ev.Type() == spec.MRoomRedaction {
 						nids, err := db.EventNIDs(ctx, []string{ev.Redacts()})
@@ -881,6 +907,11 @@ func TestRedactionNoPowerLevels(t *testing.T) {
 						assert.NoError(t, err)
 						assert.Equal(t, 1, len(evs))
 						assert.Equal(t, tc.wantRedacted, evs[0].Redacted())
+						if tc.wantRedacted {
+							// The in-memory event above is not proof that the
+							// client-shaped JSON was persisted; reload it.
+							assertRedactedBecauseShape(t, evs[0], ev.PDU)
+						}
 					}
 				}
 			})

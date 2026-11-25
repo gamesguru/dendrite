@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/spec"
@@ -120,18 +121,43 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 		return fmt.Errorf("backfillViaFederation: missing room info for room %s", req.RoomID)
 	}
 	requester := newBackfillRequester(r.DB, r.FSAPI, r.Querier, req.VirtualHost, r.IsLocalServerName, req.BackwardsExtremities, r.PreferServers, info.RoomVersion)
+	requester.roomNID = info.RoomNID
 	// Request 100 items regardless of what the query asks for.
 	// We don't want to go much higher than this.
 	// We can't honor exactly the limit as some sytests rely on requesting more for tests to pass
 	// (so we don't need to hit /state_ids which the test has no listener for)
 	// Specifically the test "Outbound federation can backfill events"
 	fromEventIDs := prioritiseBackfillFromEventIDs(ctx, req.RoomID, req.PrevEventIDs(), requester.ServersAtEvent)
+	userIDForSender := func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
+		return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
+	}
+	phaseStarted := time.Now()
 	events, err := gomatrixserverlib.RequestBackfill(
 		ctx, req.VirtualHost, requester,
-		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, maxBackfillEvents, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
-			return r.Querier.QueryUserIDForSender(ctx, roomID, senderID)
-		},
+		r.KeyRing, req.RoomID, info.RoomVersion, fromEventIDs, maxBackfillEvents, userIDForSender,
 	)
+	logrus.WithFields(logrus.Fields{
+		"room_id":  req.RoomID,
+		"events":   len(events),
+		"duration": time.Since(phaseStarted),
+	}).Info("Backfill federation fetch and verification finished")
+
+	// RequestBackfill keeps events that only failed signature verification but
+	// does not return the per-event outcome. Re-check the signatures so those
+	// events cannot be used to recover before-state or apply a redaction. They
+	// are still stored and returned, as before, so the backfill cursor can move
+	// past them.
+	failedSignatures := make(map[string]struct{})
+	for i, sigErr := range gomatrixserverlib.VerifyAllEventSignatures(ctx, events, r.KeyRing, userIDForSender) {
+		if sigErr == nil {
+			continue
+		}
+		failedSignatures[events[i].EventID()] = struct{}{}
+		logrus.WithError(sigErr).WithFields(logrus.Fields{
+			"room_id":  req.RoomID,
+			"event_id": events[i].EventID(),
+		}).Warn("backfillViaFederation: event failed signature verification; not using it for before-state or redactions")
+	}
 	returned := make(map[string]struct{}, len(events))
 	for _, ev := range events {
 		returned[ev.EventID()] = struct{}{}
@@ -181,7 +207,14 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	logrus.WithError(err).WithField("room_id", req.RoomID).Infof("backfilled %d events", len(events))
 
 	// persist these new events - auth checks have already been done
+	phaseStarted = time.Now()
 	roomNID, storedEvents := persistEvents(ctx, r.DB, r.Querier, events)
+	logrus.WithFields(logrus.Fields{
+		"room_id":       req.RoomID,
+		"events":        len(events),
+		"stored_events": len(storedEvents),
+		"duration":      time.Since(phaseStarted),
+	}).Info("Backfill event persistence finished")
 
 	// The history visibility of a backfilled event comes from the state before
 	// that event, not from the backfill anchor: one batch can cross a
@@ -197,18 +230,72 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	// are left out of the response, so sync does not store a redaction that
 	// never redacted its target; a retry fetches and validates them again.
 	unvalidatedRedactions := make(map[string]struct{})
+	phaseStarted = time.Now()
 	markUnvalidated := func(ev gomatrixserverlib.PDU) {
-		if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
-			unvalidatedRedactions[ev.EventID()] = struct{}{}
-		}
+		markUnvalidatedBackfillRedaction(ev, unvalidatedRedactions)
 	}
 	for _, ev := range storedEvents {
+		_, failedSignature := failedSignatures[ev.EventID()]
+		if failedSignature {
+			// Keep the event stored and in the response so the backfill cursor
+			// can advance, but never recover before-state or apply redactions
+			// from an event that failed signature verification. A redaction
+			// must also stay out of the response, or sync would store a
+			// redaction the roomserver never applied to its target.
+			logrus.WithFields(logrus.Fields{
+				"room_id":  req.RoomID,
+				"event_id": ev.EventID(),
+			}).Warn("backfillViaFederation: skipping state and redaction processing for event that failed signature verification")
+			markUnvalidated(ev.PDU)
+			continue
+		}
+		// RequestBackfill skips authorization when the initial signature check
+		// fails. Do not infer that authorization ran from cached before-state:
+		// resolving another event can populate this event's state entry too.
+		// Re-run both authorization checks before using any returned event.
+		if authErr := verifyBackfillEventAuthorization(ctx, ev.PDU, requester.ProvideEvents, requester, userIDForSender, func() {
+			delete(requester.eventIDToBeforeStateIDs, ev.EventID())
+		}); authErr != nil {
+			logrus.WithError(authErr).WithFields(logrus.Fields{
+				"room_id":  req.RoomID,
+				"event_id": ev.EventID(),
+			}).Warn("backfillViaFederation: skipping state and redaction processing for event that failed authorization")
+			markUnvalidated(ev.PDU)
+			continue
+		}
 		// now add state for these events
 		stateIDs, ok := requester.eventIDToBeforeStateIDs[ev.EventID()]
 		if !ok {
-			// this should be impossible as all events returned must have pass Step 5 of the PDU checks
-			// which requires a list of state IDs.
-			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to find state IDs for event which passed auth checks")
+			stateIDsStarted := time.Now()
+			logrus.WithFields(logrus.Fields{
+				"room_id":    req.RoomID,
+				"event_id":   ev.EventID(),
+				"event_type": ev.Type(),
+				"prev_count": len(ev.PrevEventIDs()),
+			}).Info("Backfill event has no state IDs from federation verification; resolving")
+			// Resolve the missing before-state instead of dropping the event;
+			// dropping it leaves no snapshot, so every later /messages page
+			// fetches and discards the same event again.
+			if _, resolveErr := requester.StateIDsBeforeEvent(ctx, ev.PDU); resolveErr != nil {
+				logrus.WithError(resolveErr).WithFields(logrus.Fields{
+					"room_id":  req.RoomID,
+					"event_id": ev.EventID(),
+					"duration": time.Since(stateIDsStarted),
+				}).Error("backfillViaFederation: failed to resolve state IDs for stored backfill event")
+				markUnvalidated(ev.PDU)
+				continue
+			}
+			stateIDs, ok = requester.eventIDToBeforeStateIDs[ev.EventID()]
+			logrus.WithFields(logrus.Fields{
+				"room_id":   req.RoomID,
+				"event_id":  ev.EventID(),
+				"resolved":  ok,
+				"state_ids": len(stateIDs),
+				"duration":  time.Since(stateIDsStarted),
+			}).Info("Backfill missing state IDs resolution finished")
+		}
+		if !ok {
+			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("backfillViaFederation: failed to find state IDs for stored backfill event")
 			markUnvalidated(ev.PDU)
 			continue
 		}
@@ -258,12 +345,17 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 			}
 		}
 	}
+	logrus.WithFields(logrus.Fields{
+		"room_id":  req.RoomID,
+		"events":   len(storedEvents),
+		"duration": time.Since(phaseStarted),
+	}).Info("Backfill before-state persistence finished")
 
 	// TODO: update backwards extremities, as that should be moved from syncapi to roomserver at some point.
 
 	res.Events = make([]*types.HeaderedEvent, 0, len(events))
 	for i := range events {
-		if _, skip := unvalidatedRedactions[events[i].EventID()]; skip {
+		if !includeBackfillEventInResponse(events[i], unvalidatedRedactions) {
 			continue
 		}
 		if redacted, ok := redactedInBatch[events[i].EventID()]; ok {
@@ -301,6 +393,42 @@ func (r *Backfiller) backfillViaFederation(ctx context.Context, req *api.Perform
 	}
 	res.HistoryVisibility = requester.historyVisiblity
 	return nil
+}
+
+func markUnvalidatedBackfillRedaction(ev gomatrixserverlib.PDU, unvalidated map[string]struct{}) {
+	if ev.Type() == spec.MRoomRedaction && ev.StateKey() == nil {
+		unvalidated[ev.EventID()] = struct{}{}
+	}
+}
+
+func verifyBackfillEventAuthorization(
+	ctx context.Context,
+	ev gomatrixserverlib.PDU,
+	provideEvents gomatrixserverlib.EventProvider,
+	stateProvider gomatrixserverlib.StateProvider,
+	userIDForSender spec.UserIDForSender,
+	onFailure func(),
+) error {
+	if err := gomatrixserverlib.VerifyEventAuthChain(ctx, ev, provideEvents, userIDForSender); err != nil {
+		if onFailure != nil {
+			onFailure()
+		}
+		return err
+	}
+	if err := gomatrixserverlib.VerifyAuthRulesAtState(ctx, stateProvider, ev, true, userIDForSender); err != nil {
+		// A failed event may have had its state populated while resolving a
+		// different event. Never let a child treat that cached state as trusted.
+		if onFailure != nil {
+			onFailure()
+		}
+		return err
+	}
+	return nil
+}
+
+func includeBackfillEventInResponse(ev gomatrixserverlib.PDU, unvalidated map[string]struct{}) bool {
+	_, skip := unvalidated[ev.EventID()]
+	return !skip
 }
 
 // historyVisibilityBeforeEvent returns the history visibility in force in the
@@ -489,6 +617,13 @@ type backfillRequester struct {
 	eventIDMap              map[string]gomatrixserverlib.PDU
 	historyVisiblity        gomatrixserverlib.HistoryVisibility
 	roomVersion             gomatrixserverlib.RoomVersion
+
+	// roomNID scopes the partial-state check behind local state reuse. Zero
+	// disables the check, which is only the case for requesters a test builds
+	// directly.
+	roomNID             types.RoomNID
+	partialStateChecked bool
+	partialState        bool
 }
 
 func newBackfillRequester(
@@ -518,9 +653,29 @@ func newBackfillRequester(
 	}
 }
 
-func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent gomatrixserverlib.PDU) ([]string, error) {
+func (b *backfillRequester) StateIDsBeforeEvent(
+	ctx context.Context, targetEvent gomatrixserverlib.PDU,
+) ([]string, error) {
+	return b.stateIDsBeforeEvent(ctx, targetEvent, 0)
+}
+
+// maxStateChainDepth bounds local ancestor resolution. A parent chain longer
+// than this falls back to federation rather than recursing without limit.
+const maxStateChainDepth = 128
+
+func (b *backfillRequester) stateIDsBeforeEvent(
+	ctx context.Context, targetEvent gomatrixserverlib.PDU, depth int,
+) ([]string, error) {
 	b.eventIDMap[targetEvent.EventID()] = targetEvent
 	if ids, ok := b.eventIDToBeforeStateIDs[targetEvent.EventID()]; ok {
+		return ids, nil
+	}
+	// Backfill requests are paginated, and each page gets a new requester. If
+	// this event was resolved and stored by an earlier page, its before-state
+	// snapshot is already authoritative locally; do not ask federation for it
+	// again.
+	if ids, ok, _ := b.stateIDsFromStoredEvent(ctx, targetEvent); ok {
+		b.eventIDToBeforeStateIDs[targetEvent.EventID()] = ids
 		return ids, nil
 	}
 	if len(targetEvent.PrevEventIDs()) == 0 && targetEvent.Type() == "m.room.create" && targetEvent.StateKeyEquals("") {
@@ -531,15 +686,64 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 	// if we have exactly 1 prev event and we know the state of the room at that prev event, then just roll forward the prev event.
 	// Else, we have to hit /state_ids because either we don't know the state at all at this event (new backwards extremity) or
 	// we don't know the result of state res to merge forks (2 or more prev_events)
-	if len(targetEvent.PrevEventIDs()) == 1 {
+	//
+	// reason records why federation is needed, for the log: it shows which of
+	// these cases dominate, so that the right ones are computed locally.
+	var reason string
+	switch len(targetEvent.PrevEventIDs()) {
+	case 0:
+		reason = "no-prev-events"
+	case 1:
 		prevEventID := targetEvent.PrevEventIDs()[0]
+		// The parent may come from an earlier page or an earlier request rather
+		// than this batch. Both its event and its before-state are stored then,
+		// and are as trustworthy as the stored state reused for the event itself.
 		prevEvent, ok := b.eventIDMap[prevEventID]
 		if !ok {
+			b.hydrateStateEvents(ctx, []string{prevEventID})
+			prevEvent, ok = b.eventIDMap[prevEventID]
+		}
+		if !ok {
+			reason = "unknown-parent"
 			goto FederationHit
 		}
 		prevEventStateIDs, ok := b.eventIDToBeforeStateIDs[prevEventID]
+		rejectedSnapshot := false
 		if !ok {
+			if prevEventStateIDs, ok, rejectedSnapshot = b.stateIDsFromStoredEvent(ctx, prevEvent); ok {
+				b.eventIDToBeforeStateIDs[prevEventID] = prevEventStateIDs
+			}
+		}
+		if !ok && prevEvent.Type() == spec.MRoomCreate && len(prevEvent.PrevEventIDs()) == 0 {
+			// The create event is the root of the DAG: the state before it is
+			// empty by definition, and it has no stored before-state to read.
+			prevEventStateIDs, ok = []string{}, true
+		}
+		if !ok && rejectedSnapshot && depth < maxStateChainDepth {
+			// The parent's stored snapshot may itself be one of the shared
+			// snapshots the guard rejected. Resolve the parent from its own
+			// parent instead of asking federation for every event in a chain
+			// of bad snapshots.
+			if ancestorStateIDs, ancestorErr := b.stateIDsBeforeEvent(ctx, prevEvent, depth+1); ancestorErr == nil {
+				prevEventStateIDs = ancestorStateIDs
+				ok = true
+				b.eventIDToBeforeStateIDs[prevEventID] = ancestorStateIDs
+			}
+		}
+		if !ok {
+			if b.localStateUsable(ctx) {
+				reason = "parent-has-no-state"
+			} else {
+				reason = "local-state-unusable"
+			}
 			goto FederationHit
+		}
+		if prevEvent.StateKey() != nil {
+			// Rolling a state event forward has to find the entry it replaces,
+			// which needs the type and state key of every ID in the before-state.
+			// Most of those events are older than this batch but already stored,
+			// so read them locally instead of asking a remote server.
+			b.hydrateStateEvents(ctx, prevEventStateIDs)
 		}
 		newStateIDs := b.calculateNewStateIDs(targetEvent, prevEvent, prevEventStateIDs)
 		if newStateIDs != nil {
@@ -547,11 +751,18 @@ func (b *backfillRequester) StateIDsBeforeEvent(ctx context.Context, targetEvent
 			return newStateIDs, nil
 		}
 		// else we failed to calculate the new state, so fallthrough
+		reason = "state-event-missing-locally"
+	default:
+		reason = "fork"
 	}
 
 FederationHit:
 	var lastErr error
-	logrus.WithField("event_id", targetEvent.EventID()).Info("Requesting /state_ids at event")
+	logrus.WithFields(logrus.Fields{
+		"event_id": targetEvent.EventID(),
+		"reason":   reason,
+		"prevs":    len(targetEvent.PrevEventIDs()),
+	}).Info("Requesting /state_ids at event")
 	for _, srv := range b.servers { // hit any valid server
 		c := gomatrixserverlib.FederatedStateProvider{
 			FedClient:          b.fsAPI,
@@ -573,6 +784,147 @@ FederationHit:
 		return res, nil
 	}
 	return nil, lastErr
+}
+
+// stateIDsFromStoredEvent returns an event's persisted before-state. A false
+// result means the event has no usable local snapshot and federation may be
+// needed. When the snapshot exists but omits an auth event, rejected is true:
+// the caller can then resolve the parent locally instead of asking federation.
+// State snapshots are persisted as HAMTs, with state blocks retained as a
+// fallback for databases that predate HAMT persistence.
+func (b *backfillRequester) stateIDsFromStoredEvent(
+	ctx context.Context, event gomatrixserverlib.PDU,
+) (ids []string, ok bool, rejected bool) {
+	if !b.localStateUsable(ctx) {
+		return nil, false, false
+	}
+	states, err := b.db.StateAtEventIDs(ctx, []string{event.EventID()})
+	if err != nil || len(states) != 1 || states[0].IsRejected || states[0].BeforeStateSnapshotNID == 0 {
+		return nil, false, false
+	}
+
+	// LoadStateAtSnapshot reads the HAMT, falls back to the legacy state
+	// blocks, and keeps only the newest entry for each state key.
+	resolver := state.NewStateResolution(b.db, nil, b.querier)
+	entries, err := resolver.LoadStateAtSnapshot(ctx, states[0].BeforeStateSnapshotNID)
+	if err != nil {
+		return nil, false, false
+	}
+	// The room may have entered partial state while the snapshot was loading.
+	// Re-read the durable flags before trusting entries from the snapshot.
+	if !b.recheckLocalStateUsable(ctx) {
+		return nil, false, false
+	}
+
+	eventNIDs := make([]types.EventNID, 0, len(entries))
+	for _, entry := range entries {
+		eventNIDs = append(eventNIDs, entry.EventNID)
+	}
+	eventIDs, err := b.db.EventIDs(ctx, eventNIDs)
+	if err != nil {
+		return nil, false, false
+	}
+	ids = make([]string, 0, len(entries))
+	for _, entry := range entries {
+		id, ok := eventIDs[entry.EventNID]
+		if !ok {
+			return nil, false, false
+		}
+		ids = append(ids, id)
+	}
+	// A valid before-state must contain every event the target cites for auth.
+	// A snapshot shared with the parent (for example one written for a join and
+	// reused for the state events before it) omits them, which makes the auth
+	// check skip the sender's membership and drop a valid event. Do not roll
+	// forward from or reuse such a snapshot; the caller can compute the state
+	// from the parent instead.
+	if missing := missingStateIDs(ids, event.AuthEventIDs()); len(missing) > 0 {
+		logrus.WithFields(logrus.Fields{
+			"event_id":        event.EventID(),
+			"snapshot_nid":    states[0].BeforeStateSnapshotNID,
+			"missing_auth":    len(missing),
+			"missing_auth_id": missing[0],
+		}).Info("Ignoring stored before-state that omits an auth event")
+		return nil, false, true
+	}
+	return ids, true, false
+}
+
+// missingStateIDs returns the IDs that are not present in stateIDs.
+func missingStateIDs(stateIDs, wanted []string) []string {
+	if len(wanted) == 0 {
+		return nil
+	}
+	present := make(map[string]struct{}, len(stateIDs))
+	for _, id := range stateIDs {
+		present[id] = struct{}{}
+	}
+	var missing []string
+	for _, id := range wanted {
+		if _, ok := present[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+// localStateUsable reports whether a stored before-state snapshot may be
+// reused for this room. A snapshot taken while the room had partial state
+// (MSC3706) can be incomplete, so the durable marker keeps backfill from using
+// it after the partial flag is cleared, including when a join is abandoned.
+// The check is per requester because a requester is always scoped to one room.
+func (b *backfillRequester) localStateUsable(ctx context.Context) bool {
+	if b.partialStateChecked {
+		return !b.partialState
+	}
+	return b.recheckLocalStateUsable(ctx)
+}
+
+// recheckLocalStateUsable bypasses the requester-lifetime cache and refreshes
+// it. Stored snapshots must still be complete at the point they are consumed.
+// Being unable to prove the snapshot complete is enough to distrust it;
+// federation is the safe answer.
+func (b *backfillRequester) recheckLocalStateUsable(ctx context.Context) bool {
+	b.partialStateChecked = true
+	if b.roomNID == 0 {
+		// Only requesters built directly by tests leave this unset.
+		b.partialState = false
+		return true
+	}
+	partial, err := b.db.IsRoomPartialState(ctx, b.roomNID)
+	if err != nil || partial {
+		b.partialState = true
+		return false
+	}
+	incomplete, err := b.db.StateSnapshotsIncomplete(ctx, b.roomNID)
+	if err != nil {
+		incomplete = true
+	}
+	b.partialState = incomplete
+	return !incomplete
+}
+
+// hydrateStateEvents loads the events for ids that are not already known to
+// this requester from the local database, so state can be rolled forward without
+// a /state_ids request. IDs that are not stored are left out and the caller
+// falls back to federation for them. Failures are not fatal for the same reason.
+func (b *backfillRequester) hydrateStateEvents(ctx context.Context, ids []string) {
+	var missing []string
+	for _, id := range ids {
+		if _, ok := b.eventIDMap[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	events, err := b.ProvideEventsContext(ctx, b.roomVersion, missing)
+	if err != nil {
+		return
+	}
+	for _, ev := range events {
+		b.eventIDMap[ev.EventID()] = ev
+	}
 }
 
 func (b *backfillRequester) calculateNewStateIDs(targetEvent, prevEvent gomatrixserverlib.PDU, prevEventStateIDs []string) []string {
@@ -631,6 +983,7 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 				result[events[i].EventID()] = events[i]
 				b.eventIDMap[events[i].EventID()] = events[i]
 			}
+			b.aliasCitedAuthEvents(ctx, event, result)
 			return result, nil
 		}
 	}
@@ -652,9 +1005,54 @@ func (b *backfillRequester) StateBeforeEvent(ctx context.Context, roomVer gomatr
 		for eventID, ev := range result {
 			b.eventIDMap[eventID] = ev
 		}
+		b.aliasCitedAuthEvents(ctx, event, result)
 		return result, nil
 	}
 	return nil, lastErr
+}
+
+// aliasCitedAuthEvents lets the auth check see the state's own version of an
+// auth event the target cites by a different ID.
+//
+// The gomatrixserverlib auth check uses only the cited auth_events it can
+// find by ID in the before-state map, so a cited event that is not itself in
+// that state is silently skipped. When the sender has since re-joined (or
+// changed profile), the state holds a newer member event for the same key and
+// the sender is judged "not in room", dropping a valid event from backfill.
+// Authorization at state is meant to use the state's event for each
+// (type, state_key); this maps each cited ID that is missing from the state to
+// the state's event for the same tuple. The cited event is used only to learn
+// the tuple, and never replaces what the state says. A cited event that is
+// unknown here, or whose tuple is absent from the state, stays unmapped.
+func (b *backfillRequester) aliasCitedAuthEvents(
+	ctx context.Context, event gomatrixserverlib.PDU, state map[string]gomatrixserverlib.PDU,
+) {
+	var missing []string
+	for _, id := range event.AuthEventIDs() {
+		if _, ok := state[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	b.hydrateStateEvents(ctx, missing)
+	type tuple struct{ typ, key string }
+	byTuple := make(map[tuple]gomatrixserverlib.PDU, len(state))
+	for _, ev := range state {
+		if ev != nil && ev.StateKey() != nil {
+			byTuple[tuple{ev.Type(), *ev.StateKey()}] = ev
+		}
+	}
+	for _, id := range missing {
+		cited, ok := b.eventIDMap[id]
+		if !ok || cited == nil || cited.StateKey() == nil {
+			continue
+		}
+		if inState, ok := byTuple[tuple{cited.Type(), *cited.StateKey()}]; ok {
+			state[id] = inState
+		}
+	}
 }
 
 // ServersAtEvent is called when trying to determine which server to request from.
@@ -886,7 +1284,12 @@ func persistEvents(ctx context.Context, db storage.Database, querier api.QuerySe
 			// The event is already stored. Skipping it here would leave it
 			// without a before-state snapshot (set by the caller for stored
 			// events only), so every later backfill would refetch it. Keep it.
-			logrus.WithError(err).WithField("event_id", ev.EventID()).Error("Failed to redact event")
+			entry := logrus.WithError(err).WithField("event_id", ev.EventID())
+			if errors.Is(err, types.ErrNoStateSnapshot) {
+				entry.Debug("Redaction deferred until the event has a before-state")
+			} else {
+				entry.Error("Failed to redact event")
+			}
 			redactedEvent = nil
 		}
 		// If storing this event results in it being redacted, then do so.

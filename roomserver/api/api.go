@@ -196,8 +196,12 @@ type PartialStateAwaiterAPI interface {
 	// GetPartialStateRoomIDs returns the room IDs of all rooms currently in partial state.
 	GetPartialStateRoomIDs(ctx context.Context) ([]string, error)
 	// AwaitRoomFullState blocks until the room has full state or the context ends.
-	// A room that is not partial returns at once.
+	// It also waits for syncapi to store the resynced state. A room that is not
+	// partial returns at once unless syncapi is still catching up.
 	AwaitRoomFullState(ctx context.Context, roomID string) error
+	// AwaitRoomResyncComplete blocks until the roomserver has finished populating
+	// its state. It does not wait for syncapi storage to catch up.
+	AwaitRoomResyncComplete(ctx context.Context, roomID string) error
 	// AckUnPartialStated tells the roomserver that the sync API has taken in the state
 	// of a room that finished its resync, which releases the requests waiting for it.
 	AckUnPartialStated(roomID string)
@@ -312,6 +316,12 @@ type ClientRoomserverAPI interface {
 	// feeds it through the normal input path as if it had arrived via /send.
 	// The outcome is read back from storage: "accepted", "rejected" or "not_stored".
 	PerformAdminFetchEvent(ctx context.Context, roomID, eventID string, serverName spec.ServerName) (outcome string, err error)
+	// PerformAdminRefetchEvents replaces stored hash-pruned copies using complete
+	// copies fetched from candidate servers. Candidates can include operator
+	// supplied servers, historical residents, the sender and room domains, and
+	// currently joined hosts. Results are keyed by event ID; one failure does not
+	// stop the rest.
+	PerformAdminRefetchEvents(ctx context.Context, events []AdminRefetchEvent, dryRun bool) map[string]string
 	// PerformAdminImportEvents ingests operator-supplied PDUs into roomID as new
 	// events, oldest depth first, after verifying their signatures. origin is
 	// asked for any prev or auth events the batch lacks. Results are per input
@@ -496,4 +506,16 @@ type AdminImportResult struct {
 	Line    int    `json:"line"`
 	EventID string `json:"event_id,omitempty"`
 	Outcome string `json:"outcome"`
+}
+
+// AdminRefetchEvent names one event whose stored copy should be replaced by a
+// complete one. Server is an optional explicit first candidate; the sender's
+// homeserver is one of the fallback candidates.
+type AdminRefetchEvent struct {
+	RoomID  string          `json:"room_id"`
+	EventID string          `json:"event_id"`
+	Server  spec.ServerName `json:"server,omitempty"`
+	// Servers are tried in order after Server and before the sender's homeserver,
+	// historical residents, and other room servers.
+	Servers []spec.ServerName `json:"servers,omitempty"`
 }

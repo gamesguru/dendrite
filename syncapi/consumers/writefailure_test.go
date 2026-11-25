@@ -3,6 +3,7 @@ package consumers
 import (
 	"context"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/setup/jetstream"
 	"codefloe.com/pat-s/zendrite/syncapi/storage"
+	"codefloe.com/pat-s/zendrite/syncapi/storage/tables"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 	"codefloe.com/pat-s/zendrite/test"
 )
@@ -26,6 +28,19 @@ import (
 type unavailableDatabase struct {
 	storage.Database
 	writeCalls *atomic.Int32
+}
+
+type classificationFailureDatabase struct {
+	storage.Database
+	writeCalls *atomic.Int32
+	err        error
+}
+
+func (d classificationFailureDatabase) WriteOldEvent(context.Context, *rstypes.HeaderedEvent, gomatrixserverlib.HistoryVisibility, tables.EventSyncClassifier, ...string) (types.StreamPosition, error) {
+	if d.writeCalls != nil {
+		d.writeCalls.Add(1)
+	}
+	return 0, fmt.Errorf("%w: %w", tables.ErrEventSyncClassification, d.err)
 }
 
 // errDatabaseUnavailable is transient: the connection failed, not the write.
@@ -78,6 +93,34 @@ func TestWriteFailureStopsOnShutdown(t *testing.T) {
 		require.ErrorIs(t, s.onNewRoomEvent(ctx, api.OutputNewRoomEvent{Event: ev}), errDatabaseUnavailable)
 	})
 	require.Positive(t, writeCalls.Load(), "the test must reach WriteEvent")
+}
+
+// A failed old-state classification must leave the roomserver output message
+// unacknowledged and must not persist it with a guessed exclusion marker.
+func TestOldEventClassificationFailureIsRedelivered(t *testing.T) {
+	alice := test.NewUser(t)
+	room := test.NewRoom(t, alice)
+	ev := room.CreateAndInsert(t, alice, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(alice.ID))
+	require.NoError(t, ev.SetUnsignedField("prev_content", map[string]any{"membership": spec.Leave}))
+	data, err := json.Marshal(api.OutputEvent{
+		Type: api.OutputTypeOldRoomEvent,
+		OldRoomEvent: &api.OutputOldRoomEvent{
+			Event:             ev,
+			HistoryVisibility: gomatrixserverlib.HistoryVisibilityShared,
+		},
+	})
+	require.NoError(t, err)
+
+	classificationErr := fmt.Errorf("database temporarily unavailable")
+	writeCalls := &atomic.Int32{}
+	s := &OutputRoomEventConsumer{
+		ctx:   t.Context(),
+		db:    classificationFailureDatabase{writeCalls: writeCalls, err: classificationErr},
+		rsAPI: senderResolver{user: alice},
+	}
+	msg := &nats.Msg{Subject: "OutputRoomEvent", Data: data}
+	require.False(t, s.onMessage(t.Context(), []*nats.Msg{msg}), "classification failure must NAK the message")
+	require.Positive(t, writeCalls.Load(), "the write path must report the classification failure")
 }
 
 // TestReceiptWriteFailureIsRedelivered checks that a receipt the database

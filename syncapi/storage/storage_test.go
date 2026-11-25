@@ -73,6 +73,176 @@ func TestWriteEvents(t *testing.T) {
 	})
 }
 
+func TestSelectRoomEventsAfterIDIncludesBackfilledEvents(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+		var positions []types.StreamPosition
+		for i, ev := range room.Events()[:3] {
+			pos, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, i == 1, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+			positions = append(positions, pos)
+		}
+		first, err := db.SelectRoomEventsAfterID(ctx, room.ID, 0, 2)
+		require.NoError(t, err)
+		require.Len(t, first, 2)
+		require.Equal(t, positions[0], first[0].StreamPosition)
+		require.Equal(t, positions[1], first[1].StreamPosition)
+		require.True(t, first[1].ExcludeFromSync)
+		second, err := db.SelectRoomEventsAfterID(ctx, room.ID, first[1].StreamPosition, 2)
+		require.NoError(t, err)
+		require.Len(t, second, 1)
+		require.Equal(t, positions[2], second[0].StreamPosition)
+	})
+}
+
+func TestUpdateUnredactedEventJSON(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		db, closeDB := MustCreateDatabase(t, dbType)
+		defer closeDB()
+
+		// A row that becomes redacted after it was read must not be rewritten.
+		redacted := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "redacted"})
+		_, err := db.WriteEvent(ctx, redacted, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		originalJSON, err := redacted.MarshalJSON()
+		require.NoError(t, err)
+		var stale rstypes.HeaderedEvent
+		require.NoError(t, stale.UnmarshalJSON(originalJSON))
+		require.NoError(t, redacted.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, db.UpdateEventJSON(ctx, redacted.EventID(), redacted))
+		require.NoError(t, stale.SetUnsignedField("age", 1))
+		// Expect the JSON that is stored now, so only the redaction guard can
+		// block the write.
+		redactedJSON, err := redacted.MarshalJSON()
+		require.NoError(t, err)
+		require.NotEqual(t, originalJSON, redactedJSON)
+
+		written, err := db.UpdateUnredactedEventJSON(ctx, stale.EventID(), redactedJSON, &stale)
+		require.NoError(t, err)
+		require.False(t, written, "a redacted row must not be rewritten")
+
+		stored, err := db.Events(ctx, []string{redacted.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.True(t, gjson.GetBytes(stored[0].Unsigned(), "redacted_because").Exists())
+		require.False(t, gjson.GetBytes(stored[0].Unsigned(), "age").Exists())
+
+		// An unredacted row is written normally.
+		live := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "live"})
+		_, err = db.WriteEvent(ctx, live, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		liveJSON, err := live.MarshalJSON()
+		require.NoError(t, err)
+		require.NoError(t, live.SetUnsignedField("age", 2))
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), liveJSON, live)
+		require.NoError(t, err)
+		require.True(t, written)
+
+		stored, err = db.Events(ctx, []string{live.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(2), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// A re-marshaled expectation can differ from the stored text in
+		// whitespace while describing the same JSON value.
+		reformatted, err := json.MarshalIndent(stored[0], "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, live.SetUnsignedField("age", 7))
+		written, err = db.UpdateUnredactedEventJSON(ctx, live.EventID(), reformatted, live)
+		require.NoError(t, err)
+		require.True(t, written, "a semantically equal expectation must still match")
+		stored, err = db.Events(ctx, []string{live.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(7), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// A redacted_because key in the content is not a redaction and must not
+		// block the write.
+		contentKey := room.CreateEvent(t, alice, "com.example.custom", map[string]any{
+			"redacted_because": "a value in the content",
+		})
+		_, err = db.WriteEvent(ctx, contentKey, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		contentKeyJSON, err := contentKey.MarshalJSON()
+		require.NoError(t, err)
+		require.NoError(t, contentKey.SetUnsignedField("age", 3))
+		written, err = db.UpdateUnredactedEventJSON(ctx, contentKey.EventID(), contentKeyJSON, contentKey)
+		require.NoError(t, err)
+		require.True(t, written)
+
+		stored, err = db.Events(ctx, []string{contentKey.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.Equal(t, int64(3), gjson.GetBytes(stored[0].Unsigned(), "age").Int())
+
+		// Valid content can contain a NUL escape, which jsonb
+		// rejects. The guard must still match, and still protect.
+		nul := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "a\x00b"})
+		_, err = db.WriteEvent(ctx, nul, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		nulJSON, err := nul.MarshalJSON()
+		require.NoError(t, err)
+		var staleNul rstypes.HeaderedEvent
+		require.NoError(t, staleNul.UnmarshalJSON(nulJSON))
+		require.NoError(t, nul.SetUnsignedField("age", 5))
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), nulJSON, nul)
+		require.NoError(t, err, "a NUL in the stored JSON must not fail the guard")
+		require.True(t, written)
+		// The stored copy changed, so the old expectation no longer matches.
+		require.NoError(t, staleNul.SetUnsignedField("age", 6))
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), nulJSON, &staleNul)
+		require.NoError(t, err)
+		require.False(t, written, "a stale expectation must not match a NUL-bearing row")
+		// A redacted NUL-bearing row is still refused.
+		require.NoError(t, nul.SetUnsignedField("redacted_because", map[string]any{"type": "m.room.redaction"}))
+		require.NoError(t, db.UpdateEventJSON(ctx, nul.EventID(), nul))
+		redactedNulJSON, err := nul.MarshalJSON()
+		require.NoError(t, err)
+		written, err = db.UpdateUnredactedEventJSON(ctx, nul.EventID(), redactedNulJSON, &staleNul)
+		require.NoError(t, err)
+		require.False(t, written, "a redacted NUL-bearing row must not be rewritten")
+
+		// Literal "\\u0000" text is valid JSON (an escaped backslash), so a
+		// reformatted expectation must still match semantically.
+		literal := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "a\\u0000b"})
+		_, err = db.WriteEvent(ctx, literal, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		literalJSON, err := literal.MarshalJSON()
+		require.NoError(t, err)
+		var indented bytes.Buffer
+		require.NoError(t, json.Indent(&indented, literalJSON, "", "  "))
+		require.NoError(t, literal.SetUnsignedField("age", 7))
+		written, err = db.UpdateUnredactedEventJSON(ctx, literal.EventID(), indented.Bytes(), literal)
+		require.NoError(t, err)
+		require.True(t, written, "escaped-backslash text must not force an exact-text comparison")
+
+		// A non-redaction rewrite after the repair read must not be overwritten.
+		changed := room.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "changed"})
+		_, err = db.WriteEvent(ctx, changed, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		staleJSON, err := changed.MarshalJSON()
+		require.NoError(t, err)
+		var staleChanged rstypes.HeaderedEvent
+		require.NoError(t, staleChanged.UnmarshalJSON(staleJSON))
+		require.NoError(t, changed.SetUnsignedField("concurrent", true))
+		require.NoError(t, db.UpdateEventJSON(ctx, changed.EventID(), changed))
+		require.NoError(t, staleChanged.SetUnsignedField("age", 4))
+		written, err = db.UpdateUnredactedEventJSON(ctx, changed.EventID(), staleJSON, &staleChanged)
+		require.NoError(t, err)
+		require.False(t, written, "a row changed after the repair read must not be rewritten")
+		stored, err = db.Events(ctx, []string{changed.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		require.True(t, gjson.GetBytes(stored[0].Unsigned(), "concurrent").Bool())
+		require.False(t, gjson.GetBytes(stored[0].Unsigned(), "age").Exists())
+	})
+}
+
 func TestGetOrCreateConnectionConcurrent(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		db, closeDB := MustCreateDatabase(t, dbType)
@@ -302,6 +472,106 @@ func TestSelectMembershipsAtStreamPosition(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, got, bobJoin.EventID(), "a topology token includes events at its depth up to its stream position")
 		require.NotContains(t, got, charlieJoin.EventID(), "a topology token excludes later events at the same depth")
+	})
+}
+
+// A partial-state resync fills in the state the join was missing and stamps
+// those memberships at the resync's stream position with topological position
+// zero. A client that synced just after the join then asks for /members at its
+// own earlier stream token; the resynced members are state the join already
+// implied, so they must still be returned.
+func TestSelectMembershipsIncludesResyncedStateAtEarlierStreamToken(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		positions := MustWriteEvents(t, db, r.Events())
+		atToken := positions[len(positions)-1]
+
+		bobJoin := r.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		_, err := db.PopulateRoomStateAfterResync(ctx, []*rstypes.HeaderedEvent{bobJoin})
+		require.NoError(t, err)
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		streamOnly := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: atToken}
+		got, err := snapshot.SelectMemberships(ctx, r.ID, streamOnly, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "resynced state belongs to the room at the earlier token")
+	})
+}
+
+func TestSelectMembershipsKeepsHistoricalJoinAfterResync(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		for len(r.Events()) < 19 {
+			r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "before join"})
+		}
+		bobJoin := r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		positions := MustWriteEvents(t, db, r.Events())
+		require.Equal(t, types.StreamPosition(20), positions[len(positions)-1])
+
+		// The completion marker is written after the client's stream position.
+		laterEvent := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "after join"})
+		laterPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{laterEvent})[0]
+		require.Greater(t, laterPos, types.StreamPosition(20))
+		_, err := db.PopulateRoomStateAfterResync(ctx, []*rstypes.HeaderedEvent{bobJoin})
+		require.NoError(t, err)
+
+		got, err := db.SelectMemberships(ctx, r.ID,
+			types.TopologyToken{Depth: 150, PDUPosition: 20}, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "resync must not erase the join's historical topology")
+	})
+}
+
+// A resync stores the room's CURRENT members, not the members it had at an
+// earlier token. If a member joined after that token, the resync's position-zero
+// row must not make /members?at report them as having already joined.
+func TestSelectMembershipsExcludesResyncedStateAddedAfterToken(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		positions := MustWriteEvents(t, db, r.Events())
+		atToken := positions[len(positions)-1]
+
+		bobJoin := r.CreateEvent(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		MustWriteEvents(t, db, []*rstypes.HeaderedEvent{bobJoin})
+		// The resync stamps its current members at a later stream position with
+		// topological position zero, as PopulateRoomStateAfterResync does.
+		_, err := db.PopulateRoomStateAfterResync(ctx, []*rstypes.HeaderedEvent{bobJoin})
+		require.NoError(t, err)
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer snapshot.Rollback() //nolint:errcheck
+
+		streamOnly := types.TopologyToken{Depth: math.MaxInt64, PDUPosition: atToken}
+		got, err := snapshot.SelectMemberships(ctx, r.ID, streamOnly, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, got, bobJoin.EventID(), "a member added after the stream token must not be included")
+
+		topologyOnly := types.TopologyToken{
+			Depth:       types.StreamPosition(r.Events()[len(r.Events())-1].Depth()),
+			PDUPosition: atToken,
+		}
+		got, err = snapshot.SelectMemberships(ctx, r.ID, topologyOnly, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, got, bobJoin.EventID(), "a member added after the topology token must not be included")
 	})
 }
 
@@ -1548,6 +1818,49 @@ func TestGetEventsBeforeStreamPositionExcludesDeeperBackfilled(t *testing.T) {
 	})
 }
 
+// The first event of a timeline (in practice a join) can be stored before its
+// parents: the history between the last event stored before it and the event
+// itself arrives later as backfill. The prev_batch token of that timeline sits
+// just before the event, so paging back from it must reach that history, which
+// is deeper than every event persisted at or below the token. The event type
+// does not matter to the code under test.
+func TestGetEventsBeforeStreamPositionReachesParentsStoredAfterTimelineStart(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		base := r.Events()
+		var mid []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			mid = append(mid, r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("mid %d", i)}))
+		}
+		first := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "timeline start"})
+
+		_ = MustWriteEvents(t, db, base)
+		firstPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{first})[0]
+		// The parents arrive afterwards as backfill (excluded from sync).
+		for _, ev := range mid {
+			_, err := db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			events, _, _, err := snapshot.GetEventsBeforeStreamPosition(ctx, firstPos-1, &types.TopologyToken{}, r.ID,
+				&synctypes.RoomEventFilter{Limit: 20}, true)
+			require.NoError(t, err)
+			var got []string
+			for _, ev := range events {
+				got = append(got, ev.EventID())
+			}
+			for _, ev := range mid {
+				assert.Contains(t, got, ev.EventID(), "a parent stored after the timeline start must be reachable from its prev_batch")
+			}
+			assert.NotContains(t, got, first.EventID(), "the first event starts the timeline the token precedes")
+		})
+	})
+}
+
 // A sender or type filter that removes every event of a non-empty range must
 // still leave the range's cursor, so /messages can tell a filtered-empty page
 // from the end of history.
@@ -1612,6 +1925,57 @@ func TestGetEventsBeforeStreamPositionExcludesBackfilledAtTokenDepth(t *testing.
 			for _, ev := range events {
 				assert.NotEqual(t, sameDepth.EventID(), ev.EventID(), "a backfilled event at the token's depth is newer than the token")
 			}
+		})
+	})
+}
+
+// LastExcludedEventAfterTopologyPosition uses the stream position to resolve
+// same-depth events at both ends of its inclusive topology window.
+func TestLastExcludedEventAfterTopologyPositionSameDepthBounds(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		alice := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+		create := r.Events()[0]
+		createPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{create})[0]
+
+		// These forked events share the depth of the create and delivered event,
+		// respectively. The excluded event at each depth is persisted later.
+		hiddenAtCreateDepth := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden at create depth"},
+			test.WithDepth(create.Depth()), test.WithPrevEvents())
+		hiddenAtCreatePos, err := db.WriteEvent(ctx, hiddenAtCreateDepth, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		visible := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "visible"},
+			test.WithDepth(create.Depth()+1), test.WithPrevEvents(create.EventID()))
+		visiblePos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{visible})[0]
+		hiddenAtVisibleDepth := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "hidden after visible"},
+			test.WithDepth(visible.Depth()), test.WithPrevEvents(create.EventID()))
+		hiddenAtVisiblePos, err := db.WriteEvent(ctx, hiddenAtVisibleDepth, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			lower, err := snapshot.EventPositionInTopology(ctx, create.EventID())
+			require.NoError(t, err)
+			upper, err := snapshot.EventPositionInTopology(ctx, visible.EventID())
+			require.NoError(t, err)
+			want, err := snapshot.EventPositionInTopology(ctx, hiddenAtCreateDepth.EventID())
+			require.NoError(t, err)
+			afterUpper, err := snapshot.EventPositionInTopology(ctx, hiddenAtVisibleDepth.EventID())
+			require.NoError(t, err)
+			assert.Equal(t, createPos, lower.PDUPosition)
+			assert.Equal(t, visiblePos, upper.PDUPosition)
+			assert.Equal(t, hiddenAtCreatePos, want.PDUPosition)
+			assert.Equal(t, lower.Depth, want.Depth, "the first hidden event shares the create's topology depth")
+			assert.Equal(t, upper.Depth, afterUpper.Depth, "the excluded event shares the delivered event's topology depth")
+			assert.Greater(t, afterUpper.PDUPosition, upper.PDUPosition)
+
+			got, found, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, r.ID, lower, upper)
+			require.NoError(t, err)
+			require.True(t, found, "the later-stream event at the create's depth is inside the window")
+			assert.Equal(t, want, got, "the later-stream event at the upper depth is outside the window")
+			assert.NotEqual(t, hiddenAtVisiblePos, got.PDUPosition)
 		})
 	})
 }
@@ -1702,6 +2066,11 @@ func TestInsertEventInTopologyLiftsAboveStoredPrevEvents(t *testing.T) {
 
 		reset := r.CreateEvent(t, alice, "m.room.message", map[string]any{"body": "after reset"}, test.WithDepth(0))
 		require.Equal(t, int64(0), reset.Depth(), "the event claims a restarted depth")
+		WithSnapshot(t, db, func(snapshot storage.DatabaseTransaction) {
+			prospective, err := snapshot.ProspectiveEventPosition(ctx, reset)
+			require.NoError(t, err)
+			assert.Equal(t, types.StreamPosition(1001), prospective)
+		})
 		_, err := db.WriteEvent(ctx, reset, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
 		require.NoError(t, err)
 

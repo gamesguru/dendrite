@@ -533,7 +533,7 @@ func (d *Database) addStateDelta(
 				logrus.WithFields(logrus.Fields{
 					"room_nid":     roomNID,
 					"snapshot_nid": parentNID,
-				}).WithError(err).Warn("State HAMT parent is missing nodes; inspect with backfill-state-hamt -verify")
+				}).WithError(err).Warn("State HAMT parent is missing nodes; inspect with dendrite-backfill-state-hamt -verify")
 			}
 			return fmt.Errorf("statehamt.Apply: %w", err)
 		}

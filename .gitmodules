@@ -1,6 +1,7 @@
 [submodule "docs"]
 	path = docs
 	url = https://git.nutra.tk/wombat-foundation/dendrite-docs.git
+	update = none
 [submodule "rezzy"]
 	path = rezzy
 	url = https://gitlab.com/wombat-foundation/rezzy.git

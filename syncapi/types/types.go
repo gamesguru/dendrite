@@ -72,6 +72,10 @@ type StreamEvent struct {
 type RecentEvents struct {
 	Limited bool
 	Events  []StreamEvent
+	// PrevBatchAnchor is an explicit, already-normalized backward cursor. It is
+	// set when the timeline starts after a hidden excluded-event gap, so
+	// getJoinResponseForCompleteSync must not decrement it again.
+	PrevBatchAnchor *TopologyToken
 }
 
 // Range represents a range between two stream positions.

@@ -34,7 +34,22 @@ CREATE TABLE IF NOT EXISTS roomserver_event_json (
 );
 `
 
+// The stored copy is only replaced when it carries no `unsigned.redacted_because`.
+// Looking the field up by path keeps content fields and nested extension keys with
+// the same name from blocking a repair. PostgreSQL's JSON types reject escaped NULs
+// and lone surrogates that valid event content can contain, so replace those escapes
+// before parsing; only the presence of the field matters here.
 const insertEventJSONSQL = "" +
+	"INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)" +
+	" ON CONFLICT (event_nid) DO UPDATE SET event_json = EXCLUDED.event_json" +
+	" WHERE NOT $3::boolean" +
+	" AND NOT jsonb_path_exists(CASE WHEN roomserver_event_json.event_json LIKE '%\\\\u%'" +
+	" THEN regexp_replace(roomserver_event_json.event_json, '\\\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', '\\\\uFFFD', 'g')" +
+	" ELSE roomserver_event_json.event_json END::jsonb, '$.unsigned.redacted_because')"
+
+// overwriteEventJSONSQL is only used for redactions, which must replace an
+// event that is already stored in full.
+const overwriteEventJSONSQL = "" +
 	"INSERT INTO roomserver_event_json (event_nid, event_json) VALUES ($1, $2)" +
 	" ON CONFLICT (event_nid) DO UPDATE SET event_json=$2"
 
@@ -48,6 +63,7 @@ const bulkSelectEventJSONSQL = "" +
 
 type eventJSONStatements struct {
 	insertEventJSONStmt     *sql.Stmt
+	overwriteEventJSONStmt  *sql.Stmt
 	bulkSelectEventJSONStmt *sql.Stmt
 }
 
@@ -61,14 +77,23 @@ func PrepareEventJSONTable(db *sql.DB) (tables.EventJSON, error) {
 
 	return s, sqlutil.StatementList{
 		{&s.insertEventJSONStmt, insertEventJSONSQL},
+		{&s.overwriteEventJSONStmt, overwriteEventJSONSQL},
 		{&s.bulkSelectEventJSONStmt, bulkSelectEventJSONSQL},
 	}.Prepare(db)
 }
 
 func (s *eventJSONStatements) InsertEventJSON(
-	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte, redacted bool,
 ) error {
 	stmt := sqlutil.TxStmt(txn, s.insertEventJSONStmt)
+	_, err := stmt.ExecContext(ctx, int64(eventNID), eventJSON, redacted)
+	return err
+}
+
+func (s *eventJSONStatements) OverwriteEventJSON(
+	ctx context.Context, txn *sql.Tx, eventNID types.EventNID, eventJSON []byte,
+) error {
+	stmt := sqlutil.TxStmt(txn, s.overwriteEventJSONStmt)
 	_, err := stmt.ExecContext(ctx, int64(eventNID), eventJSON)
 	return err
 }

@@ -248,10 +248,14 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	}
 	// Prefer cross-signing keys already in the local database. Only ask remote
 	// servers for key types that are still missing.
-	a.crossSigningKeysFromDatabase(ctx, req, res)
+	a.crossSigningKeysFromDatabase(ctx, req, res, nil)
 	if ctx.Err() != nil {
 		return
 	}
+	// Remember which entries that first database read supplied. Only those may
+	// be replaced after federation: a cross-signing key federation supplied for
+	// a type the database still lacks is newer than the database copy.
+	dbLoaded := crossSigningEntries(res)
 
 	// make a map from domain to device keys
 	domainToDeviceKeys := make(map[string]map[string][]string)
@@ -327,10 +331,26 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 	}
 
 	// attempt to satisfy key queries from the local database first as we should get device updates pushed to us
-	domainToDeviceKeys = a.remoteKeysFromDatabase(ctx, res, &respMu, domainToDeviceKeys)
+	domainToDeviceKeys = a.remoteKeysFromDatabase(ctx, res, &respMu, domainToDeviceKeys, domainToCrossSigningKeys)
 	if len(domainToDeviceKeys) > 0 || len(domainToCrossSigningKeys) > 0 {
 		// perform key queries for remote devices
-		a.queryRemoteKeys(ctx, req.Timeout, res, domainToDeviceKeys, domainToCrossSigningKeys)
+		federationKeys, refreshedDeviceLists := a.queryRemoteKeys(ctx, req.Timeout, res, domainToDeviceKeys, domainToCrossSigningKeys)
+		// A full device-list fetch also returns the user's cross-signing keys,
+		// which the updater stores. Pick those up rather than asking the remote
+		// server again with /keys/query for them. Replace the entries from the
+		// first pass so the response does not pair an old master key with a
+		// refreshed self-signing key.
+		a.crossSigningKeysFromDatabase(ctx, req, res, func(targetUserID string, keyType fclient.CrossSigningKeyPurpose) bool {
+			_, ok := dbLoaded[targetUserID][keyType]
+			_, suppliedByFederation := federationKeys[targetUserID][keyType]
+			_, refreshed := refreshedDeviceLists[targetUserID]
+			return ok && refreshed && !suppliedByFederation
+		}, func(targetUserID string, keyType fclient.CrossSigningKeyPurpose) bool {
+			_, ok := dbLoaded[targetUserID][keyType]
+			_, suppliedByFederation := federationKeys[targetUserID][keyType]
+			_, refreshed := refreshedDeviceLists[targetUserID]
+			return ok && refreshed && !suppliedByFederation
+		})
 	}
 
 	// Finally, append signatures that we know about
@@ -404,9 +424,19 @@ func (a *UserInternalAPI) QueryKeys(ctx context.Context, req *api.QueryKeysReque
 }
 
 func (a *UserInternalAPI) remoteKeysFromDatabase(
-	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex, domainToDeviceKeys map[string]map[string][]string,
+	ctx context.Context, res *api.QueryKeysResponse, respMu *sync.Mutex,
+	domainToDeviceKeys map[string]map[string][]string,
+	domainToCrossSigningKeys map[string]map[string]struct{},
 ) map[string]map[string][]string {
 	tracked := a.trackedDeviceLists(ctx, domainToDeviceKeys)
+	// A device list fetched in full also carries the user's cross-signing keys
+	// (or proves they have none), so a fresh, tracked list is authoritative for
+	// them too. Do not hit /keys/query just because the database has none.
+	for userID := range tracked {
+		for domain := range domainToCrossSigningKeys {
+			delete(domainToCrossSigningKeys[domain], userID)
+		}
+	}
 	fetchRemote := make(map[string]map[string][]string)
 	for domain, userToDeviceMap := range domainToDeviceKeys {
 		for userID, deviceIDs := range userToDeviceMap {
@@ -475,8 +505,10 @@ func (a *UserInternalAPI) trackedDeviceLists(
 func (a *UserInternalAPI) queryRemoteKeys(
 	ctx context.Context, timeout time.Duration, res *api.QueryKeysResponse,
 	domainToDeviceKeys map[string]map[string][]string, domainToCrossSigningKeys map[string]map[string]struct{},
-) {
+) (map[string]map[fclient.CrossSigningKeyPurpose]struct{}, map[string]struct{}) {
 	resultCh := make(chan *fclient.RespQueryKeys, len(domainToDeviceKeys)+len(domainToCrossSigningKeys))
+	federationCrossSigningKeys := make(map[string]map[fclient.CrossSigningKeyPurpose]struct{})
+	refreshedDeviceLists := make(map[string]struct{})
 	// allows us to wait until all federation servers have been poked
 	var wg sync.WaitGroup
 	// mutex for writing directly to res (e.g failures)
@@ -501,7 +533,7 @@ func (a *UserInternalAPI) queryRemoteKeys(
 	for domain := range domains {
 		go a.queryRemoteKeysOnServer(
 			ctx, domain, domainToDeviceKeys[domain], domainToCrossSigningKeys[domain],
-			&wg, &respMu, timeout, resultCh, res,
+			&wg, &respMu, timeout, resultCh, res, refreshedDeviceLists,
 		)
 	}
 
@@ -527,12 +559,19 @@ func (a *UserInternalAPI) queryRemoteKeys(
 
 		for userID, body := range result.MasterKeys {
 			res.MasterKeys[userID] = body
+			if federationCrossSigningKeys[userID] == nil {
+				federationCrossSigningKeys[userID] = make(map[fclient.CrossSigningKeyPurpose]struct{})
+			}
+			federationCrossSigningKeys[userID][fclient.CrossSigningKeyPurposeMaster] = struct{}{}
 		}
 
 		for userID, body := range result.SelfSigningKeys {
 			res.SelfSigningKeys[userID] = body
+			if federationCrossSigningKeys[userID] == nil {
+				federationCrossSigningKeys[userID] = make(map[fclient.CrossSigningKeyPurpose]struct{})
+			}
+			federationCrossSigningKeys[userID][fclient.CrossSigningKeyPurposeSelfSigning] = struct{}{}
 		}
-
 		// TODO: do we want to persist these somewhere now
 		// that we have fetched them?
 	}
@@ -540,6 +579,7 @@ func (a *UserInternalAPI) queryRemoteKeys(
 	for result := range resultCh {
 		processResult(result)
 	}
+	return federationCrossSigningKeys, refreshedDeviceLists
 }
 
 // queryKeysFromServer sends /keys/query unless the server failed recently.
@@ -566,10 +606,23 @@ func (a *UserInternalAPI) queryKeysFromServer(
 	return resp, err
 }
 
+// deviceListIsFresh reports whether the database holds a complete, current
+// device list for the user. A refresh that is still in flight or failed is not
+// fresh, so callers must keep the federation fallback for it.
+func (a *UserInternalAPI) deviceListIsFresh(ctx context.Context, userID string) bool {
+	fresh, err := a.KeyDatabase.FreshDeviceLists(ctx, []string{userID})
+	if err != nil {
+		logrus.WithError(err).WithField("user_id", userID).
+			Warn("Failed to check whether the device list refresh completed")
+		return false
+	}
+	return len(fresh) == 1
+}
+
 func (a *UserInternalAPI) queryRemoteKeysOnServer(
 	ctx context.Context, serverName string, devKeys map[string][]string, crossSigningKeys map[string]struct{},
 	wg *sync.WaitGroup, respMu *sync.Mutex, timeout time.Duration, resultCh chan<- *fclient.RespQueryKeys,
-	res *api.QueryKeysResponse,
+	res *api.QueryKeysResponse, refreshedDeviceLists map[string]struct{},
 ) {
 	defer wg.Done()
 	fedCtx := ctx
@@ -646,11 +699,18 @@ func (a *UserInternalAPI) queryRemoteKeysOnServer(
 			devKeys[userID] = []string{}
 			continue
 		}
-		if _, needsCrossSigning := crossSigningKeys[userID]; needsCrossSigning {
-			// ManualUpdate refreshes the device list asynchronously. Keep this
-			// user in /keys/query so a missing cross-signing key is not lost.
-			devKeys[userID] = []string{}
-		} else {
+		// ManualUpdate only marks the list stale and wakes a worker; it does not
+		// prove the fetch completed. Keep the /keys/query request unless the
+		// database now reports the list fresh. In particular, keep the
+		// cross-signing request so a stale copy is not treated as authoritative.
+		if a.deviceListIsFresh(ctx, userID) {
+			respMu.Lock()
+			refreshedDeviceLists[userID] = struct{}{}
+			respMu.Unlock()
+			// The completed device-list fetch also returns the user's
+			// cross-signing keys. The caller re-reads them from the database
+			// after this query completes.
+			delete(crossSigningKeys, userID)
 			delete(devKeys, userID)
 		}
 	}

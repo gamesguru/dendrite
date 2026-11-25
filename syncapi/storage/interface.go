@@ -124,6 +124,18 @@ type DatabaseTransaction interface {
 	// before a stream position, for backward pagination from a stream token. When includeBackfilled
 	// is set, backfilled events excluded from sync are also returned, up to the token's position.
 	GetEventsBeforeStreamPosition(ctx context.Context, maxStreamPos types.StreamPosition, to *types.TopologyToken, roomID string, filter *synctypes.RoomEventFilter, includeBackfilled bool) (events []types.StreamEvent, start, end types.TopologyToken, err error)
+	// RoomLiveStartPosition returns the first delivered non-create state event's
+	// topological position, and false when the room has no such event.
+	RoomLiveStartPosition(ctx context.Context, roomID string) (types.StreamPosition, bool, error)
+	// HasExcludedEventsAfterTopologyPosition reports whether the room has an
+	// event excluded from sync at a greater topological position.
+	HasExcludedEventsAfterTopologyPosition(ctx context.Context, roomID string, position types.StreamPosition) (bool, error)
+	// LastExcludedEventAfterTopologyPosition returns the newest event excluded
+	// from sync after position and at or before through in the room's topology.
+	LastExcludedEventAfterTopologyPosition(ctx context.Context, roomID string, position, through types.TopologyToken) (types.TopologyToken, bool, error)
+	// ProspectiveEventPosition returns the topological position the event would
+	// receive from the stored positions of its prev events.
+	ProspectiveEventPosition(ctx context.Context, event *rstypes.HeaderedEvent) (types.StreamPosition, error)
 	// EventPositionInTopology returns the depth and stream position of the given event.
 	EventPositionInTopology(ctx context.Context, eventID string) (types.TopologyToken, error)
 	// EventPositionByStreamPosition resolves an event's current topology
@@ -196,9 +208,28 @@ type Database interface {
 		addStateEventIDs []string, removeStateEventIDs []string, transactionID *api.TransactionID, excludeFromSync bool,
 		historyVisibility gomatrixserverlib.HistoryVisibility, purgePrevEventIDs ...string,
 	) (types.StreamPosition, error)
+	// WriteOldEvent classifies an old event inside the transaction that stores
+	// its stream and topology positions. The classifier runs again on retries.
+	// Classification failures are wrapped with tables.ErrEventSyncClassification
+	// and roll back the write. Like WriteEvent, it must be called serially.
+	WriteOldEvent(ctx context.Context, ev *rstypes.HeaderedEvent, historyVisibility gomatrixserverlib.HistoryVisibility,
+		classifier tables.EventSyncClassifier, purgePrevEventIDs ...string) (types.StreamPosition, error)
 	// UpdateEventJSON replaces the serialized event for an event already in the
 	// sync timeline, for example when backfill discovers its redaction later.
 	UpdateEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent) error
+	// ReplaceEventJSON restores event content from a roomserver copy after the
+	// caller has checked its content hash. The roomserver copy's signatures are
+	// not necessarily verified; each sync row keeps its own unsigned metadata
+	// and signatures. In dry-run mode it performs no writes and returns the
+	// statuses and hashes that would be written. Statuses distinguish updated,
+	// would-update, missing, redacted, and skipped rows.
+	ReplaceEventJSON(ctx context.Context, eventID string, event *rstypes.HeaderedEvent, dryRun bool) (outputStatus, stateStatus, outputHash, stateHash string, err error)
+	// UpdateUnredactedEventJSON writes only if the stored JSON still matches
+	// expectedJSON and the stored event is not redacted.
+	UpdateUnredactedEventJSON(ctx context.Context, eventID string, expectedJSON []byte, event *rstypes.HeaderedEvent) (bool, error)
+	// SelectRoomEventsAfterID returns up to limit stored events of a room with a row id greater than
+	// afterID, in row id order, including events excluded from sync. limit must be positive.
+	SelectRoomEventsAfterID(ctx context.Context, roomID string, afterID types.StreamPosition, limit int) ([]types.StreamEvent, error)
 	// PurgeBackwardExtremitiesForEvent deletes any backward extremities in the room that cite prevEventID as the missing event.
 	PurgeBackwardExtremitiesForEvent(ctx context.Context, roomID, prevEventID string) error
 	// PurgeBackwardExtremitiesForEvents is PurgeBackwardExtremitiesForEvent for many events in one transaction.

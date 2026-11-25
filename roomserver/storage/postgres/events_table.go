@@ -114,6 +114,10 @@ const bulkSelectStateAtEventByIDSQL = "" +
 	"SELECT event_type_nid, event_state_key_nid, event_nid, state_snapshot_nid, is_rejected FROM roomserver_events" +
 	" WHERE event_id = ANY($1)"
 
+const bulkSelectBeforeStateSnapshotsForHistoryVisibilitySQL = "" +
+	"SELECT event_id, state_snapshot_nid, event_type_nid, event_state_key_nid FROM roomserver_events" +
+	" WHERE event_id = ANY($1)"
+
 const updateEventStateSQL = "" +
 	"UPDATE roomserver_events SET state_snapshot_nid = $2 WHERE event_nid = $1"
 
@@ -167,27 +171,28 @@ const selectEventIDsInRoomSQL = "" +
 	" ORDER BY event_nid"
 
 type eventStatements struct {
-	insertEventStmt                               *sql.Stmt
-	selectEventStmt                               *sql.Stmt
-	bulkSelectSnapshotsForEventIDsStmt            *sql.Stmt
-	bulkSelectStateEventByIDStmt                  *sql.Stmt
-	bulkSelectStateEventByIDExcludingRejectedStmt *sql.Stmt
-	bulkSelectStateEventByNIDStmt                 *sql.Stmt
-	bulkSelectStateAtEventByIDStmt                *sql.Stmt
-	updateEventStateStmt                          *sql.Stmt
-	updateEventRejectedStmt                       *sql.Stmt
-	selectEventSentToOutputStmt                   *sql.Stmt
-	updateEventSentToOutputStmt                   *sql.Stmt
-	selectEventIDStmt                             *sql.Stmt
-	bulkSelectStateAtEventAndReferenceStmt        *sql.Stmt
-	bulkSelectEventIDStmt                         *sql.Stmt
-	bulkSelectEventNIDStmt                        *sql.Stmt
-	bulkSelectUnsentEventNIDStmt                  *sql.Stmt
-	selectMaxEventDepthStmt                       *sql.Stmt
-	selectRoomNIDsForEventNIDsStmt                *sql.Stmt
-	selectEventRejectedStmt                       *sql.Stmt
-	selectRoomsWithEventTypeNIDStmt               *sql.Stmt
-	selectEventIDsInRoomStmt                      *sql.Stmt
+	insertEventStmt                                        *sql.Stmt
+	selectEventStmt                                        *sql.Stmt
+	bulkSelectSnapshotsForEventIDsStmt                     *sql.Stmt
+	bulkSelectStateEventByIDStmt                           *sql.Stmt
+	bulkSelectStateEventByIDExcludingRejectedStmt          *sql.Stmt
+	bulkSelectStateEventByNIDStmt                          *sql.Stmt
+	bulkSelectStateAtEventByIDStmt                         *sql.Stmt
+	bulkSelectBeforeStateSnapshotsForHistoryVisibilityStmt *sql.Stmt
+	updateEventStateStmt                                   *sql.Stmt
+	updateEventRejectedStmt                                *sql.Stmt
+	selectEventSentToOutputStmt                            *sql.Stmt
+	updateEventSentToOutputStmt                            *sql.Stmt
+	selectEventIDStmt                                      *sql.Stmt
+	bulkSelectStateAtEventAndReferenceStmt                 *sql.Stmt
+	bulkSelectEventIDStmt                                  *sql.Stmt
+	bulkSelectEventNIDStmt                                 *sql.Stmt
+	bulkSelectUnsentEventNIDStmt                           *sql.Stmt
+	selectMaxEventDepthStmt                                *sql.Stmt
+	selectRoomNIDsForEventNIDsStmt                         *sql.Stmt
+	selectEventRejectedStmt                                *sql.Stmt
+	selectRoomsWithEventTypeNIDStmt                        *sql.Stmt
+	selectEventIDsInRoomStmt                               *sql.Stmt
 }
 
 func CreateEventsTable(ctx context.Context, db *sql.DB) error {
@@ -301,6 +306,7 @@ func PrepareEventsTable(db *sql.DB) (tables.Events, error) {
 		{&s.bulkSelectStateEventByIDExcludingRejectedStmt, bulkSelectStateEventByIDExcludingRejectedSQL},
 		{&s.bulkSelectStateEventByNIDStmt, bulkSelectStateEventByNIDSQL},
 		{&s.bulkSelectStateAtEventByIDStmt, bulkSelectStateAtEventByIDSQL},
+		{&s.bulkSelectBeforeStateSnapshotsForHistoryVisibilityStmt, bulkSelectBeforeStateSnapshotsForHistoryVisibilitySQL},
 		{&s.updateEventStateStmt, updateEventStateSQL},
 		{&s.updateEventRejectedStmt, updateEventRejectedSQL},
 		{&s.updateEventSentToOutputStmt, updateEventSentToOutputSQL},
@@ -502,6 +508,38 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 		)
 	}
 	return results, nil
+}
+
+func (s *eventStatements) BulkSelectStateAtEventByIDForHistoryVisibility(
+	ctx context.Context, txn *sql.Tx, eventIDs []string,
+) (map[string]types.StateAtEvent, error) {
+	result := make(map[string]types.StateAtEvent, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return result, nil
+	}
+	stmt := sqlutil.TxStmt(txn, s.bulkSelectBeforeStateSnapshotsForHistoryVisibilityStmt)
+	rows, err := stmt.QueryContext(ctx, eventIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "BulkSelectStateAtEventByIDForHistoryVisibility: rows.close() failed")
+	for rows.Next() {
+		var eventID string
+		var snapshotNID types.StateSnapshotNID
+		var eventTypeNID types.EventTypeNID
+		var eventStateKeyNID types.EventStateKeyNID
+		if err = rows.Scan(&eventID, &snapshotNID, &eventTypeNID, &eventStateKeyNID); err != nil {
+			return nil, err
+		}
+		result[eventID] = types.StateAtEvent{
+			BeforeStateSnapshotNID: snapshotNID,
+			StateEntry: types.StateEntry{
+				EventTypeNID:     eventTypeNID,
+				EventStateKeyNID: eventStateKeyNID,
+			},
+		}
+	}
+	return result, rows.Err()
 }
 
 func (s *eventStatements) UpdateEventState(

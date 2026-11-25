@@ -12,14 +12,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
 	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
+	fedapi "codefloe.com/pat-s/zendrite/federationapi/api"
 	"codefloe.com/pat-s/zendrite/internal/eventutil"
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -605,6 +610,11 @@ func (r *Admin) fetchStateToInstall(
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, authEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 			}); err != nil {
+				logrus.WithError(err).WithFields(logrus.Fields{
+					"room_id":  roomID,
+					"event_id": authEvent.EventID(),
+					"type":     authEvent.Type(),
+				}).Warn("downloadState: skipping auth event that failed signature verification")
 				continue
 			}
 			authEventMap[authEvent.EventID()] = authEvent
@@ -613,6 +623,11 @@ func (r *Admin) fetchStateToInstall(
 			if err = gomatrixserverlib.VerifyEventSignatures(ctx, stateEvent, r.Inputer.KeyRing, func(roomID spec.RoomID, senderID spec.SenderID) (*spec.UserID, error) {
 				return r.Queryer.QueryUserIDForSender(ctx, roomID, senderID)
 			}); err != nil {
+				logrus.WithError(err).WithFields(logrus.Fields{
+					"room_id":  roomID,
+					"event_id": stateEvent.EventID(),
+					"type":     stateEvent.Type(),
+				}).Warn("downloadState: skipping state event that failed signature verification")
 				continue
 			}
 			sk := stateEvent.StateKey()
@@ -998,4 +1013,367 @@ func (r *Admin) PerformAdminImportEvents(
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].Line < results[j].Line })
 	return results, nil
+}
+
+// maxRefetchServers bounds how many servers are asked for one event.
+const maxRefetchServers = 8
+
+// Outcomes of PerformAdminRefetchEvents.
+const (
+	RefetchOutcomeRefetched = "refetched"
+	// RefetchOutcomeSigUnverified marks a hash-valid copy whose signatures could
+	// not be verified (for example the origin's keys are unreachable).
+	RefetchOutcomeSigUnverified = "refetched_signature_unverified"
+	RefetchOutcomeAlreadyFull   = "already_full"
+	RefetchOutcomeHashMismatch  = "hash_mismatch"
+	RefetchOutcomeNotFound      = "not_found"
+	RefetchOutcomeForbidden     = "forbidden"
+	RefetchOutcomeUnreachable   = "origin_unreachable"
+)
+
+// PerformAdminRefetchEvents fetches the complete copy of each event whose
+// stored JSON is hash-pruned (pruned but not a genuine redaction) from its
+// origin server, requires it to pass the content hash and signature checks,
+// and stores it as an outlier, which the storage layer lets replace a pruned
+// copy. Nothing is emitted to other components: the event is not new. With
+// dryRun nothing is written.
+func (r *Admin) PerformAdminRefetchEvents(
+	ctx context.Context, events []api.AdminRefetchEvent, dryRun bool,
+) map[string]string {
+	results := make(map[string]string, len(events))
+	for _, e := range events {
+		if _, done := results[e.EventID]; done || e.EventID == "" {
+			continue
+		}
+		outcome, err := r.refetchEvent(ctx, e, dryRun)
+		if err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"room_id": e.RoomID, "event_id": e.EventID,
+			}).Warn("refetch of pruned event failed")
+			outcome = "error: " + err.Error()
+		}
+		results[e.EventID] = outcome
+	}
+	return results
+}
+
+func (r *Admin) refetchEvent(ctx context.Context, e api.AdminRefetchEvent, dryRun bool) (string, error) {
+	roomInfo, err := r.DB.RoomInfo(ctx, e.RoomID)
+	if err != nil {
+		return "", err
+	}
+	if roomInfo == nil || roomInfo.IsStub() {
+		return "", eventutil.ErrRoomNoExists{}
+	}
+	meta, err := r.DB.EventNIDs(ctx, []string{e.EventID})
+	if err != nil {
+		return "", err
+	}
+	stored, ok := meta[e.EventID]
+	if !ok {
+		return "", fmt.Errorf("event %s is not stored", e.EventID)
+	}
+	have, err := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
+	if err != nil {
+		return "", err
+	}
+	if len(have) != 1 {
+		return "", fmt.Errorf("event %s could not be loaded", e.EventID)
+	}
+	verImpl, err := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion)
+	if err != nil {
+		return "", err
+	}
+	if !eventutil.StoredCopyLooksHashPruned(verImpl, have[0].JSON()) {
+		return RefetchOutcomeAlreadyFull, nil
+	}
+
+	servers := r.refetchServerCandidates(ctx, e, have[0], roomInfo)
+	if len(servers) == 0 {
+		return "", fmt.Errorf("no server to ask for %s", e.EventID)
+	}
+	if len(servers) > maxRefetchServers {
+		servers = servers[:maxRefetchServers]
+	}
+	var lastErr error
+	sawPruned := false
+	sawNotFound := false
+	sawForbidden := false
+	var unreachable []string
+	for _, server := range servers {
+		txn, ferr := r.Inputer.FSAPI.GetEvent(ctx, r.Cfg.Matrix.ServerName, server, e.EventID)
+		if ferr != nil {
+			var httpErr spec.HTTPError
+			if errors.As(ferr, &httpErr) {
+				switch httpErr.Code {
+				case http.StatusNotFound:
+					sawNotFound = true
+					continue
+				case http.StatusForbidden:
+					sawForbidden = true
+					continue
+				}
+			}
+			unreachable = append(unreachable, string(server))
+			lastErr = fmt.Errorf("fetching %s from %s failed: %w", e.EventID, server, ferr)
+			continue
+		}
+		if len(txn.PDUs) == 0 {
+			sawNotFound = true
+			continue
+		}
+		ev, perr := verImpl.NewEventFromUntrustedJSON(txn.PDUs[0])
+		if perr != nil {
+			lastErr = fmt.Errorf("parsing event from %s: %w", server, perr)
+			continue
+		}
+		if ev.EventID() != e.EventID || ev.RoomID().String() != e.RoomID {
+			lastErr = fmt.Errorf("%s returned a different event", server)
+			continue
+		}
+		storedHash := gjson.GetBytes(have[0].JSON(), "hashes.sha256")
+		fetchedHash := gjson.GetBytes(txn.PDUs[0], "hashes.sha256")
+		if storedHash.Exists() != fetchedHash.Exists() || storedHash.String() != fetchedHash.String() {
+			sawPruned = true
+			continue
+		}
+		if ev.Redacted() {
+			// This server has only a pruned copy too; try the next one.
+			sawPruned = true
+			continue
+		}
+		// Content comes from the fetched copy. unsigned and signatures are not
+		// part of the event's identity: keep this store's own. Redaction keeps
+		// the original signatures, so the local ones sign the restored content.
+		merged := ev.JSON()
+		var merr error
+		for _, key := range []string{"unsigned", "signatures"} {
+			var local gjson.Result
+			if key == "unsigned" {
+				local = gjson.ParseBytes(have[0].Unsigned())
+			} else {
+				local = gjson.GetBytes(have[0].JSON(), key)
+			}
+			if local.Exists() {
+				merged, merr = sjson.SetRawBytes(merged, key, []byte(local.Raw))
+			} else if key == "unsigned" {
+				merged, merr = sjson.DeleteBytes(merged, key)
+			}
+			if merr != nil {
+				return "", fmt.Errorf("merging %s: %w", key, merr)
+			}
+		}
+		localSignatures := gjson.GetBytes(have[0].JSON(), "signatures")
+		fetchedSignatures := gjson.GetBytes(ev.JSON(), "signatures")
+		if (roomInfo.RoomVersion == gomatrixserverlib.RoomVersionV1 || roomInfo.RoomVersion == gomatrixserverlib.RoomVersionV2) &&
+			(!localSignatures.IsObject() || len(localSignatures.Map()) == 0) &&
+			(!fetchedSignatures.IsObject() || len(fetchedSignatures.Map()) == 0) {
+			lastErr = fmt.Errorf("room version %s requires a signed event when the stored copy has no signatures", roomInfo.RoomVersion)
+			continue
+		}
+		ev, perr = verImpl.NewEventFromTrustedJSON(merged, false)
+		if perr != nil {
+			lastErr = fmt.Errorf("merged copy from %s no longer parses cleanly: %w", server, perr)
+			continue
+		}
+		if eventutil.StoredCopyLooksHashPruned(verImpl, merged) {
+			lastErr = fmt.Errorf("merged copy from %s is still pruned", server)
+			continue
+		}
+		// v1 and v2 require verified signatures and fail above. Later room
+		// versions accept a hash-valid copy with unverified signatures and report
+		// that outcome to the caller.
+		verr := r.verifyAdminEventSignatures(ctx, ev)
+		signed, signatureFailureIsFatal := adminRefetchSignatureStatus(roomInfo.RoomVersion, verr)
+		if signatureFailureIsFatal {
+			return "", fmt.Errorf("room version %s requires verified signatures for refetched event %s: %w", roomInfo.RoomVersion, e.EventID, verr)
+		}
+		if dryRun {
+			return "would_" + signed, nil
+		}
+		inputRes := &api.InputRoomEventsResponse{}
+		r.Inputer.InputRoomEvents(ctx, &api.InputRoomEventsRequest{
+			InputRoomEvents: []api.InputRoomEvent{{
+				Kind: api.KindOutlier, Event: &types.HeaderedEvent{PDU: ev}, Origin: server,
+			}},
+			Asynchronous: false,
+			VirtualHost:  r.Cfg.Matrix.ServerName,
+		}, inputRes)
+		if inputRes.ErrMsg != "" {
+			return "", inputRes.Err()
+		}
+		after, aerr := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
+		if aerr != nil || len(after) != 1 || eventutil.StoredCopyLooksHashPruned(verImpl, after[0].JSON()) {
+			return "", fmt.Errorf("event %s is still pruned after the refetch", e.EventID)
+		}
+		return signed, nil
+	}
+	switch {
+	case len(unreachable) > 0:
+		return "", fmt.Errorf("no verified copy found; unreachable candidates: %s; last error: %w", strings.Join(unreachable, ", "), lastErr)
+	case sawPruned && !sawNotFound && !sawForbidden:
+		return RefetchOutcomeHashMismatch, nil
+	case sawForbidden && !sawNotFound && !sawPruned:
+		return RefetchOutcomeForbidden, nil
+	case sawNotFound && !sawForbidden && !sawPruned:
+		return RefetchOutcomeNotFound, nil
+	case lastErr != nil:
+		return "", lastErr
+	}
+	return "", fmt.Errorf("no candidate server returned a verifiable copy")
+}
+
+func adminRefetchSignatureStatus(roomVersion gomatrixserverlib.RoomVersion, verifyErr error) (outcome string, fatal bool) {
+	if verifyErr == nil {
+		return RefetchOutcomeRefetched, false
+	}
+	if roomVersion == gomatrixserverlib.RoomVersionV1 || roomVersion == gomatrixserverlib.RoomVersionV2 {
+		return "", true
+	}
+	return RefetchOutcomeSigUnverified, false
+}
+
+// refetchServerCandidates orders sources from most likely to hold the event to
+// least likely. For old events, historical residents are more useful than
+// current residents: they may have retained the event even if current members
+// joined later or pruned their history.
+func (r *Admin) refetchServerCandidates(
+	ctx context.Context, e api.AdminRefetchEvent, event gomatrixserverlib.PDU, roomInfo *types.RoomInfo,
+) []spec.ServerName {
+	var senderServer spec.ServerName
+	if sender, err := r.Queryer.QueryUserIDForSender(ctx, event.RoomID(), event.SenderID()); err == nil && sender != nil {
+		senderServer = sender.Domain()
+	}
+	if r.Cfg.Matrix.IsLocalServerName(senderServer) {
+		senderServer = ""
+	}
+	explicitCapacity := min(len(e.Servers), maxRefetchServers)
+	filteredExplicit := make([]spec.ServerName, 0, explicitCapacity)
+	for _, candidate := range e.Servers {
+		if len(filteredExplicit) >= maxRefetchServers {
+			break
+		}
+		if candidate != "" && !r.Cfg.Matrix.IsLocalServerName(candidate) {
+			filteredExplicit = append(filteredExplicit, candidate)
+		}
+	}
+	firstExplicit := e.Server
+	if r.Cfg.Matrix.IsLocalServerName(firstExplicit) {
+		firstExplicit = ""
+	}
+	servers := explicitRefetchServers(firstExplicit, filteredExplicit, senderServer)
+	seen := make(map[spec.ServerName]struct{}, len(servers)+1)
+	for _, candidate := range servers {
+		seen[candidate] = struct{}{}
+	}
+	add := func(candidate spec.ServerName) {
+		if candidate == "" || r.Cfg.Matrix.IsLocalServerName(candidate) || len(servers) >= maxRefetchServers {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		servers = append(servers, candidate)
+	}
+
+	// Reuse backfill's historical membership and history-visibility selection.
+	prevEventIDs := event.PrevEventIDs()
+	if len(prevEventIDs) > 0 {
+		requester := newBackfillRequester(
+			r.DB, r.Inputer.FSAPI, r.Queryer, r.Cfg.Matrix.ServerName,
+			r.Cfg.Matrix.IsLocalServerName,
+			map[string][]string{event.EventID(): prevEventIDs}, nil, roomInfo.RoomVersion,
+		)
+		requester.roomNID = roomInfo.RoomNID
+		historical := requester.ServersAtEvent(ctx, e.RoomID, prevEventIDs[0])
+		sort.Slice(historical, func(i, j int) bool { return historical[i] < historical[j] })
+		for _, candidate := range historical {
+			add(candidate)
+		}
+	}
+
+	if create, err := r.DB.GetStateEvent(ctx, e.RoomID, spec.MRoomCreate, ""); err == nil && create != nil {
+		if creator, err := r.Queryer.QueryUserIDForSender(ctx, create.RoomID(), create.SenderID()); err == nil && creator != nil {
+			add(creator.Domain())
+		}
+	}
+	if roomID, err := spec.NewRoomID(e.RoomID); err == nil {
+		add(eventutil.RoomIDDomain(*roomID))
+	}
+
+	hosts := &fedapi.QueryJoinedHostServerNamesInRoomResponse{}
+	if err := r.Inputer.FSAPI.QueryJoinedHostServerNamesInRoom(ctx, &fedapi.QueryJoinedHostServerNamesInRoomRequest{
+		RoomID: e.RoomID, ExcludeSelf: true, ExcludeBlacklisted: true,
+	}, hosts); err == nil {
+		for _, candidate := range hosts.ServerNames {
+			add(candidate)
+		}
+	}
+	if len(servers) > maxRefetchServers {
+		servers = servers[:maxRefetchServers]
+	}
+	return servers
+}
+
+// explicitRefetchServers keeps explicit order while reserving a candidate slot
+// for the sender's homeserver only when it is not already in the explicit list.
+func explicitRefetchServers(first spec.ServerName, explicit []spec.ServerName, sender spec.ServerName) []spec.ServerName {
+	ordered := make([]spec.ServerName, 0, maxRefetchServers+1)
+	seen := make(map[spec.ServerName]struct{}, maxRefetchServers+2)
+	add := func(candidate spec.ServerName) {
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		ordered = append(ordered, candidate)
+	}
+	add(first)
+	// The result is capped at maxRefetchServers, so only that many explicit
+	// candidates can be selected; later entries are represented by the sender
+	// fallback below. This also bounds work on an operator-supplied list.
+	for i, candidate := range explicit {
+		if i >= maxRefetchServers {
+			break
+		}
+		add(candidate)
+	}
+
+	senderIndex := -1
+	for i, candidate := range ordered {
+		if candidate == sender && sender != "" {
+			senderIndex = i
+			break
+		}
+	}
+	if senderIndex >= 0 && senderIndex < maxRefetchServers {
+		if len(ordered) > maxRefetchServers {
+			ordered = ordered[:maxRefetchServers]
+		}
+		return ordered
+	}
+	limit := maxRefetchServers
+	if sender != "" {
+		limit--
+	}
+	if len(ordered) > limit {
+		ordered = ordered[:limit]
+	}
+	if senderIndex >= 0 {
+		// The sender appeared after the cap in the explicit list. Keep it while
+		// preserving the earlier explicit order for the remaining slots.
+		addSender := sender
+		for _, candidate := range ordered {
+			if candidate == addSender {
+				return ordered
+			}
+		}
+		ordered = append(ordered, addSender)
+	} else if sender != "" {
+		ordered = append(ordered, sender)
+	}
+	return ordered
 }

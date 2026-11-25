@@ -14,6 +14,7 @@ import (
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"codefloe.com/pat-s/zendrite/internal/sqlutil"
 	"codefloe.com/pat-s/zendrite/roomserver/api"
@@ -26,9 +27,34 @@ import (
 	userapi "codefloe.com/pat-s/zendrite/userapi/api"
 )
 
-type backfillOnlyAPI struct {
+// noPrevStateRoomserver is embedded by routing test roomserver fakes that do
+// not model the historical state query. It reports no predecessor, so the
+// backfill annotation leaves events as they are.
+type noPrevStateRoomserver struct {
 	api.SyncRoomserverAPI
+}
+
+func (noPrevStateRoomserver) QueryStateAfterEvents(context.Context, *api.QueryStateAfterEventsRequest, *api.QueryStateAfterEventsResponse) error {
+	return nil
+}
+
+type backfillOnlyAPI struct {
+	noPrevStateRoomserver
 	events []*rstypes.HeaderedEvent
+}
+
+type backfillWithPrevStateAPI struct {
+	backfillOnlyAPI
+	previous *rstypes.HeaderedEvent
+}
+
+func (f *backfillWithPrevStateAPI) QueryStateAfterEvents(
+	_ context.Context, _ *api.QueryStateAfterEventsRequest, res *api.QueryStateAfterEventsResponse,
+) error {
+	res.RoomExists = true
+	res.PrevEventsExist = true
+	res.StateEvents = []*rstypes.HeaderedEvent{f.previous}
+	return nil
 }
 
 func (f *backfillOnlyAPI) PerformBackfill(_ context.Context, _ *api.PerformBackfillRequest, res *api.PerformBackfillResponse) error {
@@ -38,7 +64,7 @@ func (f *backfillOnlyAPI) PerformBackfill(_ context.Context, _ *api.PerformBackf
 }
 
 type sequencedBackfillAPI struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	batches [][]*rstypes.HeaderedEvent
 	calls   int
 }
@@ -105,6 +131,47 @@ func TestBackfillEventsPurgesFilledBackwardExtremities(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, extremities, newer.EventID(), "filled extremity must be cleared")
 		assert.Contains(t, extremities, older.EventID(), "the new boundary extremity must remain")
+	})
+}
+
+func TestBackfillEventsAddsHistoricalPrevState(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		var previous *rstypes.HeaderedEvent
+		for _, ev := range room.Events() {
+			if ev.Type() == "m.room.member" && ev.StateKey() != nil && *ev.StateKey() == alice.ID {
+				previous = ev
+				break
+			}
+		}
+		require.NotNil(t, previous)
+		backfilled := room.CreateEvent(t, alice, "m.room.member", map[string]any{
+			"membership":  "join",
+			"displayname": "backfilled name",
+		}, test.WithStateKey(alice.ID), test.WithPrevEvents(previous.EventID()))
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		api := &backfillWithPrevStateAPI{
+			backfillOnlyAPI: backfillOnlyAPI{events: []*rstypes.HeaderedEvent{backfilled}},
+			previous:        previous,
+		}
+		_, err = backfillEvents(context.Background(), api, db, "hs2", "hs2", room.ID, nil, 10, nil)
+		require.NoError(t, err)
+
+		stored, err := db.Events(context.Background(), []string{backfilled.EventID()})
+		require.NoError(t, err)
+		require.Len(t, stored, 1)
+		assert.Equal(t, "join", gjson.GetBytes(stored[0].Unsigned(), "prev_content.membership").String())
+		assert.Equal(t, previous.EventID(), gjson.GetBytes(stored[0].Unsigned(), "replaces_state").String())
+		assert.Equal(t, alice.ID, gjson.GetBytes(stored[0].Unsigned(), "prev_sender").String())
 	})
 }
 
@@ -338,6 +405,74 @@ func TestBackfilledEventsVisibleFromEarlierStreamToken(t *testing.T) {
 	})
 }
 
+// The first event of a timeline can be stored before its parents (in practice a
+// join), which then arrive as backfill with stream positions above that
+// timeline's prev_batch. The event type does not matter to the code under test.
+// The /messages stream-token path must keep the parents end to end: storage
+// returns them and the routing filter must not drop them with a narrower depth
+// bound of its own.
+func TestBackwardStreamTokenKeepsParentsStoredAfterTimelineStart(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		base := room.Events()
+		var parents []*rstypes.HeaderedEvent
+		for i := 0; i < 3; i++ {
+			parents = append(parents, room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": fmt.Sprintf("parent %d", i)}))
+		}
+		first := room.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "timeline start"})
+
+		connStr, closeDB := test.PrepareDBConnectionString(t, dbType)
+		defer closeDB()
+		cm := sqlutil.NewConnectionManager(nil, config.DatabaseOptions{})
+		db, err := storage.NewSyncServerDatasource(context.Background(), cm, &config.DatabaseOptions{
+			ConnectionString: config.DataSource(connStr),
+		})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		for _, ev := range base {
+			_, err = db.WriteEvent(ctx, ev, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+		firstPos, err := db.WriteEvent(ctx, first, nil, nil, nil, nil, false, gomatrixserverlib.HistoryVisibilityShared)
+		require.NoError(t, err)
+		for _, ev := range parents {
+			_, err = db.WriteEvent(ctx, ev, nil, nil, nil, nil, true, gomatrixserverlib.HistoryVisibilityShared)
+			require.NoError(t, err)
+		}
+
+		snapshot, err := db.NewDatabaseSnapshot(ctx)
+		require.NoError(t, err)
+		defer func() { _ = snapshot.Rollback() }()
+
+		// The prev_batch of the timeline sits just before its first event.
+		token := firstPos - 1
+		from, err := snapshot.StreamToTopologicalPosition(ctx, room.ID, token, true)
+		require.NoError(t, err)
+		events, _, end, err := snapshot.GetEventsBeforeStreamPosition(ctx, token, &types.TopologyToken{}, room.ID,
+			&synctypes.RoomEventFilter{Limit: 20}, true)
+		require.NoError(t, err)
+
+		req := messagesReq{
+			snapshot:         snapshot,
+			from:             &from,
+			fromStream:       &types.StreamingToken{PDUPosition: token},
+			backwardOrdering: true,
+		}
+		filtered, _, err := req.filterByStreamToken(ctx, events, end)
+		require.NoError(t, err)
+		var got []string
+		for _, ev := range filtered {
+			got = append(got, ev.EventID())
+		}
+		for _, ev := range parents {
+			assert.Contains(t, got, ev.EventID(), "a parent stored after the timeline start must survive the /messages stream-token filter")
+		}
+		assert.NotContains(t, got, first.EventID())
+	})
+}
+
 func TestForwardStreamTokenEndStaysAtLastIncludedEvent(t *testing.T) {
 	alice := test.NewUser(t)
 	room := test.NewRoom(t, alice)
@@ -402,7 +537,7 @@ func (s *extremitySnapshot) BackwardExtremitiesForRoom(context.Context, string) 
 
 // backfillProbe records whether a backfill was attempted at all.
 type backfillProbe struct {
-	api.SyncRoomserverAPI
+	noPrevStateRoomserver
 	calls int
 }
 

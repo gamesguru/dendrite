@@ -15,6 +15,34 @@ import (
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
+func TestRequiredStateResyncMarkerRange(t *testing.T) {
+	fromToken := &types.StreamingToken{PDUPosition: 100}
+	currentPos := types.StreamingToken{PDUPosition: 200}
+
+	r, ok := requiredStateResyncMarkerRange(types.RoomStreamState{
+		LastToken: &types.StreamingToken{PDUPosition: 50},
+	}, fromToken, currentPos)
+	assert.True(t, ok)
+	assert.Equal(t, types.Range{From: 50, To: 200}, r)
+
+	r, ok = requiredStateResyncMarkerRange(types.RoomStreamState{
+		LastToken: &types.StreamingToken{PDUPosition: 150},
+	}, fromToken, currentPos)
+	assert.True(t, ok)
+	assert.Equal(t, types.Range{From: 100, To: 200}, r)
+
+	r, ok = requiredStateResyncMarkerRange(types.RoomStreamState{}, fromToken, currentPos)
+	assert.True(t, ok)
+	assert.Equal(t, types.Range{From: 100, To: 200}, r)
+
+	_, ok = requiredStateResyncMarkerRange(types.RoomStreamState{
+		LastToken: &types.StreamingToken{PDUPosition: 150},
+	}, fromToken, types.StreamingToken{PDUPosition: 100})
+	assert.False(t, ok)
+	_, ok = requiredStateResyncMarkerRange(types.RoomStreamState{}, nil, currentPos)
+	assert.False(t, ok)
+}
+
 // TestMatchesPattern tests the event type pattern matching logic.
 func TestMatchesPattern(t *testing.T) {
 	t.Parallel()

@@ -24,6 +24,9 @@ type PartialStateTracker struct {
 	// roomObservers tracks waiting channels for each room
 	// map[roomID][]chan struct{}
 	roomObservers map[string][]chan struct{}
+	// resyncObservers wakes requests that read roomserver state as soon as the
+	// roomserver has completed the resync, without waiting for syncapi storage.
+	resyncObservers map[string][]chan struct{}
 	// syncPending holds, per room, the time until which waiters are kept waiting
 	// after the resync, for the sync API to catch up (see MarkSyncPending).
 	syncPending map[string]time.Time
@@ -34,9 +37,64 @@ type PartialStateTracker struct {
 // NewPartialStateTracker creates a new PartialStateTracker.
 func NewPartialStateTracker() *PartialStateTracker {
 	return &PartialStateTracker{
-		roomObservers: make(map[string][]chan struct{}),
-		syncPending:   make(map[string]time.Time),
+		roomObservers:   make(map[string][]chan struct{}),
+		resyncObservers: make(map[string][]chan struct{}),
+		syncPending:     make(map[string]time.Time),
 	}
+}
+
+// AwaitResyncComplete returns once the roomserver has finished populating the
+// room's state, or the context ends. It does not wait for syncapi's separate
+// copy of that state to catch up.
+func (t *PartialStateTracker) AwaitResyncComplete(ctx context.Context, roomID string, isPartial func(context.Context) (bool, error)) error {
+	ch, stop := t.observeResync(roomID)
+	defer stop()
+
+	partial, err := isPartial(ctx)
+	if err != nil {
+		return err
+	}
+	if !partial {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ch:
+		return nil
+	}
+}
+
+func (t *PartialStateTracker) observeResync(roomID string) (<-chan struct{}, func()) {
+	ch := make(chan struct{})
+	t.mu.Lock()
+	t.resyncObservers[roomID] = append(t.resyncObservers[roomID], ch)
+	t.mu.Unlock()
+
+	return ch, func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		observers := t.resyncObservers[roomID]
+		for i, observer := range observers {
+			if observer == ch {
+				t.resyncObservers[roomID] = append(observers[:i], observers[i+1:]...)
+				break
+			}
+		}
+		if len(t.resyncObservers[roomID]) == 0 {
+			delete(t.resyncObservers, roomID)
+		}
+	}
+}
+
+// NotifyResyncComplete wakes requests that only depend on roomserver state.
+func (t *PartialStateTracker) NotifyResyncComplete(roomID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, ch := range t.resyncObservers[roomID] {
+		close(ch)
+	}
+	delete(t.resyncObservers, roomID)
 }
 
 func (t *PartialStateTracker) time() time.Time {
@@ -180,4 +238,10 @@ func (t *PartialStateTracker) HasObservers(roomID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.roomObservers[roomID]) > 0
+}
+
+func (t *PartialStateTracker) HasResyncObservers(roomID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.resyncObservers[roomID]) > 0
 }

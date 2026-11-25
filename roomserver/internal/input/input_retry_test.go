@@ -109,6 +109,29 @@ func TestRetryWhileUnavailable(t *testing.T) {
 	}
 }
 
+// SQLite lock contention means another writer is holding the database for a
+// moment; the same input succeeds once it is released, so it must be retried
+// within the existing budget. A federation failure that wraps it stays
+// excluded: the remote server is the problem, not the local database.
+func TestRetryableInputErrorClassifiesSQLiteLockContention(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"database is locked":    {errors.New("database is locked"), true},
+		"sqlite busy code":      {errors.New("SQLITE_BUSY (5)"), true},
+		"wrapped lock":          {fmt.Errorf("r.DB.StoreEvent: %w", errors.New("database is locked")), true},
+		"unrelated failure":     {errors.New("event is not allowed"), false},
+		"rejection":             {types.RejectedError("state resolution cooldown active"), false},
+		"federation lock cause": {federationapi.FederationClientError{Err: "remote state fetch failed", Cause: errors.New("database is locked")}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, retryableInputError(t.Context(), tc.err))
+		})
+	}
+}
+
 func TestRetryWhileUnavailableIsBounded(t *testing.T) {
 	shortInputRetries(t, 200*time.Millisecond)
 	started := time.Now()

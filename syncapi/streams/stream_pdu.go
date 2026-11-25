@@ -155,7 +155,7 @@ func (p *PDUStreamProvider) CompleteSync(
 		// get the join response for each room
 		jr, jerr := p.getJoinResponseForCompleteSync(
 			ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, false,
-			events.Events, events.Limited, eventFormat, to, bundler,
+			events.Events, events.Limited, events.PrevBatchAnchor, eventFormat, to, bundler,
 		)
 		if jerr != nil {
 			if req.Context.Err() != nil || abandonsSync(jerr) {
@@ -163,7 +163,7 @@ func (p *PDUStreamProvider) CompleteSync(
 				return from
 			}
 			req.Log.WithError(jerr).Error("p.getJoinResponseForCompleteSync failed")
-			continue
+			return from
 		}
 		req.Response.Rooms.Join[roomID] = jr
 		req.Rooms[roomID] = spec.Join
@@ -218,7 +218,7 @@ func (p *PDUStreamProvider) CompleteSync(
 			events := recentEvents[roomID]
 			jr, err = p.getJoinResponseForCompleteSync(
 				ctx, snapshot, roomID, &stateFilter, req.WantFullState, req.UseStateAfter(), req.Device, true,
-				events.Events, events.Limited, eventFormat, to, bundler,
+				events.Events, events.Limited, events.PrevBatchAnchor, eventFormat, to, bundler,
 			)
 			if err != nil {
 				if req.Context.Err() != nil || abandonsSync(err) {
@@ -226,7 +226,7 @@ func (p *PDUStreamProvider) CompleteSync(
 					return from
 				}
 				req.Log.WithError(err).Error("p.getJoinResponseForCompleteSync failed")
-				continue
+				return from
 			}
 			req.Response.Rooms.Peek[roomID] = jr
 		}
@@ -822,6 +822,17 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 			hasMembershipChange = true
 		}
 	}
+	// A membership can reach the state block without appearing in the timeline,
+	// for example with lazy loading or when the state block carries a full
+	// snapshot. Refresh the summary for those too, but keep this separate from
+	// timeline-activity tracking above.
+	hasStateMembershipChange := false
+	for _, stateEvent := range delta.StateEvents {
+		if stateEvent.Type() == spec.MRoomMember && stateEvent.StateKey() != nil {
+			hasStateMembershipChange = true
+			break
+		}
+	}
 
 	// MSC3706: Check if this room became un-partial-stated (completed partial state resync)
 	// in the sync range. If so, we need to send the room summary with updated member counts.
@@ -841,12 +852,49 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	}
 
 	// Applies the history visibility rules
+	var gapEnd *rstypes.HeaderedEvent
 	events, err := internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, delta.RoomID, device.UserID, recentEvents, internal.SyncEndpoint)
 	if err != nil {
-		if abandonsSync(err) {
+		// Any failure other than the membership lookup's own cap leaves the
+		// timeline incomplete: events whose membership could not be resolved
+		// are omitted, so advancing would never deliver them. Stay at the old
+		// position and let the next sync retry.
+		if ctx.Err() != nil || !errors.Is(err, internal.ErrMembershipLookupTimeout) {
 			return r.From, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 		}
+		// The membership cap's DeadlineExceeded is our own bound, not the
+		// client leaving and not a database failover. Holding the position
+		// would wedge a client behind a saturated pool, so advance, but make
+		// the withheld events a recoverable gap. Deliver only the events after
+		// the last withheld one and mark the timeline limited; prev_batch then
+		// reaches the last withheld event (and everything older), so /messages
+		// can fetch the gap and the events before it.
 		logrus.WithError(err).WithField("room_id", delta.RoomID).Error("unable to apply history visibility filter")
+		visibleIDs := make(map[string]struct{}, len(events))
+		for _, ev := range events {
+			visibleIDs[ev.EventID()] = struct{}{}
+		}
+		lastWithheld := -1
+		for i, ev := range recentEvents {
+			if _, ok := visibleIDs[ev.EventID()]; !ok {
+				lastWithheld = i
+			}
+		}
+		if lastWithheld >= 0 {
+			gapEnd = recentEvents[lastWithheld]
+			tail := make(map[string]struct{}, len(recentEvents)-lastWithheld)
+			for _, ev := range recentEvents[lastWithheld+1:] {
+				tail[ev.EventID()] = struct{}{}
+			}
+			kept := make([]*rstypes.HeaderedEvent, 0, len(tail))
+			for _, ev := range events {
+				if _, ok := tail[ev.EventID()]; ok {
+					kept = append(kept, ev)
+				}
+			}
+			events = kept
+			limited = true
+		}
 	}
 
 	bwExtrems, bwErr := snapshot.BackwardExtremitiesForRoom(ctx, delta.RoomID)
@@ -875,6 +923,16 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	prevBatch, err := snapshot.GetBackwardTopologyPos(ctx, events)
 	if err != nil {
 		return r.From, fmt.Errorf("p.DB.GetBackwardTopologyPos: %w", err)
+	}
+	if gapEnd != nil && len(events) == 0 {
+		// Nothing survived the visibility filter after the gap. A normal
+		// prev_batch decrements before the oldest delivered event, but there is
+		// none; point it at the last withheld event itself so a backward page
+		// includes that event rather than starting just after it.
+		prevBatch, err = snapshot.EventPositionInTopology(ctx, gapEnd.EventID())
+		if err != nil {
+			return r.From, fmt.Errorf("p.DB.EventPositionInTopology: %w", err)
+		}
 	}
 	if err = ctx.Err(); err != nil {
 		return r.From, err
@@ -926,7 +984,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	// correct even when no membership event is in this range. An unchanged
 	// joined room still belongs in the response only when a stream produced
 	// room data; the other stream providers can add that later if needed.
-	if len(events) == 0 && len(delta.StateEvents) == 0 && !hasMembershipChange &&
+	if len(events) == 0 && gapEnd == nil && len(delta.StateEvents) == 0 && !hasMembershipChange &&
 		!delta.NewlyJoined && !req.WantFullState {
 		return latestPosition, nil
 	}
@@ -934,7 +992,7 @@ func (p *PDUStreamProvider) addRoomDeltaToResponse(
 	switch delta.Membership {
 	case spec.Join:
 		jr := types.NewJoinResponse()
-		if hasMembershipChange {
+		if hasMembershipChange || hasStateMembershipChange {
 			jr.Summary, err = snapshot.GetRoomSummary(ctx, delta.RoomID, device.UserID)
 			if err != nil {
 				if abandonsSync(err) {
@@ -1123,6 +1181,54 @@ func topologicalRecentEvents(
 			res.Limited = true
 		}
 		slices.Reverse(picked)
+		// A create at the head of the window with excluded (backfilled)
+		// events inside the selected topology range is not the start of the
+		// room's delivered history.
+		// Keeping it would anchor prev_batch at the create, leaving the
+		// backfilled events unreachable. Leave the create to state and let
+		// backward pagination deliver it at the end of the history.
+		if len(picked) > 0 && picked[0].Type() == spec.MRoomCreate && picked[0].StateKeyEquals("") {
+			createDepth, createStream, err := snapshot.PositionInTopology(ctx, picked[0].EventID())
+			if err != nil {
+				return nil, err
+			}
+			through := types.TopologyToken{Depth: types.StreamPosition(math.MaxInt64), PDUPosition: types.StreamPosition(math.MaxInt64)}
+			if len(picked) > 1 {
+				through.Depth, through.PDUPosition, err = snapshot.PositionInTopology(ctx, picked[len(picked)-1].EventID())
+				if err != nil {
+					return nil, err
+				}
+			}
+			createPosition := types.TopologyToken{Depth: createDepth, PDUPosition: createStream}
+			lastExcluded, hasExcludedAfterCreate, err := snapshot.LastExcludedEventAfterTopologyPosition(ctx, roomID, createPosition, through)
+			if err != nil {
+				return nil, err
+			}
+			if hasExcludedAfterCreate {
+				// Leave the create and delivered events up to the hidden gap
+				// to state/backward pagination. Otherwise the cursor after the
+				// gap would make /messages replay events already in this window.
+				selected := picked
+				var afterGap []types.StreamEvent
+				for _, ev := range selected[1:] {
+					// prev_batch is an inclusive stream cursor placed at the
+					// hidden event, so backward pagination returns everything at
+					// or before that stream position. Retain only events beyond
+					// it. Do not also require a later topology position: when
+					// stream and topology order differ, an event on an earlier
+					// topology branch but persisted after the gap would then be
+					// dropped from the timeline and never reachable by
+					// pagination.
+					if ev.StreamPosition > lastExcluded.PDUPosition {
+						afterGap = append(afterGap, ev)
+					}
+				}
+				picked = afterGap
+				res.Limited = true
+				anchor := lastExcluded
+				res.PrevBatchAnchor = &anchor
+			}
+		}
 		res.Events = picked
 		result[roomID] = res
 	}
@@ -1139,6 +1245,7 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	isPeek bool,
 	recentStreamEvents []types.StreamEvent,
 	limited bool,
+	prevBatchAnchor *types.TopologyToken,
 	eventFormat synctypes.ClientEventFormat,
 	sentAt types.StreamPosition,
 	bundler *syncBundler,
@@ -1188,13 +1295,78 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	if !isPeek {
 		events, err = internal.ApplyTimelineHistoryVisibilityFilter(ctx, snapshot, p.rsAPI, roomID, device.UserID, recentEvents, internal.SyncEndpoint)
 		if err != nil {
-			if abandonsSync(err) {
+			if ctx.Err() != nil || abandonsSync(err) {
 				return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
 			}
-			logrus.WithError(err).WithField("room_id", roomID).Error("unable to apply history visibility filter")
+			if !errors.Is(err, internal.ErrMembershipLookupTimeout) {
+				return nil, fmt.Errorf("internal.ApplyTimelineHistoryVisibilityFilter: %w", err)
+			}
+			// Keep the visible tail and expose the omitted events through a limited
+			// timeline. The stream position can then advance without losing the
+			// events whose visibility lookup timed out.
+			visibleIDs := make(map[string]struct{}, len(events))
+			for _, ev := range events {
+				visibleIDs[ev.EventID()] = struct{}{}
+			}
+			lastWithheld := -1
+			for i, ev := range recentEvents {
+				if _, ok := visibleIDs[ev.EventID()]; !ok {
+					lastWithheld = i
+				}
+			}
+			if lastWithheld >= 0 {
+				gapEvent := recentEvents[lastWithheld]
+				anchor, anchorErr := snapshot.EventPositionInTopology(ctx, gapEvent.EventID())
+				if anchorErr != nil {
+					return nil, fmt.Errorf("snapshot.EventPositionInTopology for withheld event: %w", anchorErr)
+				}
+				prevBatchAnchor = &anchor
+				visibleTail := make(map[string]struct{}, len(recentEvents)-lastWithheld-1)
+				for _, ev := range recentEvents[lastWithheld+1:] {
+					visibleTail[ev.EventID()] = struct{}{}
+				}
+				kept := make([]*rstypes.HeaderedEvent, 0, len(visibleTail))
+				for _, ev := range events {
+					if _, ok := visibleTail[ev.EventID()]; ok {
+						kept = append(kept, ev)
+					}
+				}
+				// State events removed from the timeline still need to be sent
+				// in the state block. Hidden events remain excluded by using the
+				// visibility-filtered set as the source of truth.
+				keptIDs := make(map[string]struct{}, len(kept))
+				for _, ev := range kept {
+					keptIDs[ev.EventID()] = struct{}{}
+				}
+				if !stateAfter {
+					currentState, stateErr := snapshot.CurrentState(ctx, roomID, stateFilter, nil)
+					if stateErr != nil {
+						return nil, stateErr
+					}
+					stateIDs := make(map[string]struct{}, len(stateEvents))
+					for _, ev := range stateEvents {
+						stateIDs[ev.EventID()] = struct{}{}
+					}
+					for _, ev := range currentState {
+						if _, visible := visibleIDs[ev.EventID()]; !visible {
+							continue
+						}
+						if _, inTimeline := keptIDs[ev.EventID()]; inTimeline {
+							continue
+						}
+						if _, exists := stateIDs[ev.EventID()]; exists {
+							continue
+						}
+						stateIDs[ev.EventID()] = struct{}{}
+						stateEvents = append(stateEvents, ev)
+					}
+				}
+				events = kept
+				limited = true
+			}
+			err = nil
 		}
 	}
-
 	if !stateAfter {
 		stateEvents = removeDuplicates(stateEvents, events)
 	}
@@ -1220,11 +1392,15 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 	// Retrieve the backward topology position, i.e. the position of the
 	// oldest event in the room's topology.
 	var prevBatch *types.TopologyToken
-	if len(events) > 0 {
+	if prevBatchAnchor != nil {
+		anchor := *prevBatchAnchor
+		prevBatch = &anchor
+	} else if len(events) > 0 {
 		var backwardTopologyPos, backwardStreamPos types.StreamPosition
 		event := events[0]
-		// If this is the beginning of the room, we can't go back further. We're going to return
-		// the TopologyToken from the last event instead. (Synapse returns the /sync next_Batch)
+		// If this is the beginning of the room, we can't go back further. Return
+		// the position of the last event instead, as Synapse does with /sync
+		// next_batch, so /members?at treats the response as complete.
 		if event.Type() == spec.MRoomCreate && event.StateKeyEquals("") {
 			event = events[len(events)-1]
 		}
@@ -1236,7 +1412,11 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 			Depth:       backwardTopologyPos,
 			PDUPosition: backwardStreamPos,
 		}
-		prevBatch.Decrement()
+	}
+	if prevBatch != nil {
+		if prevBatchAnchor == nil {
+			prevBatch.Decrement()
+		}
 	}
 
 	if prevBatch != nil {

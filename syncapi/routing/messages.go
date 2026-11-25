@@ -75,6 +75,8 @@ const minBranchesForSelection = 2
 // far are stored, so retrying the same cursor makes progress.
 var errForwardBackfillIncomplete = errors.New("forward backfill did not close the history gap within one request")
 
+var errHistoryVisibilityUnavailable = errors.New("history visibility lookup failed")
+
 // errBackwardBackfillIncomplete is returned when a backward gap remains open
 // after maxBackwardBackfillRounds. The caller retries the same cursor after
 // the fetched batches have been stored.
@@ -90,15 +92,19 @@ var errBackwardBackfillFetch = errors.New("backward federation backfill failed")
 var errBackfillRecentlyFailed = errors.New("backfill recently found no events on any server")
 
 type messagesReq struct {
-	ctx                      context.Context
-	db                       storage.Database
-	snapshot                 storage.DatabaseTransaction
-	rsAPI                    api.SyncRoomserverAPI
-	cfg                      *config.SyncAPI
-	roomID                   string
-	from                     *types.TopologyToken
-	fromStream               *types.StreamingToken
-	fromTopologyToken        bool
+	ctx               context.Context
+	db                storage.Database
+	snapshot          storage.DatabaseTransaction
+	rsAPI             api.SyncRoomserverAPI
+	cfg               *config.SyncAPI
+	roomID            string
+	from              *types.TopologyToken
+	fromStream        *types.StreamingToken
+	fromTopologyToken bool
+	// leaveBound marks a backward from token placed at the user's leave event.
+	// It is a history bound, not a client cursor, so it must stay there when a
+	// later event raises the topology around it.
+	leaveBound               bool
 	to                       *types.TopologyToken
 	device                   *userapi.Device
 	deviceUserID             spec.UserID
@@ -383,6 +389,7 @@ func OnIncomingMessagesRequest(
 		wasToProvided = false
 	}
 
+	leaveBound := false
 	// If the user already left the room, grep events from before that
 	if membershipResp.Membership == spec.Leave {
 		var token types.TopologyToken
@@ -393,8 +400,30 @@ func OnIncomingMessagesRequest(
 			}
 		}
 		if backwardOrdering {
-			from = token
-			fromTopologyToken = false
+			// Bound the page by whichever is earlier: the client's cursor or
+			// the user's leave event. A cursor beyond the leave must not expose
+			// post-leave events, but an earlier cursor must not be widened to
+			// the leave event, which would replay events the client has
+			// already seen.
+			var afterLeave bool
+			if fromStream != nil {
+				// retrieveEvents uses this stream position directly, so compare
+				// it with the leave event's stream position as well as the
+				// resolved topology token.
+				afterLeave = fromStream.PDUPosition > token.PDUPosition
+			} else {
+				afterLeave = from.Depth > token.Depth ||
+					(from.Depth == token.Depth && from.PDUPosition > token.PDUPosition)
+			}
+			if afterLeave {
+				from = token
+				// The client token is no longer the active bound. Leaving it
+				// set would make retrieveEvents query by the stale stream
+				// position.
+				fromStream = nil
+				fromTopologyToken = false
+				leaveBound = true
+			}
 		}
 	}
 
@@ -408,6 +437,7 @@ func OnIncomingMessagesRequest(
 		from:              &from,
 		fromStream:        fromStream,
 		fromTopologyToken: fromTopologyToken,
+		leaveBound:        leaveBound,
 		to:                &to,
 		wasToProvided:     wasToProvided,
 		filter:            filter,
@@ -430,6 +460,13 @@ func OnIncomingMessagesRequest(
 		return util.JSONResponse{
 			Code: http.StatusTooManyRequests,
 			JSON: spec.LimitExceeded("History is still being fetched, retry shortly", forwardBackfillRetryAfterMS),
+		}
+	}
+	if errors.Is(err, errHistoryVisibilityUnavailable) {
+		util.GetLogger(req.Context()).WithError(err).Warn("mreq.retrieveEvents: history visibility lookup failed")
+		return util.JSONResponse{
+			Code: http.StatusTooManyRequests,
+			JSON: spec.LimitExceeded("History visibility is temporarily unavailable; retry shortly", forwardBackfillRetryAfterMS),
 		}
 	}
 	if err != nil {
@@ -870,7 +907,7 @@ func (r *messagesReq) retrieveEvents(ctx context.Context, rsAPI api.SyncRoomserv
 	startTime := time.Now()
 	filteredEvents, err := internal.ApplyHistoryVisibilityFilter(r.ctx, r.snapshot, r.rsAPI, events, nil, r.deviceUserID, "messages") //nolint:contextcheck
 	if err != nil {
-		return []synctypes.ClientEvent{}, *r.from, *r.to, nil
+		return []synctypes.ClientEvent{}, *r.from, emptyToken, fmt.Errorf("%w: %w", errHistoryVisibilityUnavailable, err)
 	}
 	logrus.WithFields(logrus.Fields{
 		"duration":      time.Since(startTime),
@@ -949,21 +986,12 @@ func (r *messagesReq) filterByStreamToken(
 		switch {
 		case r.backwardOrdering:
 			// Backfilled events are stored after the token was issued, so their
-			// stream positions are above it, but they belong to older history
-			// (strictly shallower than the token's own position in the topology).
-			keep := ev.StreamPosition <= r.fromStream.PDUPosition
-			if !keep && ev.ExcludeFromSync {
-				if r.from == nil || r.from.Depth == 0 {
-					keep = true
-				} else {
-					evDepth, depthErr := r.topologyDepth(ctx, ev)
-					if depthErr != nil {
-						return nil, end, depthErr
-					}
-					keep = evDepth < int64(r.from.Depth)
-				}
-			}
-			if keep {
+			// stream positions are above it, but they belong to older history.
+			// GetEventsBeforeStreamPosition has already bounded them by depth, so
+			// the bound lives in one place: a second, narrower depth check here
+			// would drop history that the storage bound deliberately includes,
+			// such as the parents of a join that were stored after it.
+			if ev.StreamPosition <= r.fromStream.PDUPosition || ev.ExcludeFromSync {
 				filtered = append(filtered, ev)
 				droppedBackfilledSuffix = false
 			}
@@ -1048,25 +1076,37 @@ func (r *messagesReq) sortByTopology(events []*rstypes.HeaderedEvent) error {
 	return nil
 }
 
-// reanchorBackwardCursor resolves the anchor of a backward /messages topology
-// cursor again. Such a cursor is placed immediately before the event at
+// reanchorBackwardCursor resolves the anchor of a backward /messages cursor
+// again. Such a cursor is placed immediately before the event at
 // PDUPosition+1. A late-parent repair can lift that event in the topology
-// while keeping its stream position, so the depth in an old token may be stale.
-// A repair only ever raises a position, so the depth is only raised: a token
-// that does not follow that convention (a forward token used backwards, for
-// instance) resolves to some other event, and must not lower or sideline it.
-// A cursor at stream position 0 has no preceding event whose depth could be
-// stale: it deliberately sits before everything stored (the prev_batch of a
-// room joined over federation, or an arbitrary old token), so it is kept.
+// while keeping its stream position, and a stream position that falls in a gap
+// can resolve to an older topological segment; both leave the depth in the
+// token stale. A repair only ever raises a position, so the depth is only
+// raised: a token that does not follow that convention (a forward token used
+// backwards, for instance) resolves to some other event, and must not lower or
+// sideline it. A cursor at stream position 0 has no preceding event whose depth
+// could be stale: it deliberately sits before everything stored (the
+// prev_batch of a room joined over federation, or an arbitrary old token), so
+// it is kept.
+//
+// This applies to both topology tokens and stream tokens. A /sync prev_batch
+// is a stream token at the oldest visible event's stream position minus one.
+// When that position falls into a stream gap, StreamToTopologicalPosition
+// anchors it at the nearest older event instead of the event just ahead,
+// which can put the cursor below a live backward extremity and stop /messages
+// from filling the gap.
 func (r *messagesReq) reanchorBackwardCursor(ctx context.Context) error {
-	if !r.backwardOrdering || !r.fromTopologyToken {
+	if !r.backwardOrdering || r.leaveBound {
+		// A bound set by the departed-member leave path is anchored at the
+		// leave event itself. Re-anchoring it would move it past a later event
+		// and hide the history before the leave.
 		return nil
 	}
 	return reanchorBackwardTopologyToken(ctx, r.snapshot, r.roomID, r.from)
 }
 
 // reanchorBackwardTopologyToken applies the re-anchoring described on
-// reanchorBackwardCursor to a backward topology token, in place.
+// reanchorBackwardCursor to a backward cursor, in place.
 func reanchorBackwardTopologyToken(ctx context.Context, snapshot any, roomID string, from *types.TopologyToken) error {
 	if from.PDUPosition == 0 || from.PDUPosition >= types.StreamPosition(math.MaxInt64) {
 		return nil
@@ -2199,6 +2239,8 @@ func backfillEvents(
 		if events[i].Visibility == "" {
 			events[i].Visibility = res.HistoryVisibility
 		}
+		// Best effort, as for events from the roomserver output stream.
+		internal.SetHistoricalPrevState(ctx, rsAPI, events[i])
 		_, err = db.WriteEvent(
 			ctx,
 			events[i],

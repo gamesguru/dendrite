@@ -237,8 +237,32 @@ func (r *Inputer) processRoomEvent(
 			logger.WithError(werr).Errorf("Failed to check if event %q is already seen", event.EventID())
 			return werr
 		case !wasRejected:
-			// We've seen this event before and it wasn't rejected so we
-			// should ignore it.
+			// A hash-pruned outlier can be received before a complete copy.
+			// Ignore duplicates as usual, but allow a complete copy through so
+			// StoreEvent can upgrade the stored JSON. A genuine redaction is
+			// identified by redacted_because and must remain authoritative.
+			if !event.Redacted() {
+				validatedRedaction, redactionErr := r.DB.HasValidatedRedactionForEvent(ctx, event.EventID())
+				if redactionErr != nil {
+					return fmt.Errorf("checking validated redaction: %w", redactionErr)
+				}
+				metadata, lookupErr := r.DB.EventNIDs(ctx, []string{event.EventID()})
+				if lookupErr != nil {
+					return fmt.Errorf("r.DB.EventNIDs: %w", lookupErr)
+				}
+				if stored, ok := metadata[event.EventID()]; ok {
+					events, eventsErr := r.DB.Events(ctx, roomInfo.RoomVersion, []types.EventNID{stored.EventNID})
+					if eventsErr != nil {
+						return fmt.Errorf("r.DB.Events: %w", eventsErr)
+					}
+					if !validatedRedaction {
+						if verImpl, verErr := gomatrixserverlib.GetRoomVersion(roomInfo.RoomVersion); verErr == nil &&
+							len(events) == 1 && eventutil.StoredCopyLooksHashPruned(verImpl, events[0].JSON()) {
+							break
+						}
+					}
+				}
+			}
 			logger.Debugf("Already processed event %q, ignoring", event.EventID())
 			return nil
 		}
@@ -623,7 +647,11 @@ func (r *Inputer) processRoomEvent(
 		// current room state. Skip this for partial state rooms per MSC3706.
 		softfail, err = helpers.CheckForSoftFail(ctx, r.DB, roomInfo, headered, input.StateEventIDs, r.Queryer)
 		if err != nil {
-			logger.WithError(err).Warn("Error authing soft-failed event")
+			// We could not work out the current state; that says nothing about
+			// whether the event conflicts with it, so retry rather than hide it.
+			// The event is not stored, so record any state-resolution failure now.
+			recordStateResolutionResult()
+			return fmt.Errorf("helpers.CheckForSoftFail: %w", err)
 		}
 	}
 
@@ -823,6 +851,7 @@ func (r *Inputer) processRoomEvent(
 				OldRoomEvent: &api.OutputOldRoomEvent{
 					Event:             headered,
 					HistoryVisibility: historyVisibility,
+					GapFill:           input.GapFill,
 				},
 			},
 		})
@@ -1144,20 +1173,94 @@ func (r *Inputer) fetchAuthEvents(
 		return nil
 	}
 
-	var err error
 	var res fclient.RespEventAuth
 	var found bool
-	for _, serverName := range servers {
+	var prunedResponse fclient.RespEventAuth
+	var havePrunedResponse bool
+	verImpl, versionErr := gomatrixserverlib.GetRoomVersion(event.Version())
+	if versionErr != nil {
+		return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
+	}
+	// Cap the candidate list: a hash-pruned-looking copy makes us try the next
+	// server, and a legitimately redacted chain looks the same, so an uncapped
+	// list could turn one fetch into a request to every joined host.
+	authServers := servers
+	// Continue past a few pruned-looking replies so a later host may have a
+	// complete chain, while bounding federation requests independently of the
+	// room's total joined-host count.
+	const maxAuthServerAttempts = maxServersPerEvent * 2
+	if len(authServers) > maxAuthServerAttempts {
+		authServers = authServers[:maxAuthServerAttempts]
+	}
+	for _, serverName := range authServers {
 		// Request the entire auth chain for the event in question. This should
 		// contain all of the auth events — including ones that we already know —
 		// so we'll need to filter through those in the next section.
-		res, err = r.FSAPI.GetEventAuth(ctx, virtualHost, serverName, event.Version(), event.RoomID().String(), event.EventID())
-		if err != nil {
-			logger.WithError(err).Warnf("Failed to get event auth from federation for %q: %s", event.EventID(), err)
+		candidate, getErr := r.FSAPI.GetEventAuth(ctx, virtualHost, serverName, event.Version(), event.RoomID().String(), event.EventID())
+		if getErr != nil {
+			logger.WithError(getErr).Warnf("Failed to get event auth from federation for %q: %s", event.EventID(), getErr)
 			continue
 		}
+		// The response can contain transitive auth dependencies, not just the
+		// directly missing auth IDs. Only copies we still need can make the
+		// candidate incomplete, so check which response events are absent
+		// locally before deciding whether to look for a fuller chain.
+		type authDependency struct {
+			id  string
+			raw []byte
+			ev  gomatrixserverlib.PDU
+		}
+		var dependencies []authDependency
+		dependencyIDs := make([]string, 0, len(candidate.AuthEvents))
+		for _, raw := range candidate.AuthEvents {
+			parsed, parseErr := verImpl.NewEventFromUntrustedJSON(raw)
+			if parseErr != nil {
+				continue
+			}
+			if _, alreadyKnown := known[parsed.EventID()]; alreadyKnown {
+				continue
+			}
+			dependencies = append(dependencies, authDependency{id: parsed.EventID(), raw: raw, ev: parsed})
+			dependencyIDs = append(dependencyIDs, parsed.EventID())
+		}
+		locallyStored := map[string]struct{}{}
+		if len(dependencyIDs) > 0 {
+			metadata, lookupErr := r.DB.EventNIDs(ctx, dependencyIDs)
+			if lookupErr != nil {
+				return fmt.Errorf("r.DB.EventNIDs: %w", lookupErr)
+			}
+			for eventID := range metadata {
+				locallyStored[eventID] = struct{}{}
+			}
+		}
+		suspicious := false
+		for _, dependency := range dependencies {
+			// Only a copy we still need matters; the chain repeats events we hold.
+			if _, present := locallyStored[dependency.id]; present {
+				continue
+			}
+			if eventutil.LooksHashPruned(dependency.raw, dependency.ev) {
+				logger.Debugf("Auth chain from %q contains event %q that looks hash-pruned; continuing candidate search", serverName, dependency.id)
+				suspicious = true
+				break
+			}
+		}
+		if suspicious {
+			if !havePrunedResponse {
+				prunedResponse = candidate
+				havePrunedResponse = true
+			}
+			continue
+		}
+		res = candidate
 		found = true
 		break
+	}
+	if !found && havePrunedResponse {
+		// Keep the only available chain if every candidate has pruned copies.
+		logger.Debugf("Accepting the only available auth chain for %q despite a hash-pruned copy", event.EventID())
+		res = prunedResponse
+		found = true
 	}
 	fullChain := found
 	if !found {
@@ -1166,10 +1269,6 @@ func (r *Inputer) fetchAuthEvents(
 		// the unknown auth events directly via /event and walk their auth-event
 		// dependencies. The state fetched by /state_ids may already include
 		// some of those dependencies locally.
-		verImpl, versionErr := gomatrixserverlib.GetRoomVersion(event.Version())
-		if versionErr != nil {
-			return fmt.Errorf("unknown room version %s: %w", event.Version(), versionErr)
-		}
 		pending := make([]string, 0, len(unknown))
 		for authEventID := range unknown {
 			pending = append(pending, authEventID)
@@ -1187,7 +1286,8 @@ func (r *Inputer) fetchAuthEvents(
 			}
 			requested[authEventID] = struct{}{}
 			var fetched gomatrixserverlib.PDU
-			for _, serverName := range servers {
+			var fetchedRaw []byte
+			for _, serverName := range authServers[:min(len(authServers), maxServersPerEvent)] {
 				txn, getErr := r.FSAPI.GetEvent(ctx, virtualHost, serverName, authEventID)
 				if getErr != nil || len(txn.PDUs) == 0 {
 					logger.WithError(getErr).Debugf("Failed to get missing auth event %q from %q", authEventID, serverName)
@@ -1199,14 +1299,24 @@ func (r *Inputer) fetchAuthEvents(
 					if parseErr != nil || parsed.EventID() != authEventID {
 						continue
 					}
-					res.AuthEvents = append(res.AuthEvents, spec.RawJSON(pdu))
-					fetched = parsed
+					if eventutil.LooksHashPruned(pdu, parsed) {
+						// Prefer another server's copy; keep the first as a fallback.
+						logger.Debugf("Auth event %q from %q looks hash-pruned; preferring a full copy if one is available", authEventID, serverName)
+						if fetched == nil {
+							fetched, fetchedRaw = parsed, pdu
+						}
+						continue
+					}
+					fetched, fetchedRaw = parsed, pdu
 					foundRequestedEvent = true
 					break
 				}
 				if foundRequestedEvent {
 					break
 				}
+			}
+			if fetched != nil {
+				res.AuthEvents = append(res.AuthEvents, spec.RawJSON(fetchedRaw))
 			}
 			if fetched == nil {
 				unresolved[authEventID] = struct{}{}
@@ -1224,7 +1334,7 @@ func (r *Inputer) fetchAuthEvents(
 		}
 	}
 	if !found {
-		return fmt.Errorf("no servers provided event auth for event ID %q, tried servers %v", event.EventID(), servers)
+		return fmt.Errorf("no servers provided event auth for event ID %q, tried servers %v", event.EventID(), authServers)
 	}
 
 	// Start with a clean state and see if we can auth with what the remote

@@ -7,12 +7,14 @@
 package syncapi
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
 	"github.com/gamesguru/gomatrixserverlib/fclient"
+	"github.com/matrix-org/util"
 	"github.com/sirupsen/logrus"
 
 	"codefloe.com/pat-s/zendrite/internal/caching"
@@ -197,4 +199,20 @@ func AddPublicRoutes(
 	if keyRing != nil {
 		routing.SetupFederation(routers.Federation, &zendriteCfg.SyncAPI, syncDB, rsAPI, keyRing)
 	}
+
+	routers.ZendriteAdmin.Handle("/admin/repairUnsigned",
+		httputil.MakeAdminAPI("admin_repair_unsigned_all", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return routing.AdminRepairUnsignedAll(req, syncDB, rsAPI, device)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+	routers.ZendriteAdmin.Handle("/admin/repairUnsigned/{roomID}",
+		httputil.MakeAdminAPI("admin_repair_unsigned", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return routing.AdminRepairUnsigned(req, syncDB, rsAPI, device)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
+	routers.ZendriteAdmin.Handle("/admin/syncPruned",
+		httputil.MakeAdminAPI("admin_sync_pruned", userAPI, func(req *http.Request, device *userapi.Device) util.JSONResponse {
+			return routing.AdminSyncPruned(req, syncDB, rsAPI, device)
+		}),
+	).Methods(http.MethodPost, http.MethodOptions)
 }

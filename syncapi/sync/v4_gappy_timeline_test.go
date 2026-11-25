@@ -7,11 +7,14 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/gamesguru/gomatrixserverlib/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	rstypes "codefloe.com/pat-s/zendrite/roomserver/types"
 	"codefloe.com/pat-s/zendrite/syncapi/types"
 )
 
@@ -102,4 +105,44 @@ func TestGetTimelineEvents_RoomContinuouslyLive_OnlyReturnsNewEvents(t *testing.
 	require.Len(t, timeline, 1)
 	assert.Equal(t, "$new:localhost", timeline[0].EventID)
 	assert.Equal(t, 1, numLive)
+}
+
+// A failed membership lookup that is not the lookup's own cap must fail the
+// room: serving the filtered page would advance the connection position past
+// events that were never delivered, and no later sync would retry them.
+func TestGetTimelineEvents_VisibilityLookupFailureFailsRoom(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	roomID := "!visibility:localhost"
+	userID := "@alice:localhost"
+	rp := &RequestPool{rsAPI: &membershipErrorRoomserverAPI{}}
+
+	snapshot := newMockSnapshot()
+	snapshot.SetRecentEvents(roomID, types.RecentEvents{
+		Events: []types.StreamEvent{
+			createMockTimelineEvent("$visible:localhost", 95, `{"msgtype":"m.text","body":"held back"}`),
+		},
+	})
+
+	roomState := types.RoomStreamState{
+		Status:    types.HaveSentRoomLive,
+		LastToken: &types.StreamingToken{PDUPosition: 90},
+	}
+	fromToken := &types.StreamingToken{PDUPosition: 90}
+	currentPos := types.StreamingToken{PDUPosition: 100}
+
+	timeline, limited, numLive, err := rp.getTimelineEvents(ctx, snapshot, roomID, userID, 10, roomState, currentPos, fromToken)
+	require.Error(t, err, "a membership lookup failure must hold the room's position")
+	require.Nil(t, timeline)
+	require.False(t, limited)
+	require.Zero(t, numLive)
+}
+
+type membershipErrorRoomserverAPI struct {
+	mockRoomserverAPI
+}
+
+func (m *membershipErrorRoomserverAPI) QueryMembershipAtEvent(context.Context, spec.RoomID, []string, spec.SenderID) (map[string]*rstypes.HeaderedEvent, error) {
+	return nil, errors.New("membership lookup failed")
 }
