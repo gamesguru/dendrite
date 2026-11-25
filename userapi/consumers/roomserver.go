@@ -55,8 +55,10 @@ type OutputRoomEventConsumer struct {
 	serverName   spec.ServerName
 }
 
-var errRetryPushRuleCopy = errors.New("retry room event after push rule copy failure")
-var errRetryNotificationDepth = errors.New("retry room event after notification depth lookup failure")
+var (
+	errRetryPushRuleCopy      = errors.New("retry room event after push rule copy failure")
+	errRetryNotificationDepth = errors.New("retry room event after notification depth lookup failure")
+)
 
 func NewOutputRoomEventConsumer(
 	process *process.ProcessContext,
