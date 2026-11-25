@@ -56,8 +56,9 @@ type OutputRoomEventConsumer struct {
 }
 
 var (
-	errRetryPushRuleCopy      = errors.New("retry room event after push rule copy failure")
-	errRetryNotificationDepth = errors.New("retry room event after notification depth lookup failure")
+	errRetryPushRuleCopy                 = errors.New("retry room event after push rule copy failure")
+	errRetryNotificationDepth            = errors.New("retry room event after notification depth lookup failure")
+	errNotificationPredecessorUnresolved = errors.New("notification predecessor is unresolved")
 )
 
 func NewOutputRoomEventConsumer(
@@ -124,11 +125,13 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 
 	var event *rstypes.HeaderedEvent
 	var isNewRoomEvent bool
+	var isNewInviteEvent bool
 	switch rsapi.OutputType(msg.Header.Get(jetstream.RoomEventType)) {
 	case rsapi.OutputTypeNewRoomEvent:
 		isNewRoomEvent = true
 		fallthrough
 	case rsapi.OutputTypeNewInviteEvent:
+		isNewInviteEvent = isNewInviteEvent || !isNewRoomEvent
 		var output rsapi.OutputEvent
 		if err := json.Unmarshal(msg.Data, &output); err != nil {
 			// If the message was invalid, log it and move on to the next message in the stream
@@ -181,7 +184,7 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		return true
 	}
 
-	if err := s.processMessage(ctx, event, uint64(spec.AsTimestamp(metadata.Timestamp))); err != nil {
+	if err := s.processMessageWithInvite(ctx, event, uint64(spec.AsTimestamp(metadata.Timestamp)), isNewInviteEvent); err != nil {
 		log.WithFields(log.Fields{
 			"event_id": event.EventID(),
 		}).WithError(err).Errorf("userapi consumer: process room event failure")
@@ -477,6 +480,10 @@ func (s *OutputRoomEventConsumer) copyTags(ctx context.Context, oldRoomID, newRo
 }
 
 func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rstypes.HeaderedEvent, streamPos uint64) (retErr error) {
+	return s.processMessageWithInvite(ctx, event, streamPos, false)
+}
+
+func (s *OutputRoomEventConsumer) processMessageWithInvite(ctx context.Context, event *rstypes.HeaderedEvent, streamPos uint64, isInvite bool) (retErr error) {
 	members, roomSize, err := s.localRoomMembers(ctx, event.RoomID().String())
 	if err != nil {
 		return fmt.Errorf("s.localRoomMembers: %w", err)
@@ -545,7 +552,14 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	if threadErr == nil {
 		roomDepth, err = s.notificationRoomDepth(ctx, event)
 		if err != nil {
-			return fmt.Errorf("%w: %w", errRetryNotificationDepth, err)
+			if isInvite && errors.Is(err, errNotificationPredecessorUnresolved) {
+				// Invites must reach the local target even when a predecessor is
+				// not stored locally. Their declared depth is the ordering floor
+				// until predecessor data becomes available.
+				roomDepth = depth.LiftAbovePrevEvents(event.Depth(), -1)
+			} else {
+				return fmt.Errorf("%w: %w", errRetryNotificationDepth, err)
+			}
 		}
 	}
 
@@ -697,6 +711,31 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 		if err != nil {
 			return 0, fmt.Errorf("query effective notification predecessor depths: %w", err)
 		}
+		if effectiveDepths == nil {
+			effectiveDepths = make(map[string]int64)
+		}
+		knownDepths := make(map[string]struct{}, len(effectiveDepths))
+		for eventID := range effectiveDepths {
+			knownDepths[eventID] = struct{}{}
+		}
+		storeNewCheckpoints := func() error {
+			checkpoints := make(map[string]int64)
+			for eventID, eventDepth := range effectiveDepths {
+				if _, known := knownDepths[eventID]; !known && eventDepth > 0 {
+					checkpoints[eventID] = eventDepth
+				}
+			}
+			if len(checkpoints) == 0 {
+				return nil
+			}
+			if err := s.db.StoreNotificationDepthCheckpoints(ctx, event.RoomID().String(), checkpoints); err != nil {
+				return err
+			}
+			for eventID := range checkpoints {
+				knownDepths[eventID] = struct{}{}
+			}
+			return nil
+		}
 		var response rsapi.QueryEventsByIDResponse
 		if err := s.rsAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{
 			RoomID: event.RoomID().String(), EventIDs: prevIDs,
@@ -712,11 +751,17 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 			if !ok {
 				prev, found := predecessors[prevID]
 				if !found {
-					return 0, fmt.Errorf("notification predecessor %s is unresolved", prevID)
+					return 0, fmt.Errorf("%w: %s", errNotificationPredecessorUnresolved, prevID)
 				}
 				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, effectiveDepths, make(map[string]bool), &work)
 				if err != nil {
+					if checkpointErr := storeNewCheckpoints(); checkpointErr != nil {
+						return 0, fmt.Errorf("store notification depth checkpoints: %w", checkpointErr)
+					}
 					return 0, fmt.Errorf("resolve effective notification depth for predecessor %s: %w", prevID, err)
+				}
+				if checkpointErr := storeNewCheckpoints(); checkpointErr != nil {
+					return 0, fmt.Errorf("store notification depth checkpoints: %w", checkpointErr)
 				}
 			}
 			if prevDepth > maxPrev {
@@ -728,6 +773,9 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 }
 
 func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context, event *rstypes.HeaderedEvent, cached map[string]int64, visiting map[string]bool, work *int) (int64, error) {
+	if cached == nil {
+		cached = make(map[string]int64)
+	}
 	if d, ok := cached[event.EventID()]; ok {
 		return d, nil
 	}
@@ -772,7 +820,7 @@ func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context
 			if !ok {
 				prev, found := predecessors[prevID]
 				if !found {
-					return 0, fmt.Errorf("notification predecessor %s is unresolved", prevID)
+					return 0, fmt.Errorf("%w: %s", errNotificationPredecessorUnresolved, prevID)
 				}
 				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, cached, visiting, work)
 				if err != nil {

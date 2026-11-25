@@ -88,7 +88,8 @@ const upsertMembershipSQL = "" +
 	" VALUES ($1, $2, $3, $4, $5, $6)" +
 	" ON CONFLICT (room_id, user_id, membership)" +
 	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = $6" +
-	" WHERE syncapi_memberships.event_id <> excluded.event_id"
+	" WHERE syncapi_memberships.event_id <> excluded.event_id" +
+	" OR (excluded.topological_pos = 0 AND (syncapi_memberships.stream_pos <> excluded.stream_pos OR syncapi_memberships.topological_pos <> excluded.topological_pos))"
 
 // A user has one row per membership kind, so two rows can share a stream
 // position (a state resync stamps every row it writes with the same one). The

@@ -82,6 +82,15 @@ func CreateNotificationEvents(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// CreateNotificationDepthCheckpoints stores effective depths for recovered
+// ancestors so a bounded predecessor walk can reuse work on retry.
+func CreateNotificationDepthCheckpoints(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `CREATE TABLE userapi_notification_depth_checkpoints (
+		room_id TEXT NOT NULL, event_id TEXT NOT NULL, room_depth BIGINT NOT NULL, updated_ts BIGINT NOT NULL,
+		PRIMARY KEY (room_id, event_id));`)
+	return err
+}
+
 // CreatePendingNotificationRefreshes creates an outbox for notification count
 // updates which must be published after notification rows have been deleted.
 func CreatePendingNotificationRefreshes(ctx context.Context, tx *sql.Tx) error {

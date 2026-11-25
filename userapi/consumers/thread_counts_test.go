@@ -30,16 +30,28 @@ func (failingNotificationStore) NotificationEventDepths(context.Context, string,
 	return nil, nil
 }
 
+func (failingNotificationStore) StoreNotificationDepthCheckpoints(context.Context, string, map[string]int64) error {
+	return nil
+}
+
 type retryCopyRoomserver struct {
 	rsapi.UserRoomserverAPI
 	currentStateCalls int
+	events            []*types.HeaderedEvent
 }
 
 func (r *retryCopyRoomserver) QueryMembershipsForRoom(context.Context, *rsapi.QueryMembershipsForRoomRequest, *rsapi.QueryMembershipsForRoomResponse) error {
 	return nil
 }
 
-func (r *retryCopyRoomserver) QueryEventsByID(context.Context, *rsapi.QueryEventsByIDRequest, *rsapi.QueryEventsByIDResponse) error {
+func (r *retryCopyRoomserver) QueryEventsByID(_ context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	for _, event := range r.events {
+		for _, eventID := range req.EventIDs {
+			if event.EventID() == eventID {
+				res.Events = append(res.Events, event)
+			}
+		}
+	}
 	return nil
 }
 
@@ -57,11 +69,22 @@ func (r *retryCopyRoomserver) QueryCurrentState(context.Context, *rsapi.QueryCur
 type threadRoomserver struct {
 	rsapi.UserRoomserverAPI
 	member      synctypes.ClientEvent
+	events      []*types.HeaderedEvent
 	eventsError error
 }
 
-func (r *threadRoomserver) QueryEventsByID(context.Context, *rsapi.QueryEventsByIDRequest, *rsapi.QueryEventsByIDResponse) error {
-	return r.eventsError
+func (r *threadRoomserver) QueryEventsByID(_ context.Context, req *rsapi.QueryEventsByIDRequest, res *rsapi.QueryEventsByIDResponse) error {
+	if r.eventsError != nil {
+		return r.eventsError
+	}
+	for _, event := range r.events {
+		for _, eventID := range req.EventIDs {
+			if event.EventID() == eventID {
+				res.Events = append(res.Events, event)
+			}
+		}
+	}
+	return nil
 }
 
 func (r *threadRoomserver) QueryMembershipsForRoom(_ context.Context, _ *rsapi.QueryMembershipsForRoomRequest, res *rsapi.QueryMembershipsForRoomResponse) error {
@@ -110,7 +133,7 @@ func TestThreadReplyCountedInThread(t *testing.T) {
 		publisher := &capturePublisher{}
 		cfg := &config.UserAPI{Matrix: &config.Global{ServerName: "test"}}
 		consumer := OutputRoomEventConsumer{
-			cfg: cfg, db: db, rsAPI: &threadRoomserver{member: member},
+			cfg: cfg, db: db, rsAPI: &threadRoomserver{member: member, events: room.Events()},
 			syncProducer: producers.NewSyncAPI(db, publisher, "client", "notifications"),
 		}
 		for i, event := range []*types.HeaderedEvent{root, reply} {
@@ -130,7 +153,7 @@ func TestThreadReplyCountedInThread(t *testing.T) {
 
 		// When the event's thread cannot be resolved, its stored notification
 		// is still published, counted in the main timeline.
-		consumer.rsAPI = &threadRoomserver{member: member, eventsError: errors.New("roomserver unavailable")}
+		consumer.rsAPI = &threadRoomserver{member: member, events: room.Events(), eventsError: errors.New("roomserver unavailable")}
 		reference := room.CreateAndInsert(t, bob, "m.room.message", map[string]any{
 			"msgtype": "m.text", "body": "see above", "m.relates_to": map[string]any{"rel_type": "m.reference", "event_id": root.EventID()},
 		})
@@ -147,7 +170,7 @@ func TestProcessMessageRetriesWhenPushRuleCopyAndLaterStepFail(t *testing.T) {
 	room := test.NewRoom(t, user)
 	join := room.CreateAndInsert(t, user, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(user.ID))
 
-	rsAPI := &retryCopyRoomserver{}
+	rsAPI := &retryCopyRoomserver{events: room.Events()}
 	consumer := OutputRoomEventConsumer{
 		cfg:   &config.UserAPI{Matrix: &config.Global{ServerName: "test"}},
 		db:    failingNotificationStore{},

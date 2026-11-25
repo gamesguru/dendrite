@@ -44,7 +44,55 @@ func (d *Database) NotificationEventDepths(ctx context.Context, roomID string, e
 			depths[eventID] = roomDepth
 		}
 	}
-	return depths, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	checkpointRows, err := d.DB.QueryContext(ctx, `SELECT event_id, room_depth FROM userapi_notification_depth_checkpoints WHERE room_id = $1 AND event_id IN (`+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := checkpointRows.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	for checkpointRows.Next() {
+		var eventID string
+		var roomDepth int64
+		if err = checkpointRows.Scan(&eventID, &roomDepth); err != nil {
+			return nil, err
+		}
+		if roomDepth > 0 {
+			if _, exists := depths[eventID]; !exists {
+				depths[eventID] = roomDepth
+			}
+		}
+	}
+	return depths, checkpointRows.Err()
+}
+
+// StoreNotificationDepthCheckpoints persists effective depths recovered for
+// non-notification ancestors so a retry can stop its bounded walk at them.
+func (d *Database) StoreNotificationDepthCheckpoints(ctx context.Context, roomID string, depths map[string]int64) error {
+	if len(depths) == 0 {
+		return nil
+	}
+	return d.Writer.Do(d.DB, nil, func(txn *sql.Tx) error {
+		now := time.Now().UnixMilli()
+		for eventID, roomDepth := range depths {
+			if roomDepth <= 0 {
+				continue
+			}
+			if _, err := txn.ExecContext(ctx, `INSERT INTO userapi_notification_depth_checkpoints (room_id, event_id, room_depth, updated_ts)
+			VALUES ($1, $2, $3, $4) ON CONFLICT (room_id, event_id) DO UPDATE SET room_depth = excluded.room_depth, updated_ts = excluded.updated_ts`, roomID, eventID, roomDepth, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // StoreNotificationEvent records ordering and thread identity after notification processing.
@@ -265,5 +313,9 @@ func cleanNotificationReceipts(ctx context.Context, txn *sql.Tx) error {
 	_, err := txn.ExecContext(ctx, `DELETE FROM userapi_notification_events WHERE origin_ts > 0 AND origin_ts < $1
 	AND NOT EXISTS (SELECT 1 FROM userapi_notifications WHERE userapi_notifications.room_id = userapi_notification_events.room_id AND userapi_notifications.event_id = userapi_notification_events.event_id)
 	AND NOT EXISTS (SELECT 1 FROM userapi_notification_receipt_positions rp WHERE rp.room_id = userapi_notification_events.room_id AND rp.receipt_event_id = userapi_notification_events.event_id)`, cutoff)
+	if err != nil {
+		return err
+	}
+	_, err = txn.ExecContext(ctx, `DELETE FROM userapi_notification_depth_checkpoints WHERE updated_ts < $1`, cutoff)
 	return err
 }

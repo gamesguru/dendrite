@@ -429,6 +429,34 @@ func TestMembershipTiedStreamPositionPrefersCurrentEvent(t *testing.T) {
 	})
 }
 
+func TestResyncUpsertRefreshesUnchangedMembershipEvent(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		room := test.NewRoom(t, alice)
+		bob := test.NewUser(t)
+		join := room.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		table, _, close := newMembershipsTable(t, dbType)
+		defer close()
+		ctx := context.Background()
+
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 10, 100))
+		// An ordinary replay of the same event must not move the row.
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 20, 100))
+		beforeResync, err := table.SelectMemberships(ctx, nil, room.ID,
+			types.TopologyToken{Depth: 50, PDUPosition: 20}, nil, nil)
+		require.NoError(t, err)
+		require.NotContains(t, beforeResync, join.EventID())
+
+		// Resync writes use topology zero. Even with the same event ID, this
+		// must refresh the compact row to the resync position and rank current.
+		require.NoError(t, table.UpsertMembership(ctx, nil, join, 30, 0))
+		afterResync, err := table.SelectMemberships(ctx, nil, room.ID,
+			types.TopologyToken{Depth: 50, PDUPosition: 30}, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, afterResync, join.EventID())
+	})
+}
+
 // A later update of the same membership (a profile change) moves the compact
 // join row to its own position, leaving only the stale invite at the earlier
 // one. A lookup at that earlier position must still find the join the history

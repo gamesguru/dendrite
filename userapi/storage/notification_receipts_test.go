@@ -18,6 +18,29 @@ import (
 	"codefloe.com/pat-s/zendrite/userapi/storage/shared"
 )
 
+func TestNotificationDepthCheckpointsPersistRecoveredAncestors(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
+		db, cleanup := mustCreateUserDatabase(t, backend)
+		defer cleanup()
+
+		require.NoError(t, db.StoreNotificationDepthCheckpoints(ctx, "!room:test", map[string]int64{
+			"$ancestor": 123,
+			"$unknown":  -1,
+		}))
+		depths, err := db.NotificationEventDepths(ctx, "!room:test", []string{"$ancestor", "$unknown"})
+		require.NoError(t, err)
+		require.Equal(t, map[string]int64{"$ancestor": 123}, depths)
+
+		// The notification event's authoritative depth takes precedence over
+		// an earlier checkpoint for the same event ID.
+		_, err = db.StoreNotificationEvent(ctx, "!room:test", "$ancestor", "main", 5, 456, 0)
+		require.NoError(t, err)
+		depths, err = db.NotificationEventDepths(ctx, "!room:test", []string{"$ancestor"})
+		require.NoError(t, err)
+		require.Equal(t, int64(456), depths["$ancestor"])
+	})
+}
+
 func TestThreadedNotificationReceipts(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, backend test.DBType) {
 		db, cleanup := mustCreateUserDatabase(t, backend)

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/gamesguru/gomatrixserverlib"
@@ -230,6 +231,19 @@ func (rp *RequestPool) BuildRoomData(
 
 	// Get required state events
 	if shouldFetchRequiredState(requiredStateConfig) {
+		// State resyncs populate current_room_state without emitting an output
+		// event. A completion marker is therefore the only signal that a room
+		// this connection already received has restored state to send.
+		if fromToken != nil && currentPos.PDUPosition > fromToken.PDUPosition {
+			resynced, resyncErr := snapshot.UnPartialStatedRoomsInRange(ctx, userID, types.Range{
+				From: fromToken.PDUPosition,
+				To:   currentPos.PDUPosition,
+			})
+			if resyncErr != nil {
+				return nil, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", resyncErr)
+			}
+			forceRequiredState = forceRequiredState || slices.Contains(resynced, roomID)
+		}
 		logrus.WithFields(logrus.Fields{
 			"room_id":         roomID,
 			"user_id":         userID,
