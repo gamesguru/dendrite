@@ -95,8 +95,10 @@ var release = Contract{
 // Level 27 adds stable notification receipt room-order positions. Level 28
 // adds receipt-boundary recovery metadata and treats unknown historical
 // positions conservatively; older writers can still use the additive columns.
+// Level 29 stores effective depths for notification predecessor checkpoints;
+// older builds ignore this additive table.
 const (
-	releaseLevel           = 28
+	releaseLevel           = 29
 	rollbackToLevel        = 27
 	membershipHistoryLevel = 19
 	topologyLiftLevel      = 22
