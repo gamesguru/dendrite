@@ -65,6 +65,9 @@ type Events interface {
 	// If any of the requested events are missing from the database it returns a types.MissingEventError.
 	// If we do not have the state for any of the requested events it returns a types.MissingEventError.
 	BulkSelectStateAtEventByID(ctx context.Context, txn *sql.Tx, eventIDs []string) ([]types.StateAtEvent, error)
+	// BulkSelectStateAtEventByIDForHistoryVisibility returns state-at-event
+	// records keyed by event ID. Missing events are omitted.
+	BulkSelectStateAtEventByIDForHistoryVisibility(ctx context.Context, txn *sql.Tx, eventIDs []string) (map[string]types.StateAtEvent, error)
 	UpdateEventState(ctx context.Context, txn *sql.Tx, eventNID types.EventNID, stateNID types.StateSnapshotNID) error
 	UpdateEventRejected(ctx context.Context, txn *sql.Tx, eventNID types.EventNID, rejected bool) error
 	SelectEventSentToOutput(ctx context.Context, txn *sql.Tx, eventNID types.EventNID) (sentToOutput bool, err error)

@@ -88,6 +88,10 @@ const bulkSelectStateAtEventByIDSQL = "" +
 	"SELECT event_type_nid, event_state_key_nid, event_nid, state_snapshot_nid, is_rejected FROM roomserver_events" +
 	" WHERE event_id IN ($1)"
 
+const bulkSelectBeforeStateSnapshotsForHistoryVisibilitySQL = "" +
+	"SELECT event_id, state_snapshot_nid, event_type_nid, event_state_key_nid FROM roomserver_events" +
+	" WHERE event_id IN ($1)"
+
 const updateEventStateSQL = "" +
 	"UPDATE roomserver_events SET state_snapshot_nid = $1 WHERE event_nid = $2"
 
@@ -459,6 +463,47 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 		)
 	}
 	return results, err
+}
+
+func (s *eventStatements) BulkSelectStateAtEventByIDForHistoryVisibility(
+	ctx context.Context, txn *sql.Tx, eventIDs []string,
+) (map[string]types.StateSnapshotNID, error) {
+	result := make(map[string]types.StateAtEvent, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return result, nil
+	}
+	iEventIDs := make([]any, len(eventIDs))
+	for i, eventID := range eventIDs {
+		iEventIDs[i] = eventID
+	}
+	query := strings.Replace(bulkSelectBeforeStateSnapshotsForHistoryVisibilitySQL, "($1)", sqlutil.QueryVariadic(len(iEventIDs)), 1)
+	prepared, err := s.db.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, prepared, "BulkSelectStateAtEventByIDForHistoryVisibility: stmt.close() failed")
+	rows, err := sqlutil.TxStmt(txn, prepared).QueryContext(ctx, iEventIDs...)
+	if err != nil {
+		return nil, err
+	}
+	defer internal.CloseAndLogIfError(ctx, rows, "BulkSelectStateAtEventByIDForHistoryVisibility: rows.close() failed")
+	for rows.Next() {
+		var eventID string
+		var snapshotNID types.StateSnapshotNID
+		var eventTypeNID types.EventTypeNID
+		var eventStateKeyNID types.EventStateKeyNID
+		if err = rows.Scan(&eventID, &snapshotNID, &eventTypeNID, &eventStateKeyNID); err != nil {
+			return nil, err
+		}
+		result[eventID] = types.StateAtEvent{
+			BeforeStateSnapshotNID: snapshotNID,
+			StateEntry: types.StateEntry{
+				EventTypeNID:     eventTypeNID,
+				EventStateKeyNID: eventStateKeyNID,
+			},
+		}
+	}
+	return result, rows.Err()
 }
 
 func (s *eventStatements) UpdateEventState(

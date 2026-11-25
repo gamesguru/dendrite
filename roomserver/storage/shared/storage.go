@@ -139,38 +139,31 @@ func (d *Database) membershipFromHAMT(
 	bySnapshot := make(map[types.StateSnapshotNID]snapshotMembership)
 	var blockEventIDs []string
 	var blockMemberships map[string]*types.HeaderedEvent
-	// Resolve the whole batch in one read transaction. Each event used to open
-	// its own transaction for the state lookup and each snapshot opened another
-	// for the HAMT read, so a 50-event timeline could take over a hundred short
-	// transactions and advisory-lock acquisitions, all while the client waits.
+	// Resolve the whole batch in one read transaction. Fetch event snapshots in
+	// one query, then look up each distinct snapshot's membership tuple once.
 	err := sqlutil.WithTransaction(d.DB, func(txn *sql.Tx) error {
+		beforeStateSnapshots, err := d.EventsTable.BulkSelectStateAtEventByIDForHistoryVisibility(ctx, txn, eventIDs)
+		if err != nil {
+			return err
+		}
 		for _, eventID := range eventIDs {
-			// BulkSelectStateAtEventByID does not return the event ID, so ask
-			// for one event at a time rather than assuming the rows keep input
-			// order.
-			states, err := d.EventsTable.BulkSelectStateAtEventByID(ctx, txn, []string{eventID})
-			if err != nil {
-				// History visibility can safely fail closed for an event whose
-				// before-state snapshot is unavailable. Do not fail the whole
-				// timeline batch: QueryMembershipAtEvent treats a missing map
-				// entry as unknown membership (leave), while retaining results
-				// for the other events.
-				var missingStateErr types.MissingStateError
-				var missingEventErr types.MissingEventError
-				if errors.As(err, &missingStateErr) || errors.As(err, &missingEventErr) {
-					logrus.WithFields(logrus.Fields{
-						"room_nid": roomInfo.RoomNID,
-						"event_id": eventID,
-					}).WithError(err).Warn("Skipping history visibility membership lookup for event without recoverable state")
+			stateAtEvent, ok := beforeStateSnapshots[eventID]
+			if !ok {
+				logrus.WithFields(logrus.Fields{
+					"room_nid": roomInfo.RoomNID,
+					"event_id": eventID,
+				}).Warn("Skipping history visibility membership lookup for missing event")
+				continue
+			}
+			snapshotNID := stateAtEvent.BeforeStateSnapshotNID
+			if snapshotNID == 0 {
+				if stateAtEvent.EventTypeNID == types.MRoomCreateNID && stateAtEvent.EventStateKeyNID == 1 {
 					continue
 				}
-				return err
-			}
-			if len(states) != 1 {
-				return types.MissingEventError(fmt.Sprintf("storage: event ID %q missing from the database", eventID))
-			}
-			snapshotNID := states[0].BeforeStateSnapshotNID
-			if snapshotNID == 0 {
+				logrus.WithFields(logrus.Fields{
+					"room_nid": roomInfo.RoomNID,
+					"event_id": eventID,
+				}).Warn("Skipping history visibility membership lookup for event without recoverable state")
 				continue
 			}
 			cached, seen := bySnapshot[snapshotNID]
