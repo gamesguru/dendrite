@@ -429,7 +429,7 @@ func TestMembershipTiedStreamPositionPrefersCurrentEvent(t *testing.T) {
 	})
 }
 
-func TestResyncUpsertRefreshesUnchangedMembershipEvent(t *testing.T) {
+func TestResyncUpsertPreservesUnchangedMembershipTopology(t *testing.T) {
 	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
 		alice := test.NewUser(t)
 		room := test.NewRoom(t, alice)
@@ -447,11 +447,11 @@ func TestResyncUpsertRefreshesUnchangedMembershipEvent(t *testing.T) {
 		require.NoError(t, err)
 		require.NotContains(t, beforeResync, join.EventID())
 
-		// Resync writes use topology zero. Even with the same event ID, this
-		// must refresh the compact row to the resync position and rank current.
+		// Resync writes use topology zero. An unchanged event keeps its real
+		// topology, so a historical depth/stream query can still find it.
 		require.NoError(t, table.UpsertMembership(ctx, nil, join, 30, 0))
 		afterResync, err := table.SelectMemberships(ctx, nil, room.ID,
-			types.TopologyToken{Depth: 50, PDUPosition: 30}, nil, nil)
+			types.TopologyToken{Depth: 150, PDUPosition: 20}, nil, nil)
 		require.NoError(t, err)
 		require.Contains(t, afterResync, join.EventID())
 	})
