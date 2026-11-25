@@ -87,7 +87,7 @@ const upsertMembershipSQL = "" +
 	"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos)" +
 	" VALUES ($1, $2, $3, $4, $5, $6)" +
 	" ON CONFLICT (room_id, user_id, membership)" +
-	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = $6" +
+	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = CASE WHEN excluded.topological_pos = 0 AND syncapi_memberships.event_id = excluded.event_id THEN syncapi_memberships.topological_pos ELSE excluded.topological_pos END" +
 	" WHERE syncapi_memberships.event_id <> excluded.event_id" +
 	" OR (excluded.topological_pos = 0 AND (syncapi_memberships.stream_pos <> excluded.stream_pos OR syncapi_memberships.topological_pos <> excluded.topological_pos))"
 

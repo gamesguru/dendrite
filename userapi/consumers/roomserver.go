@@ -175,10 +175,6 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		return true
 	}
 
-	if s.cfg.Matrix.ReportStats.Enabled {
-		process.Go(ctx, func() { s.storeMessageStats(ctx, event.Type(), string(event.SenderID()), event.RoomID().String()) })
-	}
-
 	metadata, err := msg.Metadata()
 	if err != nil {
 		return true
@@ -191,6 +187,10 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		if errors.Is(err, errRetryPushRuleCopy) || errors.Is(err, errRetryNotificationDepth) {
 			return false
 		}
+	}
+
+	if s.cfg.Matrix.ReportStats.Enabled {
+		process.Go(ctx, func() { s.storeMessageStats(ctx, event.Type(), string(event.SenderID()), event.RoomID().String()) })
 	}
 
 	return true

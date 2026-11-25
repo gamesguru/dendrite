@@ -92,7 +92,7 @@ const upsertMembershipSQL = "" +
 	"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos)" +
 	" VALUES ($1, $2, $3, $4, $5, $6)" +
 	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
-	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = $6" +
+	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = CASE WHEN EXCLUDED.topological_pos = 0 AND syncapi_memberships.event_id = EXCLUDED.event_id THEN syncapi_memberships.topological_pos ELSE EXCLUDED.topological_pos END" +
 	" WHERE syncapi_memberships.event_id <> EXCLUDED.event_id" +
 	" OR (EXCLUDED.topological_pos = 0 AND (syncapi_memberships.stream_pos <> EXCLUDED.stream_pos OR syncapi_memberships.topological_pos <> EXCLUDED.topological_pos))"
 
@@ -103,7 +103,7 @@ const upsertMembershipsSQL = "" +
 	" SELECT room_id, user_id, membership, event_id, $5, $6" +
 	" FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS rows(room_id, user_id, membership, event_id)" +
 	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
-	" DO UPDATE SET event_id = EXCLUDED.event_id, stream_pos = EXCLUDED.stream_pos, topological_pos = EXCLUDED.topological_pos" +
+	" DO UPDATE SET event_id = EXCLUDED.event_id, stream_pos = EXCLUDED.stream_pos, topological_pos = CASE WHEN EXCLUDED.topological_pos = 0 AND syncapi_memberships.event_id = EXCLUDED.event_id THEN syncapi_memberships.topological_pos ELSE EXCLUDED.topological_pos END" +
 	" WHERE syncapi_memberships.event_id <> EXCLUDED.event_id" +
 	" OR (EXCLUDED.topological_pos = 0 AND (syncapi_memberships.stream_pos <> EXCLUDED.stream_pos OR syncapi_memberships.topological_pos <> EXCLUDED.topological_pos))"
 

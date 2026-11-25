@@ -506,6 +506,35 @@ func TestSelectMembershipsIncludesResyncedStateAtEarlierStreamToken(t *testing.T
 	})
 }
 
+func TestSelectMembershipsKeepsHistoricalJoinAfterResync(t *testing.T) {
+	test.WithAllDatabases(t, func(t *testing.T, dbType test.DBType) {
+		alice := test.NewUser(t)
+		bob := test.NewUser(t)
+		r := test.NewRoom(t, alice)
+
+		db, close := MustCreateDatabase(t, dbType)
+		defer close()
+		for len(r.Events()) < 19 {
+			r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "before join"})
+		}
+		bobJoin := r.CreateAndInsert(t, bob, spec.MRoomMember, map[string]any{"membership": spec.Join}, test.WithStateKey(bob.ID))
+		positions := MustWriteEvents(t, db, r.Events())
+		require.Equal(t, types.StreamPosition(20), positions[len(positions)-1])
+
+		// The completion marker is written after the client's stream position.
+		laterEvent := r.CreateAndInsert(t, alice, "m.room.message", map[string]any{"body": "after join"})
+		laterPos := MustWriteEvents(t, db, []*rstypes.HeaderedEvent{laterEvent})[0]
+		require.Greater(t, laterPos, types.StreamPosition(20))
+		_, err := db.PopulateRoomStateAfterResync(ctx, []*rstypes.HeaderedEvent{bobJoin})
+		require.NoError(t, err)
+
+		got, err := db.SelectMemberships(ctx, r.ID,
+			types.TopologyToken{Depth: 150, PDUPosition: 20}, nil, nil)
+		require.NoError(t, err)
+		require.Contains(t, got, bobJoin.EventID(), "resync must not erase the join's historical topology")
+	})
+}
+
 // A resync stores the room's CURRENT members, not the members it had at an
 // earlier token. If a member joined after that token, the resync's position-zero
 // row must not make /members?at report them as having already joined.

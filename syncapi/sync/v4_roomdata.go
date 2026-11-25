@@ -234,10 +234,10 @@ func (rp *RequestPool) BuildRoomData(
 		// State resyncs populate current_room_state without emitting an output
 		// event. A completion marker is therefore the only signal that a room
 		// this connection already received has restored state to send.
-		if fromToken != nil && currentPos.PDUPosition > fromToken.PDUPosition {
+		if markerRange, shouldCheck := requiredStateResyncMarkerRange(roomState, fromToken, currentPos); shouldCheck {
 			resynced, resyncErr := snapshot.UnPartialStatedRoomsInRange(ctx, userID, types.Range{
-				From: fromToken.PDUPosition,
-				To:   currentPos.PDUPosition,
+				From: markerRange.From,
+				To:   markerRange.To,
 			})
 			if resyncErr != nil {
 				return nil, fmt.Errorf("snapshot.UnPartialStatedRoomsInRange: %w", resyncErr)
@@ -288,6 +288,20 @@ func (rp *RequestPool) BuildRoomData(
 	roomData.Heroes = rp.getHeroes(ctx, snapshot, roomID, userID)
 
 	return roomData, nil
+}
+
+func requiredStateResyncMarkerRange(roomState types.RoomStreamState, fromToken *types.StreamingToken, currentPos types.StreamingToken) (types.Range, bool) {
+	if fromToken == nil {
+		return types.Range{}, false
+	}
+	from := fromToken.PDUPosition
+	if roomState.LastToken != nil && roomState.LastToken.PDUPosition < from {
+		from = roomState.LastToken.PDUPosition
+	}
+	if currentPos.PDUPosition <= from {
+		return types.Range{}, false
+	}
+	return types.Range{From: from, To: currentPos.PDUPosition}, true
 }
 
 // getTimelineEvents retrieves recent timeline events for a room
