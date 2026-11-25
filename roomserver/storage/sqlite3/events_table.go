@@ -467,7 +467,7 @@ func (s *eventStatements) BulkSelectStateAtEventByID(
 
 func (s *eventStatements) BulkSelectStateAtEventByIDForHistoryVisibility(
 	ctx context.Context, txn *sql.Tx, eventIDs []string,
-) (map[string]types.StateSnapshotNID, error) {
+) (map[string]types.StateAtEvent, error) {
 	result := make(map[string]types.StateAtEvent, len(eventIDs))
 	if len(eventIDs) == 0 {
 		return result, nil
