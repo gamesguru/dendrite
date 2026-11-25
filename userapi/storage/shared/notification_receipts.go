@@ -87,6 +87,7 @@ func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, 
 	JOIN userapi_notification_events event ON event.room_id = rp.room_id
 	WHERE rp.room_id = $1 AND (rp.thread_id = '' OR rp.thread_id = $2)
 	AND event.event_id = $3
+	AND (rp.room_depth > event.room_depth OR (rp.room_depth = event.room_depth AND rp.stream_pos >= event.stream_pos))
 	AND rp.room_depth > 0 AND event.room_depth > 0`, roomID, threadID, eventID)
 		if err != nil {
 			return err

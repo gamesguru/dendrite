@@ -688,6 +688,11 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 	prevIDs := event.PrevEventIDs()
 	maxPrev := int64(-1)
 	if len(prevIDs) > 0 {
+		work := 0
+		if len(prevIDs) > maxNotificationDepthWork {
+			return 0, fmt.Errorf("notification predecessor lookup exceeded %d events", maxNotificationDepthWork)
+		}
+		work += len(prevIDs)
 		effectiveDepths, err := s.db.NotificationEventDepths(ctx, event.RoomID().String(), prevIDs)
 		if err != nil {
 			return 0, fmt.Errorf("query effective notification predecessor depths: %w", err)
@@ -698,12 +703,20 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 		}, &response); err != nil {
 			return 0, fmt.Errorf("query notification event predecessors: %w", err)
 		}
+		predecessors := make(map[string]*rstypes.HeaderedEvent, len(response.Events))
 		for _, prev := range response.Events {
-			prevDepth, ok := effectiveDepths[prev.EventID()]
+			predecessors[prev.EventID()] = prev
+		}
+		for _, prevID := range prevIDs {
+			prevDepth, ok := effectiveDepths[prevID]
 			if !ok {
-				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, effectiveDepths, make(map[string]bool))
+				prev, found := predecessors[prevID]
+				if !found {
+					return 0, fmt.Errorf("notification predecessor %s is unresolved", prevID)
+				}
+				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, effectiveDepths, make(map[string]bool), &work)
 				if err != nil {
-					return 0, fmt.Errorf("resolve effective notification depth for predecessor %s: %w", prev.EventID(), err)
+					return 0, fmt.Errorf("resolve effective notification depth for predecessor %s: %w", prevID, err)
 				}
 			}
 			if prevDepth > maxPrev {
@@ -714,26 +727,31 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 	return depth.LiftAbovePrevEvents(event.Depth(), maxPrev), nil
 }
 
-func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context, event *rstypes.HeaderedEvent, cached map[string]int64, visiting map[string]bool) (int64, error) {
+func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context, event *rstypes.HeaderedEvent, cached map[string]int64, visiting map[string]bool, work *int) (int64, error) {
 	if d, ok := cached[event.EventID()]; ok {
 		return d, nil
 	}
 	if visiting[event.EventID()] {
 		return 0, fmt.Errorf("cycle in predecessor chain at %s", event.EventID())
 	}
-	// Old events may not have a saved notification depth. Bound fallback work
-	// to a short predecessor chain and use the event's persisted room depth as
-	// the floor once the bound is reached. This keeps a room's entire history
-	// from being walked synchronously on the first notification after upgrade.
-	if len(visiting) >= maxNotificationDepthLookup {
-		return event.Depth(), nil
+	// Bound the total graph walk across all branches. Falling back to the
+	// declared depth here could put this event below an unresolved predecessor,
+	// so return an error and let the consumer retry instead of storing a
+	// misleading ordering depth.
+	if *work >= maxNotificationDepthWork {
+		return 0, fmt.Errorf("notification predecessor lookup exceeded %d events", maxNotificationDepthWork)
 	}
+	*work += 1
 	visiting[event.EventID()] = true
 	defer delete(visiting, event.EventID())
 
 	maxPrev := int64(-1)
 	prevIDs := event.PrevEventIDs()
 	if len(prevIDs) > 0 {
+		if len(prevIDs) > maxNotificationDepthWork-*work {
+			return 0, fmt.Errorf("notification predecessor lookup exceeded %d events", maxNotificationDepthWork)
+		}
+		*work += len(prevIDs)
 		depths, err := s.db.NotificationEventDepths(ctx, event.RoomID().String(), prevIDs)
 		if err != nil {
 			return 0, fmt.Errorf("query effective notification predecessor depths: %w", err)
@@ -742,18 +760,26 @@ func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context
 		if err := s.rsAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{RoomID: event.RoomID().String(), EventIDs: prevIDs}, &response); err != nil {
 			return 0, fmt.Errorf("query notification event predecessors: %w", err)
 		}
+		predecessors := make(map[string]*rstypes.HeaderedEvent, len(response.Events))
 		for _, prev := range response.Events {
-			prevDepth, ok := cached[prev.EventID()]
+			predecessors[prev.EventID()] = prev
+		}
+		for _, prevID := range prevIDs {
+			prevDepth, ok := cached[prevID]
 			if !ok {
-				prevDepth, ok = depths[prev.EventID()]
+				prevDepth, ok = depths[prevID]
 			}
 			if !ok {
-				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, cached, visiting)
+				prev, found := predecessors[prevID]
+				if !found {
+					return 0, fmt.Errorf("notification predecessor %s is unresolved", prevID)
+				}
+				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, cached, visiting, work)
 				if err != nil {
 					return 0, err
 				}
 			}
-			cached[prev.EventID()] = prevDepth
+			cached[prevID] = prevDepth
 			if prevDepth > maxPrev {
 				maxPrev = prevDepth
 			}
@@ -764,7 +790,7 @@ func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context
 	return effectiveDepth, nil
 }
 
-const maxNotificationDepthLookup = 32
+const maxNotificationDepthWork = 4096
 
 // roomName returns the name in the event (if type==m.room.name), or
 // looks it up in roomserver. If there is no name,
