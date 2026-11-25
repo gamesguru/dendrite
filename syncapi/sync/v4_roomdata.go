@@ -52,8 +52,13 @@ func (rp *RequestPool) detectRoomMembership(
 
 	result := roomMembershipResult{membership: pduMembership}
 
-	// Check for active invite that might override PDU membership
-	if currentPos.InvitePosition > 0 {
+	// A joined membership cannot be overridden by an invite. Avoid rereading
+	// the user's complete invite stream for every joined room; this runs for
+	// every room on every sliding sync request, and the invite stream can grow
+	// independently of the number of rooms the user is currently in.
+	// For leave/ban (and missing membership) rooms, an active invite can still
+	// supersede the PDU membership, so retain the invite lookup there.
+	if pduMembership != spec.Join && currentPos.InvitePosition > 0 {
 		inviteRange := types.Range{From: 0, To: currentPos.InvitePosition, Backwards: false}
 		invites, retired, _, inviteErr := snapshot.InviteEventsInRange(ctx, userID, inviteRange)
 		if inviteErr != nil {

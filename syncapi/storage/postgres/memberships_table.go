@@ -92,7 +92,8 @@ const upsertMembershipSQL = "" +
 	"INSERT INTO syncapi_memberships (room_id, user_id, membership, event_id, stream_pos, topological_pos)" +
 	" VALUES ($1, $2, $3, $4, $5, $6)" +
 	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
-	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = $6"
+	" DO UPDATE SET event_id = $4, stream_pos = $5, topological_pos = $6" +
+	" WHERE syncapi_memberships.event_id <> EXCLUDED.event_id"
 
 // upsertMembershipsSQL is upsertMembershipSQL for many rows in one round trip.
 // The rows must not share a (room_id, user_id, membership).
@@ -101,7 +102,8 @@ const upsertMembershipsSQL = "" +
 	" SELECT room_id, user_id, membership, event_id, $5, $6" +
 	" FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS rows(room_id, user_id, membership, event_id)" +
 	" ON CONFLICT ON CONSTRAINT syncapi_memberships_unique" +
-	" DO UPDATE SET event_id = EXCLUDED.event_id, stream_pos = EXCLUDED.stream_pos, topological_pos = EXCLUDED.topological_pos"
+	" DO UPDATE SET event_id = EXCLUDED.event_id, stream_pos = EXCLUDED.stream_pos, topological_pos = EXCLUDED.topological_pos" +
+	" WHERE syncapi_memberships.event_id <> EXCLUDED.event_id"
 
 // A user has one row per membership kind, so two rows can share a stream
 // position (a state resync stamps every row it writes with the same one). The

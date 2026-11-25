@@ -721,6 +721,13 @@ func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context
 	if visiting[event.EventID()] {
 		return 0, fmt.Errorf("cycle in predecessor chain at %s", event.EventID())
 	}
+	// Old events may not have a saved notification depth. Bound fallback work
+	// to a short predecessor chain and use the event's persisted room depth as
+	// the floor once the bound is reached. This keeps a room's entire history
+	// from being walked synchronously on the first notification after upgrade.
+	if len(visiting) >= maxNotificationDepthLookup {
+		return event.Depth(), nil
+	}
 	visiting[event.EventID()] = true
 	defer delete(visiting, event.EventID())
 
@@ -756,6 +763,8 @@ func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context
 	cached[event.EventID()] = effectiveDepth
 	return effectiveDepth, nil
 }
+
+const maxNotificationDepthLookup = 32
 
 // roomName returns the name in the event (if type==m.room.name), or
 // looks it up in roomserver. If there is no name,
