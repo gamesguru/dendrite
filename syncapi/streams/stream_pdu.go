@@ -1331,6 +1331,36 @@ func (p *PDUStreamProvider) getJoinResponseForCompleteSync(
 						kept = append(kept, ev)
 					}
 				}
+				// State events removed from the timeline still need to be sent
+				// in the state block. Hidden events remain excluded by using the
+				// visibility-filtered set as the source of truth.
+				keptIDs := make(map[string]struct{}, len(kept))
+				for _, ev := range kept {
+					keptIDs[ev.EventID()] = struct{}{}
+				}
+				if !stateAfter {
+					currentState, stateErr := snapshot.CurrentState(ctx, roomID, stateFilter, nil)
+					if stateErr != nil {
+						return nil, stateErr
+					}
+					stateIDs := make(map[string]struct{}, len(stateEvents))
+					for _, ev := range stateEvents {
+						stateIDs[ev.EventID()] = struct{}{}
+					}
+					for _, ev := range currentState {
+						if _, visible := visibleIDs[ev.EventID()]; !visible {
+							continue
+						}
+						if _, inTimeline := keptIDs[ev.EventID()]; inTimeline {
+							continue
+						}
+						if _, exists := stateIDs[ev.EventID()]; exists {
+							continue
+						}
+						stateIDs[ev.EventID()] = struct{}{}
+						stateEvents = append(stateEvents, ev)
+					}
+				}
 				events = kept
 				limited = true
 			}

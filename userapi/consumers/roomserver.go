@@ -56,6 +56,7 @@ type OutputRoomEventConsumer struct {
 }
 
 var errRetryPushRuleCopy = errors.New("retry room event after push rule copy failure")
+var errRetryNotificationDepth = errors.New("retry room event after notification depth lookup failure")
 
 func NewOutputRoomEventConsumer(
 	process *process.ProcessContext,
@@ -182,7 +183,7 @@ func (s *OutputRoomEventConsumer) onMessage(ctx context.Context, msgs []*nats.Ms
 		log.WithFields(log.Fields{
 			"event_id": event.EventID(),
 		}).WithError(err).Errorf("userapi consumer: process room event failure")
-		if errors.Is(err, errRetryPushRuleCopy) {
+		if errors.Is(err, errRetryPushRuleCopy) || errors.Is(err, errRetryNotificationDepth) {
 			return false
 		}
 	}
@@ -537,6 +538,14 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	if err != nil {
 		return fmt.Errorf("s.roomName: %w", err)
 	}
+	threadID, threadErr := receipts.EventThreadID(ctx, s.rsAPI, event)
+	var roomDepth int64
+	if threadErr == nil {
+		roomDepth, err = s.notificationRoomDepth(ctx, event)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errRetryNotificationDepth, err)
+		}
+	}
 
 	log.WithFields(log.Fields{
 		"event_id":    event.EventID(),
@@ -566,14 +575,9 @@ func (s *OutputRoomEventConsumer) processMessage(ctx context.Context, event *rst
 	}
 
 	var users []string
-	threadID, err := receipts.EventThreadID(ctx, s.rsAPI, event)
-	if err == nil {
-		roomDepth, depthErr := s.notificationRoomDepth(ctx, event)
-		if depthErr != nil {
-			err = depthErr
-		} else {
-			users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos, roomDepth, int64(event.OriginServerTS()))
-		}
+	err = threadErr
+	if threadErr == nil {
+		users, err = s.db.StoreNotificationEvent(ctx, event.RoomID().String(), event.EventID(), threadID, streamPos, roomDepth, int64(event.OriginServerTS()))
 	}
 	// Counts are published once the event's thread is recorded, so that a
 	// new notification is counted in its thread rather than the main timeline.
@@ -693,9 +697,12 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 			return 0, fmt.Errorf("query notification event predecessors: %w", err)
 		}
 		for _, prev := range response.Events {
-			prevDepth := prev.Depth()
-			if effectiveDepth, ok := effectiveDepths[prev.EventID()]; ok {
-				prevDepth = effectiveDepth
+			prevDepth, ok := effectiveDepths[prev.EventID()]
+			if !ok {
+				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, effectiveDepths, make(map[string]bool))
+				if err != nil {
+					return 0, fmt.Errorf("resolve effective notification depth for predecessor %s: %w", prev.EventID(), err)
+				}
 			}
 			if prevDepth > maxPrev {
 				maxPrev = prevDepth
@@ -703,6 +710,49 @@ func (s *OutputRoomEventConsumer) notificationRoomDepth(ctx context.Context, eve
 		}
 	}
 	return depth.LiftAbovePrevEvents(event.Depth(), maxPrev), nil
+}
+
+func (s *OutputRoomEventConsumer) effectiveNotificationDepth(ctx context.Context, event *rstypes.HeaderedEvent, cached map[string]int64, visiting map[string]bool) (int64, error) {
+	if d, ok := cached[event.EventID()]; ok {
+		return d, nil
+	}
+	if visiting[event.EventID()] {
+		return 0, fmt.Errorf("cycle in predecessor chain at %s", event.EventID())
+	}
+	visiting[event.EventID()] = true
+	defer delete(visiting, event.EventID())
+
+	maxPrev := int64(-1)
+	prevIDs := event.PrevEventIDs()
+	if len(prevIDs) > 0 {
+		depths, err := s.db.NotificationEventDepths(ctx, event.RoomID().String(), prevIDs)
+		if err != nil {
+			return 0, fmt.Errorf("query effective notification predecessor depths: %w", err)
+		}
+		var response rsapi.QueryEventsByIDResponse
+		if err := s.rsAPI.QueryEventsByID(ctx, &rsapi.QueryEventsByIDRequest{RoomID: event.RoomID().String(), EventIDs: prevIDs}, &response); err != nil {
+			return 0, fmt.Errorf("query notification event predecessors: %w", err)
+		}
+		for _, prev := range response.Events {
+			prevDepth, ok := cached[prev.EventID()]
+			if !ok {
+				prevDepth, ok = depths[prev.EventID()]
+			}
+			if !ok {
+				prevDepth, err = s.effectiveNotificationDepth(ctx, prev, cached, visiting)
+				if err != nil {
+					return 0, err
+				}
+			}
+			cached[prev.EventID()] = prevDepth
+			if prevDepth > maxPrev {
+				maxPrev = prevDepth
+			}
+		}
+	}
+	effectiveDepth := depth.LiftAbovePrevEvents(event.Depth(), maxPrev)
+	cached[event.EventID()] = effectiveDepth
+	return effectiveDepth, nil
 }
 
 // roomName returns the name in the event (if type==m.room.name), or

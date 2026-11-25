@@ -161,7 +161,9 @@ func (d *Database) StoreNotificationEvent(ctx context.Context, roomID, eventID, 
 		for userID := range changedUsers {
 			users = append(users, userID)
 		}
-		_, err = txn.ExecContext(ctx, `DELETE FROM userapi_pending_notification_receipts WHERE room_id = $1 AND event_id = $2`, roomID, eventID)
+		if eventDepth > 0 {
+			_, err = txn.ExecContext(ctx, `DELETE FROM userapi_pending_notification_receipts WHERE room_id = $1 AND event_id = $2`, roomID, eventID)
+		}
 		return err
 	})
 	return
@@ -257,7 +259,10 @@ func cleanNotificationReceipts(ctx context.Context, txn *sql.Tx) error {
 	if _, err := txn.ExecContext(ctx, `DELETE FROM userapi_pending_notification_receipts WHERE created_ts < $1`, cutoff); err != nil {
 		return err
 	}
-	_, err := txn.ExecContext(ctx, `DELETE FROM userapi_notification_events WHERE stream_pos < $1
-	AND NOT EXISTS (SELECT 1 FROM userapi_notifications WHERE userapi_notifications.room_id = userapi_notification_events.room_id AND userapi_notifications.event_id = userapi_notification_events.event_id)`, cutoff)
+	// Keep effective depths for receipt events: descendants use them when
+	// lifting their own notification depth above their predecessors.
+	_, err := txn.ExecContext(ctx, `DELETE FROM userapi_notification_events WHERE origin_ts > 0 AND origin_ts < $1
+	AND NOT EXISTS (SELECT 1 FROM userapi_notifications WHERE userapi_notifications.room_id = userapi_notification_events.room_id AND userapi_notifications.event_id = userapi_notification_events.event_id)
+	AND NOT EXISTS (SELECT 1 FROM userapi_notification_receipt_positions rp WHERE rp.room_id = userapi_notification_events.room_id AND rp.receipt_event_id = userapi_notification_events.event_id)`, cutoff)
 	return err
 }
